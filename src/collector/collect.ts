@@ -14,7 +14,6 @@ import {
   pruneOldData,
 } from "../db/repo.ts";
 import { sendEmailReport } from "../notify/email.ts";
-import { sendKakaoNotice } from "../notify/kakao.ts";
 import type { CollectResult, PricePoint, Product } from "../../shared/types.ts";
 
 export interface CollectOptions {
@@ -135,18 +134,16 @@ export async function runCollection(opts: CollectOptions): Promise<CollectResult
   // ── 알림 (수집 성공 시 1회, 멱등) ──
   const prior = getRunResult(date);
   let emailed = prior?.notified.email ?? false;
-  let kakaoed = prior?.notified.kakao ?? false;
 
   // onlyProductId(단일 상품 즉시수집)일 때는 일일 리포트 알림을 보내지 않는다.
-  if (anyOk && !opts.onlyProductId) {
+  if (anyOk && !opts.onlyProductId && !emailed) {
     const summaries = listProducts(true)
       .map((p) => getProductSummary(p.id))
       .filter((s): s is NonNullable<typeof s> => s != null);
-    if (!emailed) emailed = await sendEmailReport(summaries, date).catch((e) => {
+    emailed = await sendEmailReport(summaries, date).catch((e) => {
       log.warn(`이메일 발송 예외: ${(e as Error).message}`);
       return false;
     });
-    if (!kakaoed) kakaoed = await sendKakaoNotice(date, summaries.length);
   }
 
   const result: CollectResult = {
@@ -155,7 +152,7 @@ export async function runCollection(opts: CollectOptions): Promise<CollectResult
     finishedAt: new Date().toISOString(),
     ok: anyOk,
     perProduct,
-    notified: { email: emailed, kakao: kakaoed },
+    notified: { email: emailed },
     error: anyOk ? null : "모든 상품 수집 실패",
   };
   recordRunFinish(result);

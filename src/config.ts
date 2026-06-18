@@ -25,10 +25,8 @@ export interface AppConfig {
   anthropicApiKey: string;
   notify: {
     email: boolean;
-    kakao: boolean;
     gmailAddress: string;
     gmailAppPassword: string;
-    kakaoAccessToken: string;
   };
 }
 
@@ -47,10 +45,8 @@ export const config: AppConfig = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY?.trim() || "",
   notify: {
     email: bool(process.env.NOTIFY_EMAIL, false),
-    kakao: bool(process.env.NOTIFY_KAKAO, false),
     gmailAddress: process.env.GMAIL_ADDRESS?.trim() || "",
     gmailAppPassword: (process.env.GMAIL_APP_PASSWORD || "").replace(/\s+/g, ""),
-    kakaoAccessToken: process.env.KAKAO_ACCESS_TOKEN?.trim() || "",
   },
 };
 
@@ -98,13 +94,6 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
     if (!config.notify.gmailAddress || !config.notify.gmailAppPassword) {
       warnings.push(
         "NOTIFY_EMAIL=true 이지만 GMAIL_ADDRESS / GMAIL_APP_PASSWORD 미설정 → 이메일 알림을 건너뜁니다."
-      );
-    }
-  }
-  if (config.notify.kakao) {
-    if (!config.notify.kakaoAccessToken) {
-      warnings.push(
-        "NOTIFY_KAKAO=true 이지만 KAKAO_ACCESS_TOKEN 미설정 → 카카오 알림을 건너뜁니다."
       );
     }
   }

@@ -40,7 +40,7 @@ api.get("/config", (_req, res) => {
   res.json({
     port: config.port,
     collectTime: config.collectTime,
-    notify: { email: config.notify.email, kakao: config.notify.kakao },
+    notify: { email: config.notify.email },
     warnings,
   });
 });

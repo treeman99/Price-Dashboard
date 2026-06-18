@@ -58,9 +58,13 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
 | `COLLECT_TIME` | 기본 09:00 | 매일 자동 수집 시각(로컬) |
 | `NOTIFY_EMAIL` / `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | 선택 | 이메일 리포트 알림 |
-| `NOTIFY_KAKAO` / `KAKAO_ACCESS_TOKEN` | 선택 | 카카오 "나에게 보내기" 완료 알림 |
 
-> 알림 자격증명이 없으면 해당 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
+> 알림 자격증명이 없으면 이메일 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
+>
+> **카카오 알림 안내**: 카카오 "나에게 보내기"(PlayMCP MemoChat)는 OAuth 인증이 필요한 MCP라,
+> 무인으로 도는 launchd 백그라운드 서비스에서는 직접 호출할 수 없다. 카카오 알림이 필요하면
+> PlayMCP가 연결된 claude.ai/Claude Code 측 스케줄 에이전트가 대시보드(`/api/runs/today`)를 읽어
+> 메모를 보내는 방식으로 구성해야 한다. (대시보드가 1차 출력, 알림은 부가)
 
 ## 2. 기존 데이터 임포트 (최초 1회, 멱등)
 ```bash

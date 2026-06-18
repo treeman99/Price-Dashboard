@@ -76,10 +76,7 @@ export default function App() {
             <h1 className="text-lg font-bold">📷 Daily Price Dashboard</h1>
             {cfg && (
               <p className="text-xs text-muted-foreground">
-                매일 {cfg.collectTime} 자동 수집 · 알림 {cfg.notify.email ? "메일" : ""}
-                {cfg.notify.email && cfg.notify.kakao ? "+" : ""}
-                {cfg.notify.kakao ? "카카오" : ""}
-                {!cfg.notify.email && !cfg.notify.kakao ? "꺼짐" : ""}
+                매일 {cfg.collectTime} 자동 수집 · 이메일 알림 {cfg.notify.email ? "켜짐" : "꺼짐"}
               </p>
             )}
           </div>

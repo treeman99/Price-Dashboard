@@ -87,7 +87,7 @@ export interface CollectResult {
     overallLowest: number | null;
     error: string | null;
   }>;
-  notified: { email: boolean; kakao: boolean };
+  notified: { email: boolean };
   error: string | null;
 }
 

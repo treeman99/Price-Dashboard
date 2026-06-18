@@ -42,7 +42,7 @@ async function main() {
       const { warnings } = validateConfig();
       console.log(`PORT=${config.port}  COLLECT_TIME=${config.collectTime}`);
       console.log(`DB=${config.dbPath}`);
-      console.log(`알림: email=${config.notify.email} kakao=${config.notify.kakao}`);
+      console.log(`알림: email=${config.notify.email}`);
       warnings.forEach((w) => console.warn(`[경고] ${w}`));
       break;
     }

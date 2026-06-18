@@ -17,7 +17,7 @@ async function j<T>(res: Response): Promise<T> {
 export interface AppConfig {
   port: number;
   collectTime: string;
-  notify: { email: boolean; kakao: boolean };
+  notify: { email: boolean };
   warnings: string[];
 }
 
