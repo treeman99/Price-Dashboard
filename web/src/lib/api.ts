@@ -51,4 +51,12 @@ export const api = {
     fetch(`/api/products/${id}/reactivate`, { method: "POST" }).then((r) => j(r)),
 
   collectNow: () => fetch("/api/collect", { method: "POST" }).then((r) => j<CollectResult>(r)),
+
+  serviceStatus: () =>
+    fetch("/api/service/status").then((r) => j<{ installed: boolean; label: string }>(r)),
+
+  uninstallService: () =>
+    fetch("/api/service/uninstall", { method: "POST" }).then((r) =>
+      j<{ ok: boolean; message: string }>(r)
+    ),
 };

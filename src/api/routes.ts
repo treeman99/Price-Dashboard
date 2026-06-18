@@ -1,4 +1,9 @@
 import { Router } from "express";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { config, validateConfig } from "../config.ts";
 import {
   listProducts,
@@ -17,6 +22,10 @@ import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type { CreateProductInput, PeriodDays } from "../../shared/types.ts";
 
 export const api = Router();
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const LAUNCHD_LABEL = "com.daegun.dailyprice";
+const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 
 function today(): string {
   return localDate();
@@ -118,6 +127,31 @@ api.post("/products/:id/reactivate", (req, res) => {
   if (!getProduct(id)) return res.status(404).json({ error: "상품 없음" });
   setProductActive(id, true);
   res.json({ ok: true });
+});
+
+/** launchd 서비스 설치 여부 */
+api.get("/service/status", (_req, res) => {
+  res.json({ installed: fs.existsSync(plistPath), label: LAUNCHD_LABEL });
+});
+
+/**
+ * launchd 서비스 제거. 이 서버 자신이 그 서비스이므로,
+ * uninstall.sh 를 detached로 띄워 부모(=이 프로세스)가 bootout 되어도 스크립트가 끝까지 실행되게 한다.
+ */
+api.post("/service/uninstall", (_req, res) => {
+  if (!fs.existsSync(plistPath)) {
+    return res.status(409).json({ error: "등록된 서비스가 없습니다." });
+  }
+  const script = path.join(repoRoot, "service", "uninstall.sh");
+  // 먼저 응답을 보내 flush 한 뒤(자기 자신 종료 대비) 분리 실행
+  res.json({
+    ok: true,
+    message: "백그라운드 서비스를 제거합니다. 잠시 후 이 서버가 종료됩니다.",
+  });
+  setTimeout(() => {
+    const child = spawn("/bin/bash", [script], { detached: true, stdio: "ignore" });
+    child.unref();
+  }, 600);
 });
 
 /** 지금 수집 (수동 트리거, 전체) */
