@@ -1,0 +1,25 @@
+# secrets
+.env
+.env.local
+
+# dependencies
+node_modules/
+web/node_modules/
+
+# build output
+dist/
+web/dist/
+
+# local data & logs
+data/
+*.log
+logs/
+
+# os
+.DS_Store
+
+# editor
+.vscode/
+.idea/
+.playwright-mcp/
+dashboard.png

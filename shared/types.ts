@@ -1,0 +1,102 @@
+// 백엔드(api/collector)와 프론트(web)가 공유하는 타입.
+// 백엔드는 상대경로로, web은 vite alias `@shared`로 임포트한다.
+
+/** 상품(관심 물건) */
+export interface Product {
+  id: number;
+  name: string;
+  /**
+   * 모델명 엄격 매칭(AND of OR-groups). 각 그룹은 동의어 OR 묶음이며,
+   * 모든 그룹에서 최소 1개가 제목에 포함되어야 통과. (대소문자 무시)
+   * 예) GR4 → [["GR4","GRIV","GR IV"]] / 루나울트라 → [["루나","Luna"],["울트라","Ultra"]]
+   */
+  mustInclude: string[][];
+  /** 이 상품에만 적용되는 추가 제외 토큰 (대소문자 무시). 전역 제외어와 별개. */
+  mustExclude: string[];
+  /** 액세서리 제외용 최소 가격(원). 이 값 미만은 후보에서 제외 */
+  minPrice: number;
+  /** false면 추적 중지(soft delete) */
+  active: boolean;
+  createdAt: string;
+}
+
+/** 하루치 가격 스냅샷 */
+export interface PricePoint {
+  date: string; // YYYY-MM-DD
+  naverLowest: number | null;
+  coupangLowest: number | null;
+  danawaLowest: number | null;
+  avgPrice: number | null;
+  overallLowest: number | null;
+  lowestSource: string;
+}
+
+/** 당일 Top3 후보 (판매처/가격/링크) */
+export interface Listing {
+  rank: number;
+  mall: string;
+  price: number;
+  link: string | null;
+}
+
+/** 리뷰 카드 */
+export interface Review {
+  source: string;
+  date: string | null;
+  summary: string;
+  rating: number | null;
+  link: string | null;
+}
+
+/** 전일 대비 변동 방향 */
+export type ChangeDirection = "up" | "down" | "flat";
+
+/** 대시보드 카드용 상품 요약 */
+export interface ProductSummary {
+  product: Product;
+  latest: PricePoint | null;
+  /** 전일 대비 종합최저가 변동 */
+  change: {
+    direction: ChangeDirection;
+    amount: number | null; // 절대 변동액(원)
+    percent: number | null;
+  };
+  topListings: Listing[];
+  reviews: Review[];
+  /** 마지막 수집 일시(ISO) */
+  lastCollectedAt: string | null;
+}
+
+/** 상품별 히스토리(차트용) */
+export interface ProductHistory {
+  product: Product;
+  points: PricePoint[];
+}
+
+/** 수집 실행 결과 */
+export interface CollectResult {
+  date: string;
+  startedAt: string;
+  finishedAt: string;
+  ok: boolean;
+  perProduct: Array<{
+    productId: number;
+    name: string;
+    ok: boolean;
+    naverLowest: number | null;
+    overallLowest: number | null;
+    error: string | null;
+  }>;
+  notified: { email: boolean; kakao: boolean };
+  error: string | null;
+}
+
+/** 상품 생성 요청 */
+export interface CreateProductInput {
+  name: string;
+  mustInclude: string[][];
+  mustExclude: string[];
+  minPrice: number;
+}
+
+export type PeriodDays = 7 | 30 | 90;
