@@ -33,7 +33,7 @@ export default function App() {
       <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
         <div className="mx-auto max-w-[1920px] px-4">
           <div className="flex items-center gap-6 pt-3">
-            <h1 className="shrink-0 text-lg font-bold">📷 Daily Price Dashboard</h1>
+            <h1 className="shrink-0 text-lg font-bold">📷 Daily Dashboard</h1>
           </div>
           {/* 게시판 탭 메뉴 */}
           <nav className="-mb-px flex gap-1 pt-2" role="tablist">
