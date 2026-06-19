@@ -71,7 +71,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
+        <div className="mx-auto flex max-w-[1920px] items-center justify-between gap-4 px-4 py-3">
           <div>
             <h1 className="text-lg font-bold">📷 Daily Price Dashboard</h1>
             {cfg && (
@@ -109,7 +109,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6">
+      <main className="mx-auto max-w-[1920px] px-4 py-6">
         {cfg?.warnings && cfg.warnings.length > 0 && (
           <div className="mb-4 flex items-start gap-2 rounded-md border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -144,7 +144,7 @@ export default function App() {
             <AddProductDialog onAdded={load} />
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
             {summaries.map((s) => (
               <ProductCard key={s.product.id} summary={s} onChanged={load} />
             ))}
