@@ -89,7 +89,19 @@ export function ProductCard({
           <div>
             <div className="text-xs text-muted-foreground">종합 최저가</div>
             <div className="text-2xl font-bold">
-              {formatWon(latest?.overallLowest ?? null)}
+              {latest?.overallLowest != null && topListings[0]?.link ? (
+                <a
+                  href={topListings[0].link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:underline"
+                  title="최저가 판매처로 이동"
+                >
+                  {formatWon(latest.overallLowest)}
+                </a>
+              ) : (
+                formatWon(latest?.overallLowest ?? null)
+              )}
               {latest?.lowestSource && (
                 <span className="ml-2 text-xs font-normal text-muted-foreground">
                   {latest.lowestSource}
