@@ -112,29 +112,34 @@ function corpusToText(corpus: RawCorpus): string {
 }
 
 function buildPrompt(corpus: RawCorpus, today: string): string {
-  return `너는 한국 팝업스토어·전시 큐레이터다. 아래 네이버 검색 결과(제목 | 설명 | 링크)는 대부분
-블로그 "총정리/모음/추천 TOP" 글이라 그대로 쓰면 안 된다. 본문에서 **실제 개별 행사**를 뽑아내
-"행사 리스트"를 만들어라. 기준 시점: ${corpus.month}. **오늘 날짜: ${today}**.
+  return `너는 한국 팝업스토어·전시 큐레이터다. 아래 네이버 검색 결과(제목 | 설명 | 링크)는 단서일 뿐,
+대부분 블로그 "총정리/모음" 글이고 **날짜·내용이 부정확**하다. 절대 스니펫의 날짜를 그대로 믿지 마라.
+WebSearch/WebFetch로 **실제 원문·공식 페이지를 직접 열어 검증**한 뒤 "행사 리스트"를 만들어라.
+기준 시점: ${corpus.month}. **오늘 날짜: ${today}**.
 
-핵심 규칙:
-1. 제목은 블로그 글 제목(예: "6월 성수 팝업 총정리", "서울 전시회 추천 TOP5")이 아니라
-   **실제 행사의 정식 명칭**으로 작성한다. 예: "톰브라운 팝업스토어", "디뮤지엄 ○○展", "베이비페어 2026".
-   글에서 행사명을 알 수 없으면 그 항목은 버린다(추측 금지).
-2. **같은 행사는 반드시 하나로 합친다.** 여러 글/링크에 같은 행사가 나오면 1개만 출력한다
-   (행사명+장소+기간이 같으면 동일 행사). 가장 정보가 풍부한 출처 링크 1개만 남긴다.
-3. "총정리/모음/일정정리/추천/베스트/TOP/가볼만한곳" 류의 묶음 글 자체는 행사가 아니므로 출력하지 않는다.
-4. 신뢰가 낮거나 모호하면 WebSearch 도구로 실제 행사명·기간·장소를 검수/확인한 뒤 확정한다.
-5. **날짜 필수**: 각 행사의 startDate(시작일), endDate(종료일)를 "YYYY-MM-DD"로 채운다(연도 모르면 ${corpus.month.slice(0, 4)} 가정). 정말 모르면 null.
-6. **이미 종료된 행사(endDate가 오늘 ${today}보다 과거)는 출력하지 마라.** 진행 중이거나 시작 예정인 것만.
-7. 팝업은 **서울과 경기 모두** 대상. 지역 분류: 서울(성수/홍대/여의도/강남/잠실 등) + 경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
-8. 전시는 반드시 4개 전시장 섹션을 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
-9. summary는 한 줄 핵심만. 팝업 최대 20개, 전시장별 최대 6개, general 최대 12개. 실제 행사만, 중복 없이.
-   (tag 는 신경쓰지 말 것 — 서버가 날짜로 자동 계산함)
+검증 절차(반드시 수행):
+A. 후보 행사를 찾으면, 그 행사의 **공식/상세 페이지를 WebFetch로 열어** 정확한 행사명·시작일·종료일·장소를 확인한다.
+   - 전시장 행사는 공식 일정 페이지를 우선 확인: 코엑스 https://www.coex.co.kr , 세텍 https://www.setec.or.kr ,
+     킨텍스 https://www.kintex.com , 수원컨벤션센터 https://www.scc.or.kr (또는 검색으로 공식 행사 페이지).
+   - 스니펫의 날짜와 공식 페이지의 날짜가 다르면 **공식 페이지 날짜를 따른다**.
+B. 날짜를 신뢰할 수 있게 확인하지 못하면 startDate/endDate는 null로 둔다(추측 금지). 행사명도 확인 안 되면 버린다.
 
-검색결과:
+추출 규칙:
+1. 제목은 블로그 글 제목이 아니라 **실제 행사의 정식 명칭**. (예: "톰브라운 팝업스토어", "2026 서울국제도서전")
+2. **하나의 글/링크에 여러 행사가 있으면 그 행사들을 모두 개별 항목으로 추출**한다. 한 개만 뽑지 말 것.
+3. **같은 행사는 하나로 합친다**(행사명+장소+기간 동일). link는 가능하면 그 행사의 **공식/상세 페이지**, 없으면 출처.
+4. "총정리/모음/추천/TOP/가볼만한곳" 묶음 글 자체는 행사가 아니므로 출력하지 않는다.
+5. 각 행사 startDate/endDate를 "YYYY-MM-DD"로(연도 모르면 ${corpus.month.slice(0, 4)} 가정). 확인 불가면 null.
+6. **이미 종료된 행사(endDate < ${today})는 출력하지 마라.** 진행 중이거나 시작 예정인 것만.
+7. 팝업은 **서울+경기 모두**. 지역: 서울(성수/홍대/여의도/강남/잠실 등)+경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
+8. 전시는 4개 전시장 섹션 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
+9. summary는 한 줄. 팝업 최대 20, 전시장별 최대 8, general 최대 12. 실제 행사만, 중복 없이.
+   (tag 는 서버가 날짜로 자동 계산하니 출력하지 말 것)
+
+검색 단서:
 ${corpusToText(corpus)}
 
-반드시 아래 JSON만 출력(다른 텍스트 없이):
+검증을 마친 뒤, 반드시 아래 JSON만 출력(다른 텍스트 없이):
 {"popups":[{"name":string,"region":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null,"category":string|null}],
 "exhibitions":{"venues":[{"name":string,"items":[{"title":string,"venue":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null}]}],"general":[{"title":string,"venue":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null}]},
 "notes":string|null}`;
@@ -195,12 +200,13 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     const q = query({
       prompt: buildPrompt(corpus, date),
       options: {
-        allowedTools: ["WebSearch"], // 실제 행사명/기간 검수용
+        // 실제 원문·공식 페이지를 열어 날짜/내용 검증
+        allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
-        maxTurns: 16,
+        maxTurns: 40,
         systemPrompt:
-          "너는 팝업/전시 큐레이터다. 블로그 묶음글이 아니라 실제 개별 행사를 중복 없이 추려 마지막에 지정된 JSON 한 개만 출력한다.",
+          "너는 꼼꼼한 팝업/전시 큐레이터다. 스니펫을 믿지 말고 WebSearch/WebFetch로 실제 날짜를 검증한 뒤, 실제 개별 행사를 중복 없이 추려 마지막에 지정된 JSON 한 개만 출력한다.",
       },
     });
     let finalText = "";
@@ -218,7 +224,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       const items = Array.isArray(found?.items)
         ? found!.items.map(normExhibition(name, date)).filter((e) => !isEnded(e.endDate, date))
         : [];
-      return { name, items: dedupeByTitle(items, (x) => x.title).slice(0, 6) };
+      return { name, items: dedupeByTitle(items, (x) => x.title).slice(0, 8) };
     });
 
     const popups = dedupeByTitle(
