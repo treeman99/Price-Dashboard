@@ -50,11 +50,17 @@ export async function gatherCorpus(): Promise<RawCorpus> {
   const month = monthLabel();
   log.info(`이벤트 수집 시작 — 기준 ${month}`);
 
-  // 팝업: 일반 + 지역/카테고리 (webkr+blog 혼합)
+  // 팝업: 서울/경기 지역 + 카테고리 (webkr+blog 혼합)
   const popupGroups = await runSeq([
     () => group("팝업 일반(웹)", `팝업스토어 ${month}`, "webkr"),
-    () => group("팝업 일반(블로그)", `팝업스토어 추천 ${month}`, "blog"),
+    () => group("서울 팝업", `서울 팝업스토어 추천 ${month}`, "blog"),
     () => group("성수 팝업", `성수 팝업스토어 ${month}`, "blog"),
+    // 경기 지역
+    () => group("경기 팝업", `경기 팝업스토어 ${month}`, "blog"),
+    () => group("판교/분당 팝업", `판교 분당 팝업스토어 ${month}`, "blog"),
+    () => group("수원 팝업", `수원 팝업스토어 ${month}`, "blog"),
+    () => group("스타필드 팝업", `스타필드 팝업스토어 ${month}`, "blog"),
+    // 카테고리
     () => group("캐릭터 팝업", `캐릭터 팝업스토어 ${month}`, "blog"),
     () => group("패션 팝업", `패션 팝업스토어 ${month}`, "blog"),
     () => group("뷰티 팝업", `뷰티 팝업스토어 ${month}`, "blog"),
