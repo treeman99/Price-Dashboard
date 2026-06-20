@@ -127,7 +127,10 @@ B. 날짜를 신뢰할 수 있게 확인하지 못하면 startDate/endDate는 nu
 추출 규칙:
 1. 제목은 블로그 글 제목이 아니라 **실제 행사의 정식 명칭**. (예: "톰브라운 팝업스토어", "2026 서울국제도서전")
 2. **하나의 글/링크에 여러 행사가 있으면 그 행사들을 모두 개별 항목으로 추출**한다. 한 개만 뽑지 말 것.
-3. **같은 행사는 하나로 합친다**(행사명+장소+기간 동일). link는 가능하면 그 행사의 **공식/상세 페이지**, 없으면 출처.
+3. **같은 행사는 하나로 합친다**(행사명+장소+기간 동일).
+   **link 규칙(중요)**: 위 '검색 단서'에 실제로 있는 링크 중 그 행사를 다루는 것, 또는 네가 WebFetch로 직접 열어 확인한
+   공식 전시장 페이지(coex.co.kr / kintex.com / setec.or.kr / scc.or.kr) URL만 사용한다.
+   **절대 임의의 URL을 지어내지 마라.** 확실한 링크가 없으면 link는 null.
 4. "총정리/모음/추천/TOP/가볼만한곳" 묶음 글 자체는 행사가 아니므로 출력하지 않는다.
 5. 각 행사 startDate/endDate를 "YYYY-MM-DD"로(연도 모르면 ${corpus.month.slice(0, 4)} 가정). 확인 불가면 null.
 6. **이미 종료된 행사(endDate < ${today})는 출력하지 마라.** 진행 중이거나 시작 예정인 것만.
@@ -143,6 +146,48 @@ ${corpusToText(corpus)}
 {"popups":[{"name":string,"region":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null,"category":string|null}],
 "exhibitions":{"venues":[{"name":string,"items":[{"title":string,"venue":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null}]}],"general":[{"title":string,"venue":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null}]},
 "notes":string|null}`;
+}
+
+// ── 링크 검증: 환각/무관 URL 차단 ──
+// 허용: 코퍼스(실제 수집된 검색결과)에 있던 링크 OR 공식 전시장/예매 도메인
+const OFFICIAL_LINK_DOMAINS = [
+  "coex.co.kr", "kintex.com", "setec.or.kr", "scc.or.kr",
+  "interpark.com", "ticketlink.co.kr", "yes24.com", "ticket.melon.com",
+];
+
+function normUrl(u: string): string {
+  try {
+    const url = new URL(u.trim());
+    return (url.hostname.replace(/^www\./, "") + url.pathname.replace(/\/+$/, "")).toLowerCase();
+  } catch {
+    return u.trim().toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+function hostOf(u: string): string {
+  try {
+    return new URL(u).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function collectCorpusLinks(corpus: RawCorpus): Set<string> {
+  const set = new Set<string>();
+  const add = (items: { link: string }[]) => items.forEach((it) => it.link && set.add(normUrl(it.link)));
+  corpus.popupGroups.forEach((g) => add(g.items));
+  corpus.venues.forEach((v) => v.groups.forEach((g) => add(g.items)));
+  corpus.generalGroups.forEach((g) => add(g.items));
+  return set;
+}
+
+/** 코퍼스에 있거나 공식 도메인이면 통과, 아니면 null(환각/무관 링크 제거) */
+function validateLink(link: string | null, corpusLinks: Set<string>): string | null {
+  if (!link) return null;
+  if (corpusLinks.has(normUrl(link))) return link;
+  const h = hostOf(link);
+  if (OFFICIAL_LINK_DOMAINS.some((d) => h === d || h.endsWith("." + d))) return link;
+  return null;
 }
 
 /** 날짜 기준 상태 계산 + 종료 행사 제외용 헬퍼 */
@@ -216,13 +261,17 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     if (!finalText) return rawSnapshot(corpus, date);
 
     const p = extractJson(finalText) as any;
+    const corpusLinks = collectCorpusLinks(corpus);
 
     // 필수 4개 전시장 보정: 누락된 전시장은 빈 섹션으로 채움. 종료된 행사는 제외.
     const venuesIn: VenueGroup[] = Array.isArray(p?.exhibitions?.venues) ? p.exhibitions.venues : [];
     const venues: VenueGroup[] = MANDATORY_VENUES.map((name) => {
       const found = venuesIn.find((v) => v?.name && String(v.name).includes(name.slice(0, 2)));
       const items = Array.isArray(found?.items)
-        ? found!.items.map(normExhibition(name, date)).filter((e) => !isEnded(e.endDate, date))
+        ? found!.items
+            .map(normExhibition(name, date))
+            .map((e) => ({ ...e, link: validateLink(e.link, corpusLinks) }))
+            .filter((e) => !isEnded(e.endDate, date))
         : [];
       return { name, items: dedupeByTitle(items, (x) => x.title).slice(0, 8) };
     });
@@ -230,6 +279,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     const popups = dedupeByTitle(
       (Array.isArray(p?.popups) ? p.popups : [])
         .map(normPopup(date))
+        .map((e: PopupItem) => ({ ...e, link: validateLink(e.link, corpusLinks) }))
         .filter((e: PopupItem) => !isEnded(e.endDate, date)),
       (x: PopupItem) => x.name
     ).slice(0, 20);
@@ -237,6 +287,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     const general = dedupeByTitle(
       (Array.isArray(p?.exhibitions?.general) ? p.exhibitions.general : [])
         .map(normExhibition("서울/경기", date))
+        .map((e: ExhibitionItem) => ({ ...e, link: validateLink(e.link, corpusLinks) }))
         .filter((e: ExhibitionItem) => !isEnded(e.endDate, date)),
       (x: ExhibitionItem) => x.title
     ).slice(0, 12);
