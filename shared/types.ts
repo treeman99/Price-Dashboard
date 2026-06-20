@@ -100,3 +100,45 @@ export interface CreateProductInput {
 }
 
 export type PeriodDays = 7 | 30 | 90;
+
+// ── 팝업스토어 · 전시회 보드 (이력 저장 없음, 최신 스냅샷만) ──
+
+export type EventTag = "신규" | "종료임박" | null;
+
+export interface PopupItem {
+  name: string;
+  /** 지역(성수/홍대/여의도/강남/기타 등) */
+  region: string;
+  /** 기간(가능하면), 없으면 "" */
+  period: string;
+  summary: string;
+  link: string | null;
+  category: string | null;
+  tag: EventTag;
+}
+
+export interface ExhibitionItem {
+  title: string;
+  venue: string;
+  period: string;
+  summary: string;
+  link: string | null;
+}
+
+export interface VenueGroup {
+  name: string; // 코엑스 / 세텍 / 킨텍스 / 수원컨벤션센터
+  items: ExhibitionItem[];
+}
+
+export interface EventsSnapshot {
+  date: string; // YYYY-MM-DD (로컬)
+  updatedAt: string; // ISO
+  /** 큐레이션 출처: LLM 정제 or 네이버 검색 원본 */
+  source: "llm" | "naver-raw";
+  popups: PopupItem[];
+  exhibitions: {
+    venues: VenueGroup[];
+    general: ExhibitionItem[];
+  };
+  notes: string | null;
+}

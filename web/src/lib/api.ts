@@ -4,6 +4,7 @@ import type {
   CreateProductInput,
   CollectResult,
   PeriodDays,
+  EventsSnapshot,
 } from "@shared/types";
 
 async function j<T>(res: Response): Promise<T> {
@@ -59,4 +60,9 @@ export const api = {
     fetch("/api/service/uninstall", { method: "POST" }).then((r) =>
       j<{ ok: boolean; message: string }>(r)
     ),
+
+  events: () => fetch("/api/events").then((r) => j<EventsSnapshot | null>(r)),
+
+  refreshEvents: () =>
+    fetch("/api/events/refresh", { method: "POST" }).then((r) => j<EventsSnapshot>(r)),
 };

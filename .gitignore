@@ -23,3 +23,6 @@ logs/
 .idea/
 .playwright-mcp/
 dashboard.png
+
+# 이벤트 스냅샷 캐시(이력없음)
+data/events-latest.json

@@ -17,7 +17,8 @@ function int(v: string | undefined, def: number): number {
 
 export interface AppConfig {
   port: number;
-  collectTime: string; // HH:mm
+  collectTime: string; // HH:mm (가격 수집)
+  eventsCollectTime: string; // HH:mm (팝업/전시 수집)
   dbPath: string;
   legacyHistoryJson: string;
   historyRetentionDays: number;
@@ -33,6 +34,7 @@ export interface AppConfig {
 export const config: AppConfig = {
   port: int(process.env.PORT, 7777),
   collectTime: process.env.COLLECT_TIME?.trim() || "09:00",
+  eventsCollectTime: process.env.EVENTS_COLLECT_TIME?.trim() || "10:00",
   dbPath: process.env.DB_PATH?.trim() || path.join(repoRoot, "data", "price.db"),
   legacyHistoryJson:
     process.env.LEGACY_HISTORY_JSON?.trim() ||
@@ -73,8 +75,9 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
 } {
   const warnings: string[] = [];
 
-  // COLLECT_TIME은 항상 검증
+  // 수집 시각 형식 검증
   parseCollectTime(config.collectTime);
+  parseCollectTime(config.eventsCollectTime);
 
   if (opts.forCollect) {
     if (!config.naver.clientId || !config.naver.clientSecret) {

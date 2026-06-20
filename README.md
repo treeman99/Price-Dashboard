@@ -1,8 +1,12 @@
-# Daily Price Dashboard
+# Daily Dashboard
 
-맥북 로컬에서 관심 물건의 최저가를 매일 자동 수집해 **localhost 대시보드**로 보여주는 서비스.
-Cowork "daily price"의 수집 동작(네이버 쇼핑 API + 웹리서치 + 모델 매칭/필터링)을 그대로 이식하되,
-결과를 이메일이 아니라 항상 떠 있는 로컬 대시보드로 제공한다.
+맥북 로컬에서 매일 정보를 자동 수집해 **localhost 대시보드(탭형 게시판)**로 보여주는 서비스.
+
+탭 구성:
+1. **가격 대시보드** — 관심 물건 최저가 추적(네이버 쇼핑 API + 웹리서치 + 모델 매칭/필터링). 매일 09:00 수집, 시계열 저장.
+2. **팝업·전시** — 팝업스토어 + 서울/경기 전시·박람회(코엑스·세텍·킨텍스·수원컨벤션센터). 매일 10:00 갱신, **이력 저장 없이 최신 스냅샷만** 캐시.
+
+새 게시판은 `web/src/App.tsx`의 `TABS` 배열에 항목을 추가해 확장한다.
 
 ## 구성
 - **collector/** 네이버 쇼핑 API(결정적) + Agent SDK 웹리서치(비교가/쿠팡/리뷰) + 필터링 + 멱등 저장
@@ -54,9 +58,10 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | 키 | 필수 | 설명 |
 |---|---|---|
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | ✅ | 네이버 쇼핑 검색 API. 없으면 수집 fail-fast |
-| `ANTHROPIC_API_KEY` | 선택 | Agent SDK 웹리서치(비교가/쿠팡/리뷰). 없으면 네이버 결과만으로 수집 |
+| `ANTHROPIC_API_KEY` | 선택 | Agent SDK 웹리서치(가격 비교가/쿠팡/리뷰) + 팝업/전시 LLM 큐레이션. 없으면 가격은 네이버만, 팝업/전시는 검색 원본으로 표시 |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
-| `COLLECT_TIME` | 기본 09:00 | 매일 자동 수집 시각(로컬) |
+| `COLLECT_TIME` | 기본 09:00 | 매일 가격 수집 시각(로컬) |
+| `EVENTS_COLLECT_TIME` | 기본 10:00 | 매일 팝업/전시 갱신 시각(로컬) |
 | `NOTIFY_EMAIL` / `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | 선택 | 이메일 리포트 알림 |
 
 > 알림 자격증명이 없으면 이메일 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
@@ -118,8 +123,10 @@ curl -X POST localhost:7777/api/collect   # 지금 수집 (API) — 대시보드
 | POST | `/api/products` | 상품 추가 + 즉시 1차 수집 |
 | DELETE | `/api/products/:id` | 추적 중지(soft). `?hard=1&confirm=<상품명>` 영구 삭제 |
 | POST | `/api/products/:id/reactivate` | 추적 재개 |
-| POST | `/api/collect` | 지금 수집 |
-| GET | `/api/runs/today` | 오늘 수집 상태 |
+| POST | `/api/collect` | 지금 수집(가격) |
+| GET | `/api/runs/today` | 오늘 가격 수집 상태 |
+| GET | `/api/events` | 최신 팝업/전시 스냅샷 |
+| POST | `/api/events/refresh` | 팝업/전시 지금 갱신 |
 
 ## 동작 메모
 - **멱등성**: `(product_id, date)` UNIQUE → 같은 날 재수집은 덮어쓰기. 알림은 하루 1회.

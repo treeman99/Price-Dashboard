@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { Construction } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Dashboard } from "@/components/Dashboard";
+import { EventsBoard } from "@/components/EventsBoard";
 
 interface TabDef {
   id: string;
@@ -9,19 +9,10 @@ interface TabDef {
   content: ReactNode;
 }
 
-function ComingSoon({ name }: { name: string }) {
-  return (
-    <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
-      <Construction className="h-10 w-10" />
-      <p>{name} — 준비 중인 게시판입니다.</p>
-    </div>
-  );
-}
-
 // 새 게시판은 여기에 항목만 추가하면 탭이 늘어난다.
 const TABS: TabDef[] = [
   { id: "price", label: "가격 대시보드", content: <Dashboard /> },
-  { id: "board2", label: "게시판 2", content: <ComingSoon name="게시판 2" /> },
+  { id: "events", label: "팝업·전시", content: <EventsBoard /> },
 ];
 
 export default function App() {

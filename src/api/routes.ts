@@ -17,6 +17,7 @@ import {
   getRunResult,
 } from "../db/repo.ts";
 import { runCollection } from "../collector/collect.ts";
+import { getEventsSnapshot, refreshEvents } from "../events/events.ts";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type { CreateProductInput, PeriodDays } from "../../shared/types.ts";
@@ -159,6 +160,23 @@ api.post("/collect", async (_req, res) => {
   try {
     const result = await runCollection({ date: today(), trigger: "manual" });
     res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ── 팝업 · 전시 게시판 ──
+
+/** 최신 팝업/전시 스냅샷 */
+api.get("/events", (_req, res) => {
+  res.json(getEventsSnapshot());
+});
+
+/** 지금 갱신 (수동). 이메일은 보내지 않음(중복 방지) */
+api.post("/events/refresh", async (_req, res) => {
+  try {
+    const snapshot = await refreshEvents({ trigger: "manual", notify: false });
+    res.json(snapshot);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
