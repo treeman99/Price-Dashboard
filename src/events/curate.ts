@@ -1,5 +1,4 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { MANDATORY_VENUES, type RawCorpus, type RawGroup } from "./gather.ts";
 import type {
@@ -93,15 +92,23 @@ function corpusToText(corpus: RawCorpus): string {
 }
 
 function buildPrompt(corpus: RawCorpus): string {
-  return `너는 한국 팝업스토어·전시 큐레이터다. 아래 네이버 검색 결과(제목 | 설명 | 링크)를 분석해
-현재 진행 중이거나 곧 시작하는 팝업스토어와 전시/박람회를 정리하라. 기준 시점: ${corpus.month}.
+  return `너는 한국 팝업스토어·전시 큐레이터다. 아래 네이버 검색 결과(제목 | 설명 | 링크)는 대부분
+블로그 "총정리/모음/추천 TOP" 글이라 그대로 쓰면 안 된다. 본문에서 **실제 개별 행사**를 뽑아내
+"행사 리스트"를 만들어라. 기준 시점: ${corpus.month}.
 
-규칙:
-- 광고/중복/무관한 결과는 제외하고 실제 행사만 추린다. 링크는 검색결과의 링크를 그대로 사용.
-- 팝업은 지역(성수/홍대/여의도/강남/기타 등)으로 분류. 신규 오픈이면 tag "신규", 7일 내 종료면 "종료임박", 아니면 null.
-- 전시는 반드시 다음 4개 전시장 섹션을 모두 포함(행사 없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
-- 기간/장소를 알 수 있으면 채우고, 모르면 빈 문자열.
-- 팝업 최대 20개, 전시장별 최대 6개, general 최대 10개.
+핵심 규칙:
+1. 제목은 블로그 글 제목(예: "6월 성수 팝업 총정리", "서울 전시회 추천 TOP5")이 아니라
+   **실제 행사의 정식 명칭**으로 작성한다. 예: "톰브라운 팝업스토어", "디뮤지엄 ○○展", "베이비페어 2026".
+   글에서 행사명을 알 수 없으면 그 항목은 버린다(추측 금지).
+2. **같은 행사는 반드시 하나로 합친다.** 여러 글/링크에 같은 행사가 나오면 1개만 출력한다
+   (행사명+장소+기간이 같으면 동일 행사). 가장 정보가 풍부한 출처 링크 1개만 남긴다.
+3. "총정리/모음/일정정리/추천/베스트/TOP/가볼만한곳" 류의 묶음 글 자체는 행사가 아니므로 출력하지 않는다.
+4. 신뢰가 낮거나 모호하면 WebSearch 도구로 실제 행사명·기간·장소를 검수/확인한 뒤 확정한다.
+5. 팝업은 지역(성수/홍대/여의도/강남/기타 등)으로 분류. 신규 오픈이면 tag "신규",
+   기준일로부터 7일 내 종료면 "종료임박", 아니면 null.
+6. 전시는 반드시 4개 전시장 섹션을 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
+7. 기간/장소를 알면 채우고 모르면 빈 문자열. summary는 한 줄 핵심만.
+8. 팝업 최대 20개, 전시장별 최대 6개, general 최대 12개. 실제 행사만, 중복 없이.
 
 검색결과:
 ${corpusToText(corpus)}
@@ -112,6 +119,28 @@ ${corpusToText(corpus)}
 "notes":string|null}`;
 }
 
+/** 제목 정규화: 공백/괄호/특수문자 제거 후 비교용 키 */
+function titleKey(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[\[\]()·,~!?.“”"'`\-_/]/g, "")
+    .replace(/(전시회|전시|展|팝업스토어|팝업|박람회|페어|expo|fair)/g, "");
+}
+
+/** 제목 기준 중복 제거 (LLM 누락 대비 안전장치) */
+function dedupeByTitle<T>(arr: T[], getTitle: (x: T) => string): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const x of arr) {
+    const k = titleKey(getTitle(x));
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(x);
+  }
+  return out;
+}
+
 function extractJson(text: string): unknown {
   const s = text.indexOf("{");
   const e = text.lastIndexOf("}");
@@ -119,19 +148,21 @@ function extractJson(text: string): unknown {
   return JSON.parse(text.slice(s, e + 1));
 }
 
-/** RawCorpus → EventsSnapshot. 키 있으면 LLM 큐레이션, 없거나 실패 시 원본 폴백. */
+/**
+ * RawCorpus → EventsSnapshot. Agent SDK LLM 큐레이션(실제 행사 추출·중복제거·검수).
+ * 명시적 키가 없어도 Claude Code 로그인 자격증명으로 동작하며, 실패 시에만 원본 폴백.
+ */
 export async function curate(corpus: RawCorpus, date: string): Promise<EventsSnapshot> {
-  if (!config.anthropicApiKey) return rawSnapshot(corpus, date);
-
   try {
     const q = query({
       prompt: buildPrompt(corpus),
       options: {
-        allowedTools: [],
+        allowedTools: ["WebSearch"], // 실제 행사명/기간 검수용
         permissionMode: "bypassPermissions",
         settingSources: [],
-        maxTurns: 2,
-        systemPrompt: "너는 팝업/전시 큐레이터다. 반드시 지정된 JSON 한 개만 출력한다.",
+        maxTurns: 16,
+        systemPrompt:
+          "너는 팝업/전시 큐레이터다. 블로그 묶음글이 아니라 실제 개별 행사를 중복 없이 추려 마지막에 지정된 JSON 한 개만 출력한다.",
       },
     });
     let finalText = "";
@@ -158,12 +189,21 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       date,
       updatedAt: new Date().toISOString(),
       source: "llm",
-      popups: (Array.isArray(p?.popups) ? p.popups : []).slice(0, 20).map(normPopup),
+      popups: dedupeByTitle(
+        (Array.isArray(p?.popups) ? p.popups : []).map(normPopup),
+        (x: PopupItem) => x.name
+      ).slice(0, 20),
       exhibitions: {
-        venues,
-        general: (Array.isArray(p?.exhibitions?.general) ? p.exhibitions.general : [])
-          .slice(0, 10)
-          .map(normExhibition("서울/경기")),
+        venues: venues.map((v) => ({
+          name: v.name,
+          items: dedupeByTitle(v.items, (x: ExhibitionItem) => x.title),
+        })),
+        general: dedupeByTitle(
+          (Array.isArray(p?.exhibitions?.general) ? p.exhibitions.general : []).map(
+            normExhibition("서울/경기")
+          ),
+          (x: ExhibitionItem) => x.title
+        ).slice(0, 12),
       },
       notes: p?.notes ? String(p.notes) : null,
     };
