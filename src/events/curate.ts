@@ -117,27 +117,26 @@ function buildPrompt(corpus: RawCorpus, today: string): string {
 WebSearch/WebFetch로 **실제 원문·공식 페이지를 직접 열어 검증**한 뒤 "행사 리스트"를 만들어라.
 기준 시점: ${corpus.month}. **오늘 날짜: ${today}**.
 
-검증 절차(반드시 수행):
-A. 후보 행사를 찾으면, 그 행사의 **공식/상세 페이지를 WebFetch로 열어** 정확한 행사명·시작일·종료일·장소를 확인한다.
-   - 전시장 행사는 공식 일정 페이지를 우선 확인: 코엑스 https://www.coex.co.kr , 세텍 https://www.setec.or.kr ,
-     킨텍스 https://www.kintex.com , 수원컨벤션센터 https://www.scc.or.kr (또는 검색으로 공식 행사 페이지).
-   - 스니펫의 날짜와 공식 페이지의 날짜가 다르면 **공식 페이지 날짜를 따른다**.
-B. 날짜를 신뢰할 수 있게 확인하지 못하면 startDate/endDate는 null로 둔다(추측 금지). 행사명도 확인 안 되면 버린다.
-
 추출 규칙:
 1. 제목은 블로그 글 제목이 아니라 **실제 행사의 정식 명칭**. (예: "톰브라운 팝업스토어", "2026 서울국제도서전")
 2. **하나의 글/링크에 여러 행사가 있으면 그 행사들을 모두 개별 항목으로 추출**한다. 한 개만 뽑지 말 것.
 3. **같은 행사는 하나로 합친다**(행사명+장소+기간 동일).
-   **link 규칙(중요)**: 위 '검색 단서'에 실제로 있는 링크 중 그 행사를 다루는 것, 또는 네가 WebFetch로 직접 열어 확인한
-   공식 전시장 페이지(coex.co.kr / kintex.com / setec.or.kr / scc.or.kr) URL만 사용한다.
-   **절대 임의의 URL을 지어내지 마라.** 확실한 링크가 없으면 link는 null.
 4. "총정리/모음/추천/TOP/가볼만한곳" 묶음 글 자체는 행사가 아니므로 출력하지 않는다.
 5. 각 행사 startDate/endDate를 "YYYY-MM-DD"로(연도 모르면 ${corpus.month.slice(0, 4)} 가정). 확인 불가면 null.
 6. **이미 종료된 행사(endDate < ${today})는 출력하지 마라.** 진행 중이거나 시작 예정인 것만.
 7. 팝업은 **서울+경기 모두**. 지역: 서울(성수/홍대/여의도/강남/잠실 등)+경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
 8. 전시는 4개 전시장 섹션 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
 9. summary는 한 줄. 팝업 최대 20, 전시장별 최대 8, general 최대 12. 실제 행사만, 중복 없이.
-   (tag 는 서버가 날짜로 자동 계산하니 출력하지 말 것)
+
+검증 강도(중요):
+- **팝업**: 검색 단서에서 **적극적으로 많이 추출**하라(최대 20개). 팝업은 공식 페이지 확인이 어려우니 WebFetch 검증을 강제하지 않는다.
+  날짜가 불명확하면 startDate/endDate만 null로 두고 **행사 자체는 버리지 마라.**
+- **전시(4개 전시장 + 일반)**: 날짜가 중요하므로 가능하면 WebSearch/WebFetch로 공식 페이지를 열어 시작/종료일을 검증한다.
+  공식 일정 페이지 예: 코엑스 https://www.coex.co.kr , 세텍 https://www.setec.or.kr , 킨텍스 https://www.kintex.com , 수원컨벤션센터 https://www.scc.or.kr.
+  스니펫 날짜와 공식 날짜가 다르면 **공식 날짜를 따른다**.
+- **link**: 도메인 루트(예: https://www.coex.co.kr)만 아는 경우엔 link를 null로 둬도 된다(서버가 출처 링크를 자동 보정함).
+  임의의 URL은 절대 지어내지 마라.
+- tag 는 서버가 날짜로 자동 계산하니 출력하지 말 것.
 
 검색 단서:
 ${corpusToText(corpus)}
@@ -172,22 +171,110 @@ function hostOf(u: string): string {
   }
 }
 
-function collectCorpusLinks(corpus: RawCorpus): Set<string> {
-  const set = new Set<string>();
-  const add = (items: { link: string }[]) => items.forEach((it) => it.link && set.add(normUrl(it.link)));
+interface CorpusItem {
+  title: string;
+  description: string;
+  link: string;
+}
+
+function collectCorpusItems(corpus: RawCorpus): CorpusItem[] {
+  const out: CorpusItem[] = [];
+  const add = (items: CorpusItem[]) => items.forEach((it) => it.link && out.push(it));
   corpus.popupGroups.forEach((g) => add(g.items));
   corpus.venues.forEach((v) => v.groups.forEach((g) => add(g.items)));
   corpus.generalGroups.forEach((g) => add(g.items));
-  return set;
+  return out;
 }
 
-/** 코퍼스에 있거나 공식 도메인이면 통과, 아니면 null(환각/무관 링크 제거) */
-function validateLink(link: string | null, corpusLinks: Set<string>): string | null {
-  if (!link) return null;
-  if (corpusLinks.has(normUrl(link))) return link;
-  const h = hostOf(link);
-  if (OFFICIAL_LINK_DOMAINS.some((d) => h === d || h.endsWith("." + d))) return link;
-  return null;
+const STOPWORDS = new Set([
+  "팝업", "팝업스토어", "스토어", "전시", "전시회", "展", "박람회", "페어", "store", "popup",
+  "in", "the", "and", "2026", "2025", "서울", "경기",
+]);
+
+function hasPath(u: string): boolean {
+  try {
+    return new URL(u).pathname.replace(/\/+$/, "").length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// 링크로 인정할 신뢰 도메인(블로그/카페/SNS/공식·예매/공공). 그 외(랜덤 도메인)는 거른다.
+const REPUTABLE_DOMAIN_SUFFIXES = [
+  "naver.com", "naver.me", "tistory.com", "daum.net", "brunch.co.kr", "blog.me",
+  "instagram.com", "facebook.com",
+  "coex.co.kr", "kintex.com", "setec.or.kr", "scc.or.kr",
+  "interpark.com", "ticketlink.co.kr", "yes24.com", "melon.com", "ticketbay.co.kr",
+  ".go.kr", ".or.kr",
+];
+
+function reputableHost(host: string): boolean {
+  if (!host) return false;
+  return REPUTABLE_DOMAIN_SUFFIXES.some((s) =>
+    s.startsWith(".") ? host.endsWith(s) : host === s || host.endsWith("." + s)
+  );
+}
+
+/** 링크 인정 조건: 신뢰 도메인 + 실제 경로 보유 */
+function acceptableLink(link: string | null): boolean {
+  return !!link && reputableHost(hostOf(link)) && hasPath(link);
+}
+
+/** 행사명에서 식별 토큰(브랜드/고유명) 추출 */
+function nameTokens(name: string): string[] {
+  return name
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
+}
+
+/** 행사명을 검색결과(코퍼스)에 매칭해 실제 출처 링크를 찾는다. 가장 식별력 높은 토큰이 포함된 항목 우선. */
+function matchCorpusLink(name: string, items: CorpusItem[]): string | null {
+  const tokens = nameTokens(name);
+  if (!tokens.length) return null;
+  const key = tokens.slice().sort((a, b) => b.length - a.length)[0]; // 가장 긴 토큰(보통 고유명)
+  let best: string | null = null;
+  let bestScore = 0;
+  for (const it of items) {
+    if (!acceptableLink(it.link)) continue; // 잡 도메인/루트 링크는 후보 제외
+    const hay = (it.title + " " + it.description).toLowerCase();
+    if (!hay.includes(key)) continue; // 핵심 토큰 없으면 무관으로 간주
+    let score = 0;
+    for (const t of tokens) if (hay.includes(t)) score++;
+    if (score > bestScore) {
+      bestScore = score;
+      best = it.link;
+    }
+  }
+  return best;
+}
+
+/**
+ * 행사 링크 결정(서버 주도). 우선순위:
+ * 1) LLM 링크가 실제 코퍼스 링크면 사용
+ * 2) LLM 링크가 공식 전시장 도메인 + 구체 경로(루트 아님)면 사용
+ * 3) 행사명을 코퍼스에 매칭해 실제 출처 링크 부여
+ * 4) 없으면 null (링크 없이 표시)
+ */
+function resolveLink(
+  name: string,
+  llmLink: string | null,
+  corpusLinks: Set<string>,
+  corpusItems: CorpusItem[]
+): string | null {
+  let cand: string | null = null;
+  if (llmLink && corpusLinks.has(normUrl(llmLink))) {
+    cand = llmLink; // LLM이 고른 실제 출처
+  } else if (llmLink) {
+    const h = hostOf(llmLink);
+    if (OFFICIAL_LINK_DOMAINS.some((d) => h === d || h.endsWith("." + d)) && hasPath(llmLink)) {
+      cand = llmLink; // 공식 전시장 구체 페이지
+    }
+  }
+  if (!cand) cand = matchCorpusLink(name, corpusItems); // 행사명↔검색결과 매칭
+  // 최종 관문: 신뢰 도메인 + 경로 있는 링크만 통과(잡/루트 링크 제거)
+  return acceptableLink(cand) ? cand : null;
 }
 
 /** 날짜 기준 상태 계산 + 종료 행사 제외용 헬퍼 */
@@ -261,7 +348,8 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     if (!finalText) return rawSnapshot(corpus, date);
 
     const p = extractJson(finalText) as any;
-    const corpusLinks = collectCorpusLinks(corpus);
+    const corpusItems = collectCorpusItems(corpus);
+    const corpusLinks = new Set(corpusItems.map((it) => normUrl(it.link)));
 
     // 필수 4개 전시장 보정: 누락된 전시장은 빈 섹션으로 채움. 종료된 행사는 제외.
     const venuesIn: VenueGroup[] = Array.isArray(p?.exhibitions?.venues) ? p.exhibitions.venues : [];
@@ -270,7 +358,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       const items = Array.isArray(found?.items)
         ? found!.items
             .map(normExhibition(name, date))
-            .map((e) => ({ ...e, link: validateLink(e.link, corpusLinks) }))
+            .map((e) => ({ ...e, link: resolveLink(e.title, e.link, corpusLinks, corpusItems) }))
             .filter((e) => !isEnded(e.endDate, date))
         : [];
       return { name, items: dedupeByTitle(items, (x) => x.title).slice(0, 8) };
@@ -279,7 +367,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     const popups = dedupeByTitle(
       (Array.isArray(p?.popups) ? p.popups : [])
         .map(normPopup(date))
-        .map((e: PopupItem) => ({ ...e, link: validateLink(e.link, corpusLinks) }))
+        .map((e: PopupItem) => ({ ...e, link: resolveLink(e.name, e.link, corpusLinks, corpusItems) }))
         .filter((e: PopupItem) => !isEnded(e.endDate, date)),
       (x: PopupItem) => x.name
     ).slice(0, 20);
@@ -287,7 +375,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     const general = dedupeByTitle(
       (Array.isArray(p?.exhibitions?.general) ? p.exhibitions.general : [])
         .map(normExhibition("서울/경기", date))
-        .map((e: ExhibitionItem) => ({ ...e, link: validateLink(e.link, corpusLinks) }))
+        .map((e: ExhibitionItem) => ({ ...e, link: resolveLink(e.title, e.link, corpusLinks, corpusItems) }))
         .filter((e: ExhibitionItem) => !isEnded(e.endDate, date)),
       (x: ExhibitionItem) => x.title
     ).slice(0, 12);
