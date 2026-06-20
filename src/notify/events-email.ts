@@ -16,8 +16,9 @@ function escapeAttr(s: string): string {
 
 function tagBadge(tag: PopupItem["tag"]): string {
   if (!tag) return "";
-  const color = tag === "신규" ? "#03C75A" : "#FF5A5A";
-  return ` <span style="background:${color};color:#fff;border-radius:4px;padding:1px 6px;font-size:11px">${tag}</span>`;
+  const map = { 신규: "#03C75A", 종료임박: "#FF5A5A", 예정: "#2E86DE" } as const;
+  const label = tag === "예정" ? "오픈예정" : tag;
+  return ` <span style="background:${map[tag]};color:#fff;border-radius:4px;padding:1px 6px;font-size:11px">${label}</span>`;
 }
 
 function popupCard(p: PopupItem): string {
@@ -37,7 +38,7 @@ function exhCard(e: ExhibitionItem, color: string): string {
     ? `<a href="${escapeAttr(e.link)}" style="color:#4361ee;text-decoration:none;font-size:13px">🔗 보기</a>`
     : "";
   return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid ${color}">
-    <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(e.title)}</h3>
+    <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(e.title)}${tagBadge(e.tag)}</h3>
     <p style="margin:0 0 4px;color:#666;font-size:13px">🏛 ${escapeHtml(e.venue)}${e.period ? ` · ${escapeHtml(e.period)}` : ""}</p>
     ${e.summary ? `<p style="margin:0 0 4px;color:#444;font-size:13px">${escapeHtml(e.summary)}</p>` : ""}
     ${link}

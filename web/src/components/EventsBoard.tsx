@@ -1,20 +1,23 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon } from "lucide-react";
-import type { EventsSnapshot, PopupItem, ExhibitionItem } from "@shared/types";
+import type { EventsSnapshot, PopupItem, ExhibitionItem, EventTag } from "@shared/types";
 import { api } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
-function TagBadge({ tag }: { tag: PopupItem["tag"] }) {
+const TAG_STYLE: Record<Exclude<EventTag, null>, { bg: string; label: string }> = {
+  신규: { bg: "#03C75A", label: "신규" },
+  종료임박: { bg: "#FF5A5A", label: "종료임박" },
+  예정: { bg: "#2E86DE", label: "오픈예정" },
+};
+
+function TagBadge({ tag }: { tag: EventTag }) {
   if (!tag) return null;
-  const isNew = tag === "신규";
+  const s = TAG_STYLE[tag];
   return (
-    <Badge
-      className="border-transparent text-white"
-      style={{ backgroundColor: isNew ? "#03C75A" : "#FF5A5A" }}
-    >
-      {tag}
+    <Badge className="shrink-0 border-transparent text-white" style={{ backgroundColor: s.bg }}>
+      {s.label}
     </Badge>
   );
 }
@@ -63,7 +66,10 @@ function ExhCard({ e }: { e: ExhibitionItem }) {
   return (
     <Card className="border-l-4 border-l-[#FF8C00]">
       <CardContent className="space-y-1 p-4">
-        <h4 className="font-semibold leading-tight">{e.title}</h4>
+        <div className="flex items-start justify-between gap-2">
+          <h4 className="font-semibold leading-tight">{e.title}</h4>
+          <TagBadge tag={e.tag} />
+        </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <Building2 className="h-3 w-3" /> {e.venue}

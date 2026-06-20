@@ -103,14 +103,17 @@ export type PeriodDays = 7 | 30 | 90;
 
 // ── 팝업스토어 · 전시회 보드 (이력 저장 없음, 최신 스냅샷만) ──
 
-export type EventTag = "신규" | "종료임박" | null;
+export type EventTag = "신규" | "종료임박" | "예정" | null;
 
 export interface PopupItem {
   name: string;
   /** 지역(성수/홍대/여의도/강남/기타 등) */
   region: string;
-  /** 기간(가능하면), 없으면 "" */
+  /** 기간 표시용 문자열, 없으면 "" */
   period: string;
+  /** 구조화 시작/종료일 (YYYY-MM-DD), 모르면 null */
+  startDate: string | null;
+  endDate: string | null;
   summary: string;
   link: string | null;
   category: string | null;
@@ -121,8 +124,11 @@ export interface ExhibitionItem {
   title: string;
   venue: string;
   period: string;
+  startDate: string | null;
+  endDate: string | null;
   summary: string;
   link: string | null;
+  tag: EventTag;
 }
 
 export interface VenueGroup {
