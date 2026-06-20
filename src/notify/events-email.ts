@@ -78,7 +78,7 @@ export async function sendEventsEmail(s: EventsSnapshot): Promise<boolean> {
     <h2 style="color:#7C3AED;margin-top:28px;border-bottom:2px solid #eee;padding-bottom:6px">🛍 팝업스토어</h2>
     ${popupHtml}
 
-    <h2 style="color:#FF8C00;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">🏛 주요 전시장 (코엑스·세텍·킨텍스·수원)</h2>
+    <h2 style="color:#FF8C00;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">🏛 주요 전시장 (코엑스·세텍·킨텍스·수원컨벤션·수원메쎄)</h2>
     ${venueHtml}
 
     <h2 style="color:#2E86DE;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">🖼 서울·경기 전시</h2>

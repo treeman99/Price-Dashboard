@@ -125,14 +125,15 @@ WebSearch/WebFetch로 **실제 원문·공식 페이지를 직접 열어 검증*
 5. 각 행사 startDate/endDate를 "YYYY-MM-DD"로(연도 모르면 ${corpus.month.slice(0, 4)} 가정). 확인 불가면 null.
 6. **이미 종료된 행사(endDate < ${today})는 출력하지 마라.** 진행 중이거나 시작 예정인 것만.
 7. 팝업은 **서울+경기 모두**. 지역: 서울(성수/홍대/여의도/강남/잠실 등)+경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
-8. 전시는 4개 전시장 섹션 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
+8. 전시는 다음 전시장 섹션을 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
+   ※ 수원컨벤션센터(광교, SCC)와 수원메쎄(권선구, SUWON MESSE)는 **서로 다른 전시장**이니 섞지 말 것.
 9. summary는 한 줄. 팝업 최대 20, 전시장별 최대 8, general 최대 12. 실제 행사만, 중복 없이.
 
 검증 강도(중요):
 - **팝업**: 검색 단서에서 **적극적으로 많이 추출**하라(최대 20개). 팝업은 공식 페이지 확인이 어려우니 WebFetch 검증을 강제하지 않는다.
   날짜가 불명확하면 startDate/endDate만 null로 두고 **행사 자체는 버리지 마라.**
 - **전시(4개 전시장 + 일반)**: 날짜가 중요하므로 가능하면 WebSearch/WebFetch로 공식 페이지를 열어 시작/종료일을 검증한다.
-  공식 일정 페이지 예: 코엑스 https://www.coex.co.kr , 세텍 https://www.setec.or.kr , 킨텍스 https://www.kintex.com , 수원컨벤션센터 https://www.scc.or.kr.
+  공식 일정 페이지 예: 코엑스 https://www.coex.co.kr , 세텍 https://www.setec.or.kr , 킨텍스 https://www.kintex.com , 수원컨벤션센터 https://www.scc.or.kr , 수원메쎄 https://www.suwonmesse.com.
   스니펫 날짜와 공식 날짜가 다르면 **공식 날짜를 따른다**.
 - **link**: 도메인 루트(예: https://www.coex.co.kr)만 아는 경우엔 link를 null로 둬도 된다(서버가 출처 링크를 자동 보정함).
   임의의 URL은 절대 지어내지 마라.
@@ -150,7 +151,7 @@ ${corpusToText(corpus)}
 // ── 링크 검증: 환각/무관 URL 차단 ──
 // 허용: 코퍼스(실제 수집된 검색결과)에 있던 링크 OR 공식 전시장/예매 도메인
 const OFFICIAL_LINK_DOMAINS = [
-  "coex.co.kr", "kintex.com", "setec.or.kr", "scc.or.kr",
+  "coex.co.kr", "kintex.com", "setec.or.kr", "scc.or.kr", "suwonmesse.com",
   "interpark.com", "ticketlink.co.kr", "yes24.com", "ticket.melon.com",
 ];
 
@@ -203,7 +204,7 @@ function hasPath(u: string): boolean {
 const REPUTABLE_DOMAIN_SUFFIXES = [
   "naver.com", "naver.me", "tistory.com", "daum.net", "brunch.co.kr", "blog.me",
   "instagram.com", "facebook.com",
-  "coex.co.kr", "kintex.com", "setec.or.kr", "scc.or.kr",
+  "coex.co.kr", "kintex.com", "setec.or.kr", "scc.or.kr", "suwonmesse.com",
   "interpark.com", "ticketlink.co.kr", "yes24.com", "melon.com", "ticketbay.co.kr",
   ".go.kr", ".or.kr",
 ];
@@ -248,6 +249,21 @@ function matchCorpusLink(name: string, items: CorpusItem[]): string | null {
     }
   }
   return best;
+}
+
+// 전시장 정식명 ↔ LLM이 돌려준 전시장명 매칭용 키워드(수원컨벤션센터/수원메쎄 충돌 방지)
+const VENUE_KEYWORDS: Record<string, string[]> = {
+  코엑스: ["코엑스", "coex"],
+  세텍: ["세텍", "setec", "학여울"],
+  킨텍스: ["킨텍스", "kintex"],
+  수원컨벤션센터: ["수원컨벤션", "컨벤션센터", "scc", "광교"],
+  수원메쎄: ["수원메쎄", "메쎄", "메세", "messe"],
+};
+
+function matchVenue(llmName: string, canonical: string): boolean {
+  const hay = llmName.toLowerCase();
+  const kws = VENUE_KEYWORDS[canonical] ?? [canonical];
+  return kws.some((k) => hay.includes(k.toLowerCase()));
 }
 
 /**
@@ -351,10 +367,10 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     const corpusItems = collectCorpusItems(corpus);
     const corpusLinks = new Set(corpusItems.map((it) => normUrl(it.link)));
 
-    // 필수 4개 전시장 보정: 누락된 전시장은 빈 섹션으로 채움. 종료된 행사는 제외.
+    // 필수 전시장 보정: 누락된 전시장은 빈 섹션으로 채움. 종료된 행사는 제외.
     const venuesIn: VenueGroup[] = Array.isArray(p?.exhibitions?.venues) ? p.exhibitions.venues : [];
     const venues: VenueGroup[] = MANDATORY_VENUES.map((name) => {
-      const found = venuesIn.find((v) => v?.name && String(v.name).includes(name.slice(0, 2)));
+      const found = venuesIn.find((v) => v?.name && matchVenue(String(v.name), name));
       const items = Array.isArray(found?.items)
         ? found!.items
             .map(normExhibition(name, date))

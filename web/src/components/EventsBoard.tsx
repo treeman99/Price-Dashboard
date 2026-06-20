@@ -181,7 +181,7 @@ export function EventsBoard() {
           )}
 
           <SectionTitle icon={<Building2 className="h-5 w-5 text-[#FF8C00]" />}>
-            주요 전시장 (코엑스 · 세텍 · 킨텍스 · 수원)
+            주요 전시장 (코엑스 · 세텍 · 킨텍스 · 수원컨벤션 · 수원메쎄)
           </SectionTitle>
           {snap.exhibitions.venues.map((v) => (
             <div key={v.name} className="mb-5">

@@ -1,7 +1,7 @@
 import { naverSearch, type NaverSearchItem } from "./naver-search.ts";
 import { log } from "../util/log.ts";
 
-export const MANDATORY_VENUES = ["코엑스", "세텍", "킨텍스", "수원컨벤션센터"] as const;
+export const MANDATORY_VENUES = ["코엑스", "세텍", "킨텍스", "수원컨벤션센터", "수원메쎄"] as const;
 
 export interface RawGroup {
   label: string;
