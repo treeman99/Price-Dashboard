@@ -420,14 +420,71 @@ function normDate(v: unknown): string | null {
   return m ? v.trim() : null;
 }
 
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** 해당 연·월의 마지막 날 */
+function lastDayOfMonth(y: number, m: number): number {
+  return new Date(y, m, 0).getDate();
+}
+
+/**
+ * period 문자열에서 시작/종료일 보완 파싱.
+ * 예) "2026.06~2026.06.24", "2026.06", "6.24~6.28", "2026.05~2026.08"
+ * 일(day)이 없으면 시작은 1일, 종료는 말일로 보정. 연도 없으면 fallbackYear 사용.
+ */
+function parsePeriod(period: string, fallbackYear: number): { start: string | null; end: string | null } {
+  if (!period) return { start: null, end: null };
+  const parts = period.split(/[~∼〜\-–—]/).map((s) => s.trim()).filter(Boolean);
+  const parseOne = (s: string, isEnd: boolean): string | null => {
+    const nums = (s.match(/\d+/g) ?? []).map(Number);
+    if (!nums.length) return null;
+    // 첫 숫자가 4자리면 연도, 아니면 fallbackYear
+    let year = fallbackYear;
+    let rest = nums;
+    if (nums[0] >= 1900) {
+      year = nums[0];
+      rest = nums.slice(1);
+    }
+    if (!rest.length) return null; // 월을 알 수 없음(연도만)
+    const mo = rest[0];
+    if (mo < 1 || mo > 12) return null;
+    const day = rest[1] ?? (isEnd ? lastDayOfMonth(year, mo) : 1);
+    if (day < 1 || day > 31) return null;
+    return `${year}-${pad(mo)}-${pad(day)}`;
+  };
+  if (parts.length === 1) {
+    // 단일: 시작은 1일, 종료는 말일
+    return { start: parseOne(parts[0], false), end: parseOne(parts[0], true) };
+  }
+  return { start: parseOne(parts[0], false), end: parseOne(parts[parts.length - 1], true) };
+}
+
+/** startDate/endDate가 null이면 period에서 보완 */
+function fillDates(
+  startDate: string | null,
+  endDate: string | null,
+  period: string,
+  fallbackYear: number
+): { startDate: string | null; endDate: string | null } {
+  if (startDate && endDate) return { startDate, endDate };
+  const parsed = parsePeriod(period, fallbackYear);
+  return {
+    startDate: startDate ?? parsed.start,
+    endDate: endDate ?? parsed.end,
+  };
+}
+
 function normPopup(today: string) {
+  const fy = Number(today.slice(0, 4));
   return (r: any): PopupItem => {
-    const startDate = normDate(r?.startDate);
-    const endDate = normDate(r?.endDate);
+    const period = String(r?.period ?? "");
+    const { startDate, endDate } = fillDates(normDate(r?.startDate), normDate(r?.endDate), period, fy);
     return {
       name: String(r?.name ?? "").slice(0, 120),
       region: String(r?.region ?? "기타"),
-      period: String(r?.period ?? ""),
+      period,
       startDate,
       endDate,
       summary: String(r?.summary ?? ""),
@@ -439,13 +496,14 @@ function normPopup(today: string) {
 }
 
 function normExhibition(defaultVenue: string, today: string) {
+  const fy = Number(today.slice(0, 4));
   return (r: any): ExhibitionItem => {
-    const startDate = normDate(r?.startDate);
-    const endDate = normDate(r?.endDate);
+    const period = String(r?.period ?? "");
+    const { startDate, endDate } = fillDates(normDate(r?.startDate), normDate(r?.endDate), period, fy);
     return {
       title: String(r?.title ?? "").slice(0, 140),
       venue: String(r?.venue ?? defaultVenue),
-      period: String(r?.period ?? ""),
+      period,
       startDate,
       endDate,
       summary: String(r?.summary ?? ""),
