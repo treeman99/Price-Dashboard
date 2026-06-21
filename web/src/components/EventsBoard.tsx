@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus } from "lucide-react";
+import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus, Tag } from "lucide-react";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, EventTag } from "@shared/types";
 import { googleCalendarUrl } from "@shared/calendar";
 import { api } from "@/lib/api";
@@ -97,17 +97,21 @@ function EventTile({
           <h4 className="line-clamp-2 min-h-[2.6em] font-semibold leading-tight">{title}</h4>
           <TagBadge tag={tag} />
         </div>
-        {/* 일정·장소 영역 — 2줄 고정 */}
-        <div className="mt-1 flex min-h-[2.4em] flex-wrap content-start items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+        {/* 장소 / 일정 / 카테고리 — 각각 별도 줄, 영역 높이 고정 */}
+        <div className="mt-1 flex min-h-[3.6em] flex-col content-start gap-0.5 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1">
-            {metaIcon} {metaPrimary}
+            {metaIcon} <span className="truncate">{metaPrimary}</span>
           </span>
           {period && (
             <span className="inline-flex items-center gap-1">
-              <CalendarDays className="h-3 w-3" /> {period}
+              <CalendarDays className="h-3 w-3 shrink-0" /> {period}
             </span>
           )}
-          {extraMeta && <span>· {extraMeta}</span>}
+          {extraMeta && (
+            <span className="inline-flex items-center gap-1">
+              <Tag className="h-3 w-3 shrink-0" /> {extraMeta}
+            </span>
+          )}
         </div>
         {/* 요약 — 남는 공간 채움(액션을 바닥으로 밀어냄) */}
         <p className="mt-1 line-clamp-2 min-h-[2.5em] flex-1 text-sm text-muted-foreground">
