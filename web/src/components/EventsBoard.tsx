@@ -3,7 +3,7 @@ import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as 
 import type { EventsSnapshot, PopupItem, ExhibitionItem, EventTag } from "@shared/types";
 import { googleCalendarUrl } from "@shared/calendar";
 import { api } from "@/lib/api";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -65,76 +65,115 @@ function CalendarButton({
   );
 }
 
-function ActionRow({ children }: { children: React.ReactNode }) {
-  return <div className="flex items-center gap-3 pt-0.5">{children}</div>;
+/** 모든 타일이 동일한 구조/위치를 갖도록 하는 공통 카드 본문 */
+function EventTile({
+  accent,
+  title,
+  tag,
+  metaIcon,
+  metaPrimary,
+  period,
+  extraMeta,
+  summary,
+  link,
+  cal,
+}: {
+  accent: string;
+  title: string;
+  tag: EventTag;
+  metaIcon: React.ReactNode;
+  metaPrimary: string;
+  period: string;
+  extraMeta?: string | null;
+  summary: string;
+  link: string | null;
+  cal: { title: string; startDate: string | null; endDate: string | null; location: string; details: string };
+}) {
+  return (
+    <Card className="flex h-full flex-col border-l-4" style={{ borderLeftColor: accent }}>
+      <div className="flex flex-1 flex-col p-4">
+        {/* 제목 영역 — 2줄 고정 */}
+        <div className="flex items-start justify-between gap-2">
+          <h4 className="line-clamp-2 min-h-[2.6em] font-semibold leading-tight">{title}</h4>
+          <TagBadge tag={tag} />
+        </div>
+        {/* 일정·장소 영역 — 2줄 고정 */}
+        <div className="mt-1 flex min-h-[2.4em] flex-wrap content-start items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1">
+            {metaIcon} {metaPrimary}
+          </span>
+          {period && (
+            <span className="inline-flex items-center gap-1">
+              <CalendarDays className="h-3 w-3" /> {period}
+            </span>
+          )}
+          {extraMeta && <span>· {extraMeta}</span>}
+        </div>
+        {/* 요약 — 남는 공간 채움(액션을 바닥으로 밀어냄) */}
+        <p className="mt-1 line-clamp-2 min-h-[2.5em] flex-1 text-sm text-muted-foreground">
+          {summary}
+        </p>
+        {/* 액션 영역 — 항상 카드 하단 같은 위치 */}
+        <div className="mt-2 flex items-center gap-3 border-t pt-2">
+          <SourceLink link={link} />
+          <CalendarButton
+            title={cal.title}
+            startDate={cal.startDate}
+            endDate={cal.endDate}
+            location={cal.location}
+            details={cal.details}
+          />
+          {!link && !googleCalendarUrl({ title: cal.title, startDate: cal.startDate, endDate: cal.endDate }) && (
+            <span className="text-xs text-muted-foreground/60">링크 없음</span>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
 }
 
 function PopupCard({ p }: { p: PopupItem }) {
   return (
-    <Card className="border-l-4 border-l-[#7C3AED]">
-      <CardContent className="space-y-1 p-4">
-        <div className="flex items-start justify-between gap-2">
-          <h4 className="font-semibold leading-tight">{p.name}</h4>
-          <TagBadge tag={p.tag} />
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <MapPin className="h-3 w-3" /> {p.region}
-          </span>
-          {p.period && (
-            <span className="inline-flex items-center gap-1">
-              <CalendarDays className="h-3 w-3" /> {p.period}
-            </span>
-          )}
-          {p.category && <span>· {p.category}</span>}
-        </div>
-        {p.summary && <p className="line-clamp-2 text-sm text-muted-foreground">{p.summary}</p>}
-        <ActionRow>
-          <SourceLink link={p.link} />
-          <CalendarButton
-            title={p.name}
-            startDate={p.startDate}
-            endDate={p.endDate}
-            location={p.region}
-            details={[p.summary, p.link].filter(Boolean).join("\n")}
-          />
-        </ActionRow>
-      </CardContent>
-    </Card>
+    <EventTile
+      accent="#7C3AED"
+      title={p.name}
+      tag={p.tag}
+      metaIcon={<MapPin className="h-3 w-3" />}
+      metaPrimary={p.region}
+      period={p.period}
+      extraMeta={p.category}
+      summary={p.summary}
+      link={p.link}
+      cal={{
+        title: p.name,
+        startDate: p.startDate,
+        endDate: p.endDate,
+        location: p.region,
+        details: [p.summary, p.link].filter(Boolean).join("\n"),
+      }}
+    />
   );
 }
 
 function ExhCard({ e }: { e: ExhibitionItem }) {
   return (
-    <Card className="border-l-4 border-l-[#FF8C00]">
-      <CardContent className="space-y-1 p-4">
-        <div className="flex items-start justify-between gap-2">
-          <h4 className="font-semibold leading-tight">{e.title}</h4>
-          <TagBadge tag={e.tag} />
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <Building2 className="h-3 w-3" /> {e.venue}
-          </span>
-          {e.period && (
-            <span className="inline-flex items-center gap-1">
-              <CalendarDays className="h-3 w-3" /> {e.period}
-            </span>
-          )}
-        </div>
-        {e.summary && <p className="line-clamp-2 text-sm text-muted-foreground">{e.summary}</p>}
-        <ActionRow>
-          <SourceLink link={e.link} />
-          <CalendarButton
-            title={e.title}
-            startDate={e.startDate}
-            endDate={e.endDate}
-            location={e.venue}
-            details={[e.summary, e.link].filter(Boolean).join("\n")}
-          />
-        </ActionRow>
-      </CardContent>
-    </Card>
+    <EventTile
+      accent="#FF8C00"
+      title={e.title}
+      tag={e.tag}
+      metaIcon={<Building2 className="h-3 w-3" />}
+      metaPrimary={e.venue}
+      period={e.period}
+      summary={e.summary}
+      link={e.link}
+      cal={{
+        title: e.title,
+        startDate: e.startDate,
+        endDate: e.endDate,
+        location: e.venue,
+        details: [e.summary, e.link].filter(Boolean).join("\n"),
+      }}
+    />
   );
 }
 
