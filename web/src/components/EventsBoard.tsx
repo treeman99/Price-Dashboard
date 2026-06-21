@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon } from "lucide-react";
+import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus } from "lucide-react";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, EventTag } from "@shared/types";
+import { googleCalendarUrl } from "@shared/calendar";
 import { api } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +37,38 @@ function SourceLink({ link }: { link: string | null }) {
   );
 }
 
+function CalendarButton({
+  title,
+  startDate,
+  endDate,
+  location,
+  details,
+}: {
+  title: string;
+  startDate: string | null;
+  endDate: string | null;
+  location?: string;
+  details?: string;
+}) {
+  const url = googleCalendarUrl({ title, startDate, endDate, location, details });
+  if (!url) return null; // 날짜 없으면 캘린더 추가 불가
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1 text-xs text-[#1a7f37] hover:underline"
+      title="구글 캘린더에 추가"
+    >
+      <CalendarPlus className="h-3 w-3" /> 캘린더 추가
+    </a>
+  );
+}
+
+function ActionRow({ children }: { children: React.ReactNode }) {
+  return <div className="flex items-center gap-3 pt-0.5">{children}</div>;
+}
+
 function PopupCard({ p }: { p: PopupItem }) {
   return (
     <Card className="border-l-4 border-l-[#7C3AED]">
@@ -56,7 +89,16 @@ function PopupCard({ p }: { p: PopupItem }) {
           {p.category && <span>· {p.category}</span>}
         </div>
         {p.summary && <p className="line-clamp-2 text-sm text-muted-foreground">{p.summary}</p>}
-        <SourceLink link={p.link} />
+        <ActionRow>
+          <SourceLink link={p.link} />
+          <CalendarButton
+            title={p.name}
+            startDate={p.startDate}
+            endDate={p.endDate}
+            location={p.region}
+            details={[p.summary, p.link].filter(Boolean).join("\n")}
+          />
+        </ActionRow>
       </CardContent>
     </Card>
   );
@@ -81,7 +123,16 @@ function ExhCard({ e }: { e: ExhibitionItem }) {
           )}
         </div>
         {e.summary && <p className="line-clamp-2 text-sm text-muted-foreground">{e.summary}</p>}
-        <SourceLink link={e.link} />
+        <ActionRow>
+          <SourceLink link={e.link} />
+          <CalendarButton
+            title={e.title}
+            startDate={e.startDate}
+            endDate={e.endDate}
+            location={e.venue}
+            details={[e.summary, e.link].filter(Boolean).join("\n")}
+          />
+        </ActionRow>
       </CardContent>
     </Card>
   );

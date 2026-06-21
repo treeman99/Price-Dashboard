@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
+import { googleCalendarUrl } from "../../shared/calendar.ts";
 import type { EventsSnapshot, PopupItem, ExhibitionItem } from "../../shared/types.ts";
 
 function escapeHtml(s: string): string {
@@ -21,27 +22,47 @@ function tagBadge(tag: PopupItem["tag"]): string {
   return ` <span style="background:${map[tag]};color:#fff;border-radius:4px;padding:1px 6px;font-size:11px">${label}</span>`;
 }
 
-function popupCard(p: PopupItem): string {
-  const link = p.link
-    ? `<a href="${escapeAttr(p.link)}" style="color:#4361ee;text-decoration:none;font-size:13px">🔗 보기</a>`
+function linkAnchor(href: string, label: string): string {
+  return `<a href="${escapeAttr(href)}" style="color:#4361ee;text-decoration:none;font-size:13px">${label}</a>`;
+}
+
+function calAnchor(title: string, startDate: string | null, endDate: string | null, location: string, summary: string, srcLink: string | null): string {
+  const url = googleCalendarUrl({
+    title,
+    startDate,
+    endDate,
+    location,
+    details: [summary, srcLink].filter(Boolean).join("\n"),
+  });
+  return url
+    ? `<a href="${escapeAttr(url)}" style="color:#1a7f37;text-decoration:none;font-size:13px">📅 캘린더 추가</a>`
     : "";
+}
+
+function actions(parts: string[]): string {
+  const xs = parts.filter(Boolean);
+  return xs.length ? `<p style="margin:6px 0 0">${xs.join('<span style="color:#ccc"> · </span>')}</p>` : "";
+}
+
+function popupCard(p: PopupItem): string {
+  const link = p.link ? linkAnchor(p.link, "🔗 보기") : "";
+  const cal = calAnchor(p.name, p.startDate, p.endDate, p.region, p.summary, p.link);
   return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid #7C3AED">
     <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(p.name)}${tagBadge(p.tag)}</h3>
     <p style="margin:0 0 4px;color:#666;font-size:13px">📍 ${escapeHtml(p.region)}${p.period ? ` · ${escapeHtml(p.period)}` : ""}</p>
     ${p.summary ? `<p style="margin:0 0 4px;color:#444;font-size:13px">${escapeHtml(p.summary)}</p>` : ""}
-    ${link}
+    ${actions([link, cal])}
   </div>`;
 }
 
 function exhCard(e: ExhibitionItem, color: string): string {
-  const link = e.link
-    ? `<a href="${escapeAttr(e.link)}" style="color:#4361ee;text-decoration:none;font-size:13px">🔗 보기</a>`
-    : "";
+  const link = e.link ? linkAnchor(e.link, "🔗 보기") : "";
+  const cal = calAnchor(e.title, e.startDate, e.endDate, e.venue, e.summary, e.link);
   return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid ${color}">
     <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(e.title)}${tagBadge(e.tag)}</h3>
     <p style="margin:0 0 4px;color:#666;font-size:13px">🏛 ${escapeHtml(e.venue)}${e.period ? ` · ${escapeHtml(e.period)}` : ""}</p>
     ${e.summary ? `<p style="margin:0 0 4px;color:#444;font-size:13px">${escapeHtml(e.summary)}</p>` : ""}
-    ${link}
+    ${actions([link, cal])}
   </div>`;
 }
 
