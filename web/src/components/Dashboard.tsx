@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, Loader2, AlertTriangle, Package, PowerOff } from "lucide-react";
+import { RefreshCw, Loader2, AlertTriangle, Package } from "lucide-react";
 import type { ProductSummary } from "@shared/types";
 import { api, type AppConfig } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -13,9 +13,6 @@ export function Dashboard() {
   const [collecting, setCollecting] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [serviceInstalled, setServiceInstalled] = useState(false);
-  const [uninstalling, setUninstalling] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -32,7 +29,6 @@ export function Dashboard() {
 
   useEffect(() => {
     load();
-    api.serviceStatus().then((s) => setServiceInstalled(s.installed)).catch(() => {});
   }, [load]);
 
   async function collectNow() {
@@ -44,25 +40,6 @@ export function Dashboard() {
       setErr((e as Error).message);
     } finally {
       setCollecting(false);
-    }
-  }
-
-  async function uninstallService() {
-    if (
-      !confirm(
-        "백그라운드 자동 수집 서비스를 제거할까요?\n제거하면 매일 자동 수집이 중단되고 이 서버도 종료됩니다.\n(저장된 데이터/이력은 보존됩니다)"
-      )
-    )
-      return;
-    setUninstalling(true);
-    try {
-      const r = await api.uninstallService();
-      setNotice(`${r.message}\n다시 켜려면 터미널에서 ./service/install.sh 를 실행하세요.`);
-      setServiceInstalled(false);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setUninstalling(false);
     }
   }
 
@@ -89,17 +66,6 @@ export function Dashboard() {
             지금 수집
           </Button>
           <AddProductDialog onAdded={load} />
-          {serviceInstalled && (
-            <Button
-              variant="destructive"
-              onClick={uninstallService}
-              disabled={uninstalling}
-              title="launchd 자동 수집 서비스 제거"
-            >
-              {uninstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <PowerOff className="h-4 w-4" />}
-              서비스 제거
-            </Button>
-          )}
         </div>
       </div>
 
@@ -111,12 +77,6 @@ export function Dashboard() {
               <li key={i}>{w}</li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {notice && (
-        <div className="mb-4 whitespace-pre-line rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-          {notice}
         </div>
       )}
 
