@@ -16,6 +16,27 @@ const REGIONS = [
   "판교", "분당", "수원", "광교", "일산", "하남", "스타필드", "고양", "용인", "안양", "성남", "동탄",
 ];
 
+// 서울/경기 한정용 비수도권 지역 키워드(이 단어가 들어간 행사는 제외).
+// ※ 오탐 위험 단어는 제외: 세종(세종문화회관=서울), 진주(보석/명화) 등.
+const NON_CAPITAL_REGIONS = [
+  "부산", "대구", "인천", "광주", "대전", "울산",
+  "강원", "춘천", "강릉", "속초", "원주",
+  "청주", "충주", "천안", "아산",
+  "전주", "군산", "익산", "여수", "순천", "목포",
+  "포항", "경주", "안동", "구미",
+  "창원", "김해", "통영", "거제", "양산",
+  "제주", "서귀포",
+];
+
+// 수도권(서울/경기) 신호 키워드: 비수도권 단어가 함께 있어도 이게 있으면 통과(투어/복수지역 대비).
+const CAPITAL_HINTS = ["서울", "경기", ...REGIONS];
+
+/** 행사 텍스트가 서울/경기 권역인지 판별. 비수도권 키워드가 있고 수도권 신호가 없으면 제외. */
+function isCapitalArea(text: string): boolean {
+  if (!NON_CAPITAL_REGIONS.some((r) => text.includes(r))) return true;
+  return CAPITAL_HINTS.some((r) => text.includes(r));
+}
+
 function dedupe<T extends { link: string | null; title?: string; name?: string }>(arr: T[]): T[] {
   const seen = new Set<string>();
   const out: T[] = [];
@@ -41,6 +62,7 @@ function flat(groups: RawGroup[]): { title: string; description: string; link: s
 function rawSnapshot(corpus: RawCorpus, date: string): EventsSnapshot {
   // 폴백은 검색 원본이라 날짜를 알 수 없음 → startDate/endDate null, tag null (필터/배지 불가)
   const popups: PopupItem[] = dedupe(flat(corpus.popupGroups))
+    .filter((it) => isCapitalArea(it.title + " " + it.description))
     .slice(0, 24)
     .map((it) => ({
       name: it.title,
@@ -71,6 +93,7 @@ function rawSnapshot(corpus: RawCorpus, date: string): EventsSnapshot {
   }));
 
   const general: ExhibitionItem[] = dedupe(flat(corpus.generalGroups))
+    .filter((it) => isCapitalArea(it.title + " " + it.description))
     .slice(0, 10)
     .map((it) => ({
       title: it.title,
@@ -124,7 +147,8 @@ WebSearch/WebFetch로 **실제 원문·공식 페이지를 직접 열어 검증*
 4. "총정리/모음/추천/TOP/가볼만한곳" 묶음 글 자체는 행사가 아니므로 출력하지 않는다.
 5. 각 행사 startDate/endDate를 "YYYY-MM-DD"로(연도 모르면 ${corpus.month.slice(0, 4)} 가정). 확인 불가면 null.
 6. **이미 종료된 행사(endDate < ${today})는 출력하지 마라.** 진행 중이거나 시작 예정인 것만.
-7. 팝업은 **서울+경기 모두**. 지역: 서울(성수/홍대/여의도/강남/잠실 등)+경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
+7. **서울·경기(수도권)만** 대상. 지역: 서울(성수/홍대/여의도/강남/잠실 등)+경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
+   **부산·대구·인천·광주·대전·울산·강원·충청·전라·경상·제주 등 서울/경기 외 지역의 팝업·전시는 절대 포함하지 마라.** 장소가 불명확하면 제외.
 8. 전시는 다음 전시장 섹션을 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
    ※ 수원컨벤션센터(광교, SCC)와 수원메쎄(권선구, SUWON MESSE)는 **서로 다른 전시장**이니 섞지 말 것.
 9. summary는 한 줄. 팝업 최대 20, 전시장별 최대 8, general 최대 12. 실제 행사만, 중복 없이.
@@ -384,7 +408,8 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       (Array.isArray(p?.popups) ? p.popups : [])
         .map(normPopup(date))
         .map((e: PopupItem) => ({ ...e, link: resolveLink(e.name, e.link, corpusLinks, corpusItems) }))
-        .filter((e: PopupItem) => !isEnded(e.endDate, date)),
+        .filter((e: PopupItem) => !isEnded(e.endDate, date))
+        .filter((e: PopupItem) => isCapitalArea(`${e.name} ${e.region} ${e.summary}`)),
       (x: PopupItem) => x.name
     ).slice(0, 20);
 
@@ -392,7 +417,8 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       (Array.isArray(p?.exhibitions?.general) ? p.exhibitions.general : [])
         .map(normExhibition("서울/경기", date))
         .map((e: ExhibitionItem) => ({ ...e, link: resolveLink(e.title, e.link, corpusLinks, corpusItems) }))
-        .filter((e: ExhibitionItem) => !isEnded(e.endDate, date)),
+        .filter((e: ExhibitionItem) => !isEnded(e.endDate, date))
+        .filter((e: ExhibitionItem) => isCapitalArea(`${e.title} ${e.venue} ${e.summary}`)),
       (x: ExhibitionItem) => x.title
     ).slice(0, 12);
 
