@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus, Tag } from "lucide-react";
-import type { EventsSnapshot, PopupItem, ExhibitionItem, EventTag } from "@shared/types";
+import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus, Tag, PartyPopper } from "lucide-react";
+import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem, EventTag } from "@shared/types";
 import { googleCalendarUrl } from "@shared/calendar";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -181,6 +181,28 @@ function ExhCard({ e }: { e: ExhibitionItem }) {
   );
 }
 
+function FestivalCard({ f }: { f: FestivalItem }) {
+  return (
+    <EventTile
+      accent="#E8590C"
+      title={f.name}
+      tag={f.tag}
+      metaIcon={<MapPin className="h-3 w-3" />}
+      metaPrimary={f.region}
+      period={f.period}
+      summary={f.summary}
+      link={f.link}
+      cal={{
+        title: f.name,
+        startDate: f.startDate,
+        endDate: f.endDate,
+        location: f.region,
+        details: [f.summary, f.link].filter(Boolean).join("\n"),
+      }}
+    />
+  );
+}
+
 function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <h2 className="mb-3 mt-6 flex items-center gap-2 border-b pb-2 text-lg font-bold">
@@ -292,17 +314,17 @@ export function EventsBoard() {
             </div>
           ))}
 
-          <SectionTitle icon={<CalendarDays className="h-5 w-5 text-[#2E86DE]" />}>
-            서울 · 경기 전시
+          <SectionTitle icon={<PartyPopper className="h-5 w-5 text-[#E8590C]" />}>
+            대한민국 축제 <span className="text-sm font-normal text-muted-foreground">({(snap.festivals ?? []).length})</span>
           </SectionTitle>
-          {snap.exhibitions.general.length ? (
+          {(snap.festivals ?? []).length ? (
             <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
-              {snap.exhibitions.general.map((e, i) => (
-                <ExhCard key={i} e={e} />
+              {(snap.festivals ?? []).map((f, i) => (
+                <FestivalCard key={i} f={f} />
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">확인된 일반 전시가 없습니다.</p>
+            <p className="text-sm text-muted-foreground">확인된 축제가 없습니다.</p>
           )}
         </>
       )}

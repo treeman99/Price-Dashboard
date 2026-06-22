@@ -5,6 +5,7 @@ import type {
   EventsSnapshot,
   PopupItem,
   ExhibitionItem,
+  FestivalItem,
   VenueGroup,
   EventTag,
 } from "../../shared/types.ts";
@@ -92,12 +93,12 @@ function rawSnapshot(corpus: RawCorpus, date: string): EventsSnapshot {
       })),
   }));
 
-  const general: ExhibitionItem[] = dedupe(flat(corpus.generalGroups))
-    .filter((it) => isCapitalArea(it.title + " " + it.description))
-    .slice(0, 10)
+  // 축제는 전국 대상이라 지역 필터를 적용하지 않는다.
+  const festivals: FestivalItem[] = dedupe(flat(corpus.festivalGroups))
+    .slice(0, 12)
     .map((it) => ({
-      title: it.title,
-      venue: "서울/경기",
+      name: it.title,
+      region: guessRegion(it.title + it.description),
       period: "",
       startDate: null,
       endDate: null,
@@ -111,7 +112,8 @@ function rawSnapshot(corpus: RawCorpus, date: string): EventsSnapshot {
     updatedAt: new Date().toISOString(),
     source: "naver-raw",
     popups,
-    exhibitions: { venues, general },
+    exhibitions: { venues },
+    festivals,
     notes: "네이버 검색 결과 원본 (LLM 큐레이션 비활성: ANTHROPIC_API_KEY 미설정)",
   };
 }
@@ -129,8 +131,8 @@ function corpusToText(corpus: RawCorpus): string {
   corpus.popupGroups.forEach((g) => dump(g.label, g.items));
   lines.push("\n## 전시장별 검색결과");
   corpus.venues.forEach((v) => v.groups.forEach((g) => dump(g.label, g.items)));
-  lines.push("\n## 일반 전시 검색결과");
-  corpus.generalGroups.forEach((g) => dump(g.label, g.items));
+  lines.push("\n## 전국 축제 검색결과");
+  corpus.festivalGroups.forEach((g) => dump(g.label, g.items));
   return lines.join("\n");
 }
 
@@ -147,18 +149,21 @@ WebSearch/WebFetch로 **실제 원문·공식 페이지를 직접 열어 검증*
 4. "총정리/모음/추천/TOP/가볼만한곳" 묶음 글 자체는 행사가 아니므로 출력하지 않는다.
 5. 각 행사 startDate/endDate를 "YYYY-MM-DD"로(연도 모르면 ${corpus.month.slice(0, 4)} 가정). 확인 불가면 null.
 6. **이미 종료된 행사(endDate < ${today})는 출력하지 마라.** 진행 중이거나 시작 예정인 것만.
-7. **서울·경기(수도권)만** 대상. 지역: 서울(성수/홍대/여의도/강남/잠실 등)+경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
-   **부산·대구·인천·광주·대전·울산·강원·충청·전라·경상·제주 등 서울/경기 외 지역의 팝업·전시는 절대 포함하지 마라.** 장소가 불명확하면 제외.
-8. 전시는 다음 전시장 섹션을 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외는 general.
+7. **팝업은 서울·경기(수도권)만** 대상. 지역: 서울(성수/홍대/여의도/강남/잠실 등)+경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
+   **부산·대구·인천·광주·대전·울산·강원·충청·전라·경상·제주 등 서울/경기 외 지역의 팝업은 절대 포함하지 마라.** 장소가 불명확하면 제외.
+8. 전시는 다음 전시장 섹션을 모두 포함(없으면 빈 배열): ${MANDATORY_VENUES.join(", ")}. 그 외 전시는 출력하지 않는다.
    ※ 수원컨벤션센터(광교, SCC)와 수원메쎄(권선구, SUWON MESSE)는 **서로 다른 전시장**이니 섞지 말 것.
-9. summary는 한 줄. 팝업 최대 20, 전시장별 최대 8, general 최대 12. 실제 행사만, 중복 없이.
+9. **축제(festivals)는 대한민국 전역**이 대상이다. 지역 제한 없음(서울/경기뿐 아니라 지방 축제도 포함). 꽃축제·빛축제·먹거리·음악·지역문화 등 실제 개최되는 축제만.
+   region에는 개최지를 구체적으로(예: "전남 함평", "경남 진해", "서울 여의도").
+10. summary는 한 줄. 팝업 최대 20, 전시장별 최대 8, 축제 최대 12. 실제 행사만, 중복 없이.
 
 검증 강도(중요):
 - **팝업**: 검색 단서에서 **적극적으로 많이 추출**하라(최대 20개). 팝업은 공식 페이지 확인이 어려우니 WebFetch 검증을 강제하지 않는다.
   날짜가 불명확하면 startDate/endDate만 null로 두고 **행사 자체는 버리지 마라.**
-- **전시(4개 전시장 + 일반)**: 날짜가 중요하므로 가능하면 WebSearch/WebFetch로 공식 페이지를 열어 시작/종료일을 검증한다.
+- **전시(전시장별)**: 날짜가 중요하므로 가능하면 WebSearch/WebFetch로 공식 페이지를 열어 시작/종료일을 검증한다.
   공식 일정 페이지 예: 코엑스 https://www.coex.co.kr , 세텍 https://www.setec.or.kr , 킨텍스 https://www.kintex.com , 수원컨벤션센터 https://www.scc.or.kr , 수원메쎄 https://www.suwonmesse.com.
   스니펫 날짜와 공식 날짜가 다르면 **공식 날짜를 따른다**.
+- **축제(festivals)**: 전국 대상. 날짜가 불명확하면 startDate/endDate만 null로 두고 행사 자체는 버리지 마라.
 - **link**: 도메인 루트(예: https://www.coex.co.kr)만 아는 경우엔 link를 null로 둬도 된다(서버가 출처 링크를 자동 보정함).
   임의의 URL은 절대 지어내지 마라.
 - tag 는 서버가 날짜로 자동 계산하니 출력하지 말 것.
@@ -168,7 +173,8 @@ ${corpusToText(corpus)}
 
 검증을 마친 뒤, 반드시 아래 JSON만 출력(다른 텍스트 없이):
 {"popups":[{"name":string,"region":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null,"category":string|null}],
-"exhibitions":{"venues":[{"name":string,"items":[{"title":string,"venue":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null}]}],"general":[{"title":string,"venue":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null}]},
+"exhibitions":{"venues":[{"name":string,"items":[{"title":string,"venue":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null}]}]},
+"festivals":[{"name":string,"region":string,"period":string,"startDate":string|null,"endDate":string|null,"summary":string,"link":string|null}],
 "notes":string|null}`;
 }
 
@@ -207,7 +213,7 @@ function collectCorpusItems(corpus: RawCorpus): CorpusItem[] {
   const add = (items: CorpusItem[]) => items.forEach((it) => it.link && out.push(it));
   corpus.popupGroups.forEach((g) => add(g.items));
   corpus.venues.forEach((v) => v.groups.forEach((g) => add(g.items)));
-  corpus.generalGroups.forEach((g) => add(g.items));
+  corpus.festivalGroups.forEach((g) => add(g.items));
   return out;
 }
 
@@ -413,13 +419,13 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       (x: PopupItem) => x.name
     ).slice(0, 20);
 
-    const general = dedupeByTitle(
-      (Array.isArray(p?.exhibitions?.general) ? p.exhibitions.general : [])
-        .map(normExhibition("서울/경기", date))
-        .map((e: ExhibitionItem) => ({ ...e, link: resolveLink(e.title, e.link, corpusLinks, corpusItems) }))
-        .filter((e: ExhibitionItem) => !isEnded(e.endDate, date))
-        .filter((e: ExhibitionItem) => isCapitalArea(`${e.title} ${e.venue} ${e.summary}`)),
-      (x: ExhibitionItem) => x.title
+    // 축제는 전국 대상이라 수도권 필터를 적용하지 않는다.
+    const festivals = dedupeByTitle(
+      (Array.isArray(p?.festivals) ? p.festivals : [])
+        .map(normFestival(date))
+        .map((e: FestivalItem) => ({ ...e, link: resolveLink(e.name, e.link, corpusLinks, corpusItems) }))
+        .filter((e: FestivalItem) => !isEnded(e.endDate, date)),
+      (x: FestivalItem) => x.name
     ).slice(0, 12);
 
     const snapshot: EventsSnapshot = {
@@ -427,11 +433,12 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       updatedAt: new Date().toISOString(),
       source: "llm",
       popups,
-      exhibitions: { venues, general },
+      exhibitions: { venues },
+      festivals,
       notes: p?.notes ? String(p.notes) : null,
     };
     log.info(
-      `이벤트 큐레이션(LLM) 완료 — 팝업 ${snapshot.popups.length}, 전시장 ${venues.reduce((a, v) => a + v.items.length, 0)}, 일반 ${snapshot.exhibitions.general.length}`
+      `이벤트 큐레이션(LLM) 완료 — 팝업 ${snapshot.popups.length}, 전시장 ${venues.reduce((a, v) => a + v.items.length, 0)}, 축제 ${snapshot.festivals.length}`
     );
     return snapshot;
   } catch (e) {
@@ -529,6 +536,24 @@ function normExhibition(defaultVenue: string, today: string) {
     return {
       title: String(r?.title ?? "").slice(0, 140),
       venue: String(r?.venue ?? defaultVenue),
+      period,
+      startDate,
+      endDate,
+      summary: String(r?.summary ?? ""),
+      link: r?.link ? String(r.link) : null,
+      tag: computeTag(startDate, endDate, today),
+    };
+  };
+}
+
+function normFestival(today: string) {
+  const fy = Number(today.slice(0, 4));
+  return (r: any): FestivalItem => {
+    const period = String(r?.period ?? "");
+    const { startDate, endDate } = fillDates(normDate(r?.startDate), normDate(r?.endDate), period, fy);
+    return {
+      name: String(r?.name ?? "").slice(0, 140),
+      region: String(r?.region ?? "전국"),
       period,
       startDate,
       endDate,

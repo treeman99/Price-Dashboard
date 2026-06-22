@@ -80,7 +80,8 @@ function emptySnapshot(): EventsSnapshot {
     updatedAt: new Date().toISOString(),
     source: "naver-raw",
     popups: [],
-    exhibitions: { venues: [], general: [] },
+    exhibitions: { venues: [] },
+    festivals: [],
     notes: "아직 수집되지 않았습니다.",
   };
 }

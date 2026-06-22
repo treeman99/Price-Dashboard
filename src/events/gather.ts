@@ -15,7 +15,7 @@ export interface RawCorpus {
   month: string; // "2026년 6월"
   popupGroups: RawGroup[];
   venues: VenueRaw[];
-  generalGroups: RawGroup[];
+  festivalGroups: RawGroup[]; // 대한민국 전역 축제
 }
 
 function monthLabel(): string {
@@ -77,17 +77,19 @@ export async function gatherCorpus(): Promise<RawCorpus> {
     venues.push({ venue, groups });
   }
 
-  // 일반 전시(서울/경기)
-  const generalGroups = await runSeq([
-    () => group("서울 전시", `서울 전시회 추천 ${month}`, "webkr"),
-    () => group("경기 전시", `경기 전시회 추천 ${month}`, "webkr"),
+  // 대한민국 전역 축제 (지역 제한 없음)
+  const festivalGroups = await runSeq([
+    () => group("전국 축제(웹)", `전국 축제 일정 ${month}`, "webkr"),
+    () => group("이달의 축제", `이달의 축제 추천 ${month}`, "blog"),
+    () => group("문화관광축제", `문화관광축제 ${month}`, "webkr"),
+    () => group("지역 축제", `지역 축제 가볼만한곳 ${month}`, "blog"),
   ]);
 
   const total =
     popupGroups.reduce((a, g) => a + g.items.length, 0) +
     venues.reduce((a, v) => a + v.groups.reduce((b, g) => b + g.items.length, 0), 0) +
-    generalGroups.reduce((a, g) => a + g.items.length, 0);
+    festivalGroups.reduce((a, g) => a + g.items.length, 0);
   log.info(`이벤트 원본 수집 완료 — 총 ${total}건`);
 
-  return { month, popupGroups, venues, generalGroups };
+  return { month, popupGroups, venues, festivalGroups };
 }

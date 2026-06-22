@@ -136,6 +136,19 @@ export interface VenueGroup {
   items: ExhibitionItem[];
 }
 
+/** 대한민국 축제(전국). 지역 제한 없음. */
+export interface FestivalItem {
+  name: string;
+  /** 개최 지역 (예: "전남 함평", "서울 여의도", "경남 진해") */
+  region: string;
+  period: string;
+  startDate: string | null;
+  endDate: string | null;
+  summary: string;
+  link: string | null;
+  tag: EventTag;
+}
+
 export interface EventsSnapshot {
   date: string; // YYYY-MM-DD (로컬)
   updatedAt: string; // ISO
@@ -144,7 +157,8 @@ export interface EventsSnapshot {
   popups: PopupItem[];
   exhibitions: {
     venues: VenueGroup[];
-    general: ExhibitionItem[];
   };
+  /** 대한민국 전역 축제 */
+  festivals: FestivalItem[];
   notes: string | null;
 }
