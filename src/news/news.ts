@@ -5,7 +5,7 @@ import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
 import { curateNews } from "./curate.ts";
 import { sendNewsEmail } from "../notify/news-email.ts";
-import { NEWS_CATEGORIES } from "../../shared/news.ts";
+import { loadCategories } from "./categories.ts";
 import type { NewsSnapshot } from "../../shared/types.ts";
 
 // 이력 저장 없음: 최신 스냅샷 1개만 캐시(JSON 파일 + 메모리)
@@ -84,7 +84,13 @@ function emptySnapshot(): NewsSnapshot {
     date: localDate(),
     updatedAt: new Date().toISOString(),
     source: "empty",
-    categories: NEWS_CATEGORIES.map((c) => ({ ...c, items: [] })),
+    categories: loadCategories().map((c) => ({
+      key: c.key,
+      label: c.label,
+      emoji: c.emoji,
+      color: c.color,
+      items: [],
+    })),
     notes: "아직 수집되지 않았습니다.",
   };
 }

@@ -1,8 +1,13 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
-import { NEWS_CATEGORIES } from "../../shared/news.ts";
-import type { NewsSnapshot, NewsItem, NewsCategory } from "../../shared/types.ts";
+import { loadCategories } from "./categories.ts";
+import type {
+  NewsSnapshot,
+  NewsItem,
+  NewsCategory,
+  NewsCategoryDef,
+} from "../../shared/types.ts";
 
 function nowLabel(): string {
   const d = new Date();
@@ -11,10 +16,12 @@ function nowLabel(): string {
   return `${localDate(d)} ${hh}:${mm}`;
 }
 
-function buildPrompt(today: string, yesterday: string, now: string): string {
-  const cats = NEWS_CATEGORIES.map((c) => `${c.emoji} ${c.label} (key: "${c.key}")`).join("\n  - ");
+function buildPrompt(defs: NewsCategoryDef[], today: string, yesterday: string, now: string): string {
+  const cats = defs
+    .map((c) => `${c.emoji} ${c.label} (key: "${c.key}")${c.description ? ` — ${c.description}` : ""}`)
+    .join("\n  - ");
   return `너는 한국어 뉴스 큐레이터다. 지금 시각은 ${now}. **최근 24시간 이내(${yesterday} 이후 ~ ${today})**에 발행된 뉴스만 모아
-아래 7개 카테고리로 정리한다. 모든 제목·요약은 **반드시 한국어**로 작성한다(영문 소스도 번역).
+아래 ${defs.length}개 카테고리로 정리한다. 모든 제목·요약은 **반드시 한국어**로 작성한다(영문 소스도 번역).
 
 카테고리:
   - ${cats}
@@ -37,7 +44,7 @@ function buildPrompt(today: string, yesterday: string, now: string): string {
 - 가장 상세한 출처를 대표로 삼고, 나머지는 related(최대 2개, 영상은 label에 "📺" 포함)로 붙인다.
 
 출력 형식 — 검증을 마친 뒤 **아래 JSON 한 개만** 출력(다른 텍스트 없이). 각 카테고리 key 아래 기사 배열, 없으면 빈 배열:
-{"categories":{${NEWS_CATEGORIES.map((c) => `"${c.key}":[{"title":string,"source":string,"date":"YYYY-MM-DD","summary":string,"link":string|null,"related":[{"label":string,"link":string}]}]`).join(",")}},
+{"categories":{${defs.map((c) => `"${c.key}":[{"title":string,"source":string,"date":"YYYY-MM-DD","summary":string,"link":string|null,"related":[{"label":string,"link":string}]}]`).join(",")}},
 "notes":string|null}`;
 }
 
@@ -79,12 +86,16 @@ function normItem(r: any): NewsItem | null {
   };
 }
 
+function toCategory(def: NewsCategoryDef, items: NewsItem[]): NewsCategory {
+  return { key: def.key, label: def.label, emoji: def.emoji, color: def.color, items };
+}
+
 function emptySnapshot(date: string, note: string): NewsSnapshot {
   return {
     date,
     updatedAt: new Date().toISOString(),
     source: "empty",
-    categories: NEWS_CATEGORIES.map((c) => ({ ...c, items: [] })),
+    categories: loadCategories().map((c) => toCategory(c, [])),
     notes: note,
   };
 }
@@ -96,9 +107,10 @@ function emptySnapshot(date: string, note: string): NewsSnapshot {
 export async function curateNews(date: string): Promise<NewsSnapshot> {
   const today = date;
   const yesterday = localDateDaysAgo(1);
+  const defs = loadCategories();
   try {
     const q = query({
-      prompt: buildPrompt(today, yesterday, nowLabel()),
+      prompt: buildPrompt(defs, today, yesterday, nowLabel()),
       options: {
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
@@ -118,13 +130,13 @@ export async function curateNews(date: string): Promise<NewsSnapshot> {
     const p = extractJson(finalText) as any;
     const catsIn = p?.categories ?? {};
 
-    const categories: NewsCategory[] = NEWS_CATEGORIES.map((meta) => {
+    const categories: NewsCategory[] = defs.map((meta) => {
       const raw = Array.isArray(catsIn?.[meta.key]) ? catsIn[meta.key] : [];
       const items = raw
         .map(normItem)
         .filter((x: NewsItem | null): x is NewsItem => !!x)
         .filter((x: NewsItem) => isFresh(x.date, today, yesterday));
-      return { ...meta, items };
+      return toCategory(meta, items);
     });
 
     const total = categories.reduce((a, c) => a + c.items.length, 0);

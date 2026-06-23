@@ -165,14 +165,18 @@ export interface EventsSnapshot {
 
 // ── 데일리 뉴스 다이제스트 (최근 24시간, 7개 카테고리) ──
 
-export type NewsCategoryKey =
-  | "ai"
-  | "robotics"
-  | "quantum"
-  | "korea_econ"
-  | "us"
-  | "world"
-  | "products";
+/** 동적 카테고리 키 (기본 7종 + 사용자 추가). */
+export type NewsCategoryKey = string;
+
+/** 카테고리 정의(설정). 스냅샷의 NewsCategory와 달리 items 대신 검색 가이드(description)를 갖는다. */
+export interface NewsCategoryDef {
+  key: string;
+  label: string;
+  emoji: string;
+  color: string;
+  /** LLM 수집 가이드(이 카테고리에서 어떤 뉴스를 원하는지). 선택. */
+  description?: string;
+}
 
 export interface NewsRelated {
   /** 관련 출처 라벨 (예: "Reuters", "📺 영상") */

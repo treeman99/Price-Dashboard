@@ -6,6 +6,7 @@ import type {
   PeriodDays,
   EventsSnapshot,
   NewsSnapshot,
+  NewsCategoryDef,
 } from "@shared/types";
 
 async function j<T>(res: Response): Promise<T> {
@@ -71,4 +72,19 @@ export const api = {
 
   refreshNews: () =>
     fetch("/api/news/refresh", { method: "POST" }).then((r) => j<NewsSnapshot>(r)),
+
+  newsCategories: () =>
+    fetch("/api/news/categories").then((r) => j<NewsCategoryDef[]>(r)),
+
+  addNewsCategory: (input: { label: string; emoji?: string; color?: string; description?: string }) =>
+    fetch("/api/news/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<NewsCategoryDef>(r)),
+
+  deleteNewsCategory: (key: string) =>
+    fetch(`/api/news/categories/${encodeURIComponent(key)}`, { method: "DELETE" }).then((r) =>
+      j<{ ok: boolean }>(r)
+    ),
 };

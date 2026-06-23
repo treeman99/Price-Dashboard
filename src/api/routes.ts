@@ -19,6 +19,7 @@ import {
 import { runCollection } from "../collector/collect.ts";
 import { getEventsSnapshot, refreshEvents } from "../events/events.ts";
 import { getNewsSnapshot, refreshNews } from "../news/news.ts";
+import { loadCategories, addCategory, deleteCategory } from "../news/categories.ts";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type { CreateProductInput, PeriodDays } from "../../shared/types.ts";
@@ -197,5 +198,32 @@ api.post("/news/refresh", async (_req, res) => {
     res.json(snapshot);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/** 뉴스 카테고리 목록 */
+api.get("/news/categories", (_req, res) => {
+  res.json(loadCategories());
+});
+
+/** 카테고리 추가 */
+api.post("/news/categories", (req, res) => {
+  try {
+    const { label, emoji, color, description } = req.body ?? {};
+    const cat = addCategory({ label, emoji, color, description });
+    res.json(cat);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/** 카테고리 삭제 */
+api.delete("/news/categories/:key", (req, res) => {
+  try {
+    const ok = deleteCategory(req.params.key);
+    if (!ok) return res.status(404).json({ error: "카테고리를 찾을 수 없습니다." });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
   }
 });

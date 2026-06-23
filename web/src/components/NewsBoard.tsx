@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Loader2, Newspaper, Link as LinkIcon, CalendarDays } from "lucide-react";
-import type { NewsSnapshot, NewsItem, NewsCategory } from "@shared/types";
+import { RefreshCw, Loader2, Newspaper, Link as LinkIcon, CalendarDays, X } from "lucide-react";
+import type { NewsSnapshot, NewsItem, NewsCategoryDef } from "@shared/types";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AddCategoryDialog } from "@/components/AddCategoryDialog";
 
 function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
   return (
@@ -43,21 +44,42 @@ function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
   );
 }
 
-function Section({ cat }: { cat: NewsCategory }) {
+function Section({
+  def,
+  items,
+  canDelete,
+  onDelete,
+}: {
+  def: NewsCategoryDef;
+  items: NewsItem[];
+  canDelete: boolean;
+  onDelete: (def: NewsCategoryDef) => void;
+}) {
   return (
     <section className="mt-8">
-      <h2
-        className="mb-3 flex items-center gap-2 border-b pb-2 text-lg font-bold"
-        style={{ color: cat.color, borderColor: cat.color }}
+      <div
+        className="mb-3 flex items-center gap-2 border-b pb-2"
+        style={{ borderColor: def.color }}
       >
-        <span>{cat.emoji}</span>
-        {cat.label}
-        <span className="text-sm font-normal text-muted-foreground">({cat.items.length})</span>
-      </h2>
-      {cat.items.length ? (
+        <h2 className="flex items-center gap-2 text-lg font-bold" style={{ color: def.color }}>
+          <span>{def.emoji}</span>
+          {def.label}
+          <span className="text-sm font-normal text-muted-foreground">({items.length})</span>
+        </h2>
+        {canDelete && (
+          <button
+            onClick={() => onDelete(def)}
+            title="카테고리 삭제"
+            className="ml-auto rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-destructive"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+      {items.length ? (
         <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
-          {cat.items.map((it, i) => (
-            <NewsItemCard key={i} item={it} color={cat.color} />
+          {items.map((it, i) => (
+            <NewsItemCard key={i} item={it} color={def.color} />
           ))}
         </div>
       ) : (
@@ -71,13 +93,16 @@ function Section({ cat }: { cat: NewsCategory }) {
 
 export function NewsBoard() {
   const [snap, setSnap] = useState<NewsSnapshot | null>(null);
+  const [defs, setDefs] = useState<NewsCategoryDef[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function load() {
     try {
-      setSnap(await api.news());
+      const [s, d] = await Promise.all([api.news(), api.newsCategories()]);
+      setSnap(s);
+      setDefs(d);
       setErr(null);
     } catch (e) {
       setErr((e as Error).message);
@@ -92,12 +117,24 @@ export function NewsBoard() {
   async function refresh() {
     setRefreshing(true);
     try {
-      setSnap(await api.refreshNews());
+      const [s] = await Promise.all([api.refreshNews(), api.newsCategories().then(setDefs)]);
+      setSnap(s);
       setErr(null);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function deleteCategory(def: NewsCategoryDef) {
+    if (!confirm(`'${def.label}' 카테고리를 삭제할까요?\n(다음 수집부터 제외됩니다)`)) return;
+    try {
+      await api.deleteNewsCategory(def.key);
+      setDefs((prev) => prev.filter((c) => c.key !== def.key));
+      setErr(null);
+    } catch (e) {
+      setErr((e as Error).message);
     }
   }
 
@@ -109,8 +146,13 @@ export function NewsBoard() {
     );
   }
 
+  // 카테고리 정의(defs)를 기준으로 렌더하고, 스냅샷에서 key가 일치하는 기사만 매칭한다.
+  // → 추가한 카테고리는 빈 섹션으로 즉시 보이고, 삭제한 카테고리는 바로 사라진다.
+  const itemsByKey = new Map<string, NewsItem[]>();
+  snap?.categories.forEach((c) => itemsByKey.set(c.key, c.items));
+
   const updated = snap?.updatedAt ? new Date(snap.updatedAt).toLocaleString("ko-KR") : null;
-  const total = snap?.categories.reduce((a, c) => a + c.items.length, 0) ?? 0;
+  const total = defs.reduce((a, d) => a + (itemsByKey.get(d.key)?.length ?? 0), 0);
 
   return (
     <div>
@@ -120,10 +162,13 @@ export function NewsBoard() {
           {updated && ` · 최종 갱신 ${updated}`}
           {snap && ` · 총 ${total}건`}
         </p>
-        <Button variant="outline" onClick={refresh} disabled={refreshing}>
-          {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          지금 갱신
-        </Button>
+        <div className="flex items-center gap-2">
+          <AddCategoryDialog onAdded={load} />
+          <Button variant="outline" onClick={refresh} disabled={refreshing}>
+            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            지금 갱신
+          </Button>
+        </div>
       </div>
 
       {err && (
@@ -134,21 +179,22 @@ export function NewsBoard() {
         <p className="text-sm text-muted-foreground">뉴스를 수집하는 중입니다… (1~3분 소요)</p>
       )}
 
-      {!snap ? (
+      {!defs.length ? (
         <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
           <Newspaper className="h-10 w-10" />
-          <p>아직 수집된 뉴스가 없습니다.</p>
-          <Button onClick={refresh} disabled={refreshing}>
-            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            지금 갱신
-          </Button>
+          <p>카테고리가 없습니다. 카테고리를 추가하세요.</p>
+          <AddCategoryDialog onAdded={load} />
         </div>
       ) : (
-        <>
-          {snap.categories.map((cat) => (
-            <Section key={cat.key} cat={cat} />
-          ))}
-        </>
+        defs.map((def) => (
+          <Section
+            key={def.key}
+            def={def}
+            items={itemsByKey.get(def.key) ?? []}
+            canDelete={defs.length > 1}
+            onDelete={deleteCategory}
+          />
+        ))
       )}
     </div>
   );
