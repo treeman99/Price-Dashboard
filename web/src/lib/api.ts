@@ -83,6 +83,16 @@ export const api = {
       body: JSON.stringify(input),
     }).then((r) => j<NewsCategoryDef>(r)),
 
+  updateNewsCategory: (
+    key: string,
+    patch: { label?: string; emoji?: string; color?: string; description?: string }
+  ) =>
+    fetch(`/api/news/categories/${encodeURIComponent(key)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => j<NewsCategoryDef>(r)),
+
   deleteNewsCategory: (key: string) =>
     fetch(`/api/news/categories/${encodeURIComponent(key)}`, { method: "DELETE" }).then((r) =>
       j<{ ok: boolean }>(r)

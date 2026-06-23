@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Loader2, Newspaper, Link as LinkIcon, CalendarDays, X } from "lucide-react";
+import { RefreshCw, Loader2, Newspaper, Link as LinkIcon, CalendarDays, X, Pencil, Plus } from "lucide-react";
 import type { NewsSnapshot, NewsItem, NewsCategoryDef } from "@shared/types";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AddCategoryDialog } from "@/components/AddCategoryDialog";
+import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 
 function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
   return (
@@ -48,11 +48,13 @@ function Section({
   def,
   items,
   canDelete,
+  onEdit,
   onDelete,
 }: {
   def: NewsCategoryDef;
   items: NewsItem[];
   canDelete: boolean;
+  onEdit: (def: NewsCategoryDef) => void;
   onDelete: (def: NewsCategoryDef) => void;
 }) {
   return (
@@ -66,15 +68,24 @@ function Section({
           {def.label}
           <span className="text-sm font-normal text-muted-foreground">({items.length})</span>
         </h2>
-        {canDelete && (
+        <div className="ml-auto flex items-center gap-1">
           <button
-            onClick={() => onDelete(def)}
-            title="카테고리 삭제"
-            className="ml-auto rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-destructive"
+            onClick={() => onEdit(def)}
+            title="카테고리 수정"
+            className="rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Pencil className="h-4 w-4" />
           </button>
-        )}
+          {canDelete && (
+            <button
+              onClick={() => onDelete(def)}
+              title="카테고리 삭제"
+              className="rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-destructive"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
       {items.length ? (
         <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
@@ -97,6 +108,7 @@ export function NewsBoard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<CategoryDialogState | null>(null);
 
   async function load() {
     try {
@@ -163,7 +175,9 @@ export function NewsBoard() {
           {snap && ` · 총 ${total}건`}
         </p>
         <div className="flex items-center gap-2">
-          <AddCategoryDialog onAdded={load} />
+          <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
+            <Plus className="h-4 w-4" /> 카테고리 추가
+          </Button>
           <Button variant="outline" onClick={refresh} disabled={refreshing}>
             {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             지금 갱신
@@ -183,7 +197,9 @@ export function NewsBoard() {
         <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
           <Newspaper className="h-10 w-10" />
           <p>카테고리가 없습니다. 카테고리를 추가하세요.</p>
-          <AddCategoryDialog onAdded={load} />
+          <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
+            <Plus className="h-4 w-4" /> 카테고리 추가
+          </Button>
         </div>
       ) : (
         defs.map((def) => (
@@ -192,10 +208,13 @@ export function NewsBoard() {
             def={def}
             items={itemsByKey.get(def.key) ?? []}
             canDelete={defs.length > 1}
+            onEdit={(d) => setDialog({ mode: "edit", cat: d })}
             onDelete={deleteCategory}
           />
         ))
       )}
+
+      <CategoryDialog state={dialog} onClose={() => setDialog(null)} onSaved={load} />
     </div>
   );
 }

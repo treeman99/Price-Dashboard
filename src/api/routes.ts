@@ -19,7 +19,7 @@ import {
 import { runCollection } from "../collector/collect.ts";
 import { getEventsSnapshot, refreshEvents } from "../events/events.ts";
 import { getNewsSnapshot, refreshNews } from "../news/news.ts";
-import { loadCategories, addCategory, deleteCategory } from "../news/categories.ts";
+import { loadCategories, addCategory, updateCategory, deleteCategory } from "../news/categories.ts";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type { CreateProductInput, PeriodDays } from "../../shared/types.ts";
@@ -211,6 +211,17 @@ api.post("/news/categories", (req, res) => {
   try {
     const { label, emoji, color, description } = req.body ?? {};
     const cat = addCategory({ label, emoji, color, description });
+    res.json(cat);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/** 카테고리 수정 */
+api.patch("/news/categories/:key", (req, res) => {
+  try {
+    const { label, emoji, color, description } = req.body ?? {};
+    const cat = updateCategory(req.params.key, { label, emoji, color, description });
     res.json(cat);
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
