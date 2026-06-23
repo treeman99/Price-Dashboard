@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dashboard } from "@/components/Dashboard";
 import { EventsBoard } from "@/components/EventsBoard";
+import { NewsBoard } from "@/components/NewsBoard";
 
 interface TabDef {
   id: string;
@@ -16,6 +17,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: "price", label: "가격 대시보드", content: <Dashboard /> },
   { id: "events", label: "팝업·전시", content: <EventsBoard /> },
+  { id: "news", label: "뉴스", content: <NewsBoard /> },
 ];
 
 export default function App() {

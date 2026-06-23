@@ -18,6 +18,7 @@ import {
 } from "../db/repo.ts";
 import { runCollection } from "../collector/collect.ts";
 import { getEventsSnapshot, refreshEvents } from "../events/events.ts";
+import { getNewsSnapshot, refreshNews } from "../news/news.ts";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type { CreateProductInput, PeriodDays } from "../../shared/types.ts";
@@ -176,6 +177,23 @@ api.get("/events", (_req, res) => {
 api.post("/events/refresh", async (_req, res) => {
   try {
     const snapshot = await refreshEvents({ trigger: "manual", notify: false });
+    res.json(snapshot);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ── 데일리 뉴스 다이제스트 ──
+
+/** 최신 뉴스 스냅샷 */
+api.get("/news", (_req, res) => {
+  res.json(getNewsSnapshot());
+});
+
+/** 지금 갱신 (수동). 이메일은 보내지 않음(중복 방지) */
+api.post("/news/refresh", async (_req, res) => {
+  try {
+    const snapshot = await refreshNews({ trigger: "manual", notify: false });
     res.json(snapshot);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });

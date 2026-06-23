@@ -4,6 +4,7 @@ import { log } from "../util/log.ts";
 import { runCollection } from "../collector/collect.ts";
 import { hasSuccessfulRun } from "../db/repo.ts";
 import { refreshEvents, hasTodaySnapshot } from "../events/events.ts";
+import { refreshNews, hasTodayNewsSnapshot } from "../news/news.ts";
 import { localDate } from "../util/date.ts";
 
 function today(): string {
@@ -72,6 +73,31 @@ async function checkEventsCatchup() {
   }
 }
 
+// ── 데일리 뉴스 다이제스트 스케줄 ──
+let newsRunning = false;
+async function safeRefreshNews(trigger: string, notify: boolean) {
+  if (newsRunning) {
+    log.warn(`뉴스 수집 진행 중 → ${trigger} 건너뜀`);
+    return;
+  }
+  newsRunning = true;
+  try {
+    await refreshNews({ trigger, notify });
+  } catch (e) {
+    log.error(`뉴스 수집 오류 [${trigger}]: ${(e as Error).message}`);
+  } finally {
+    newsRunning = false;
+  }
+}
+
+async function checkNewsCatchup() {
+  if (newsRunning) return;
+  if (pastTime(config.newsCollectTime) && !hasTodayNewsSnapshot()) {
+    log.info(`오늘(${today()}) 뉴스 다이제스트 누락 감지 → catch-up 실행`);
+    await safeRefreshNews("catchup", true);
+  }
+}
+
 export function startScheduler() {
   // 가격 수집
   const price = parseCollectTime(config.collectTime);
@@ -91,11 +117,22 @@ export function startScheduler() {
   });
   log.info(`스케줄러: 팝업/전시 매일 ${config.eventsCollectTime} (cron: ${evExpr})`);
 
+  // 뉴스 다이제스트 수집
+  const news = parseCollectTime(config.newsCollectTime);
+  const newsExpr = `${news.minute} ${news.hour} * * *`;
+  cron.schedule(newsExpr, () => {
+    log.info(`정시 뉴스 다이제스트 수집 (${config.newsCollectTime})`);
+    void safeRefreshNews("schedule", true);
+  });
+  log.info(`스케줄러: 뉴스 매일 ${config.newsCollectTime} (cron: ${newsExpr})`);
+
   // 기동 직후 1회 + 30분마다 누락 점검 (잠자기 복귀 대응)
   void checkCatchup();
   void checkEventsCatchup();
+  void checkNewsCatchup();
   setInterval(() => {
     void checkCatchup();
     void checkEventsCatchup();
+    void checkNewsCatchup();
   }, 30 * 60 * 1000);
 }

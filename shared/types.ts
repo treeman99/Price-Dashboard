@@ -162,3 +162,53 @@ export interface EventsSnapshot {
   festivals: FestivalItem[];
   notes: string | null;
 }
+
+// ── 데일리 뉴스 다이제스트 (최근 24시간, 7개 카테고리) ──
+
+export type NewsCategoryKey =
+  | "ai"
+  | "robotics"
+  | "quantum"
+  | "korea_econ"
+  | "us"
+  | "world"
+  | "products";
+
+export interface NewsRelated {
+  /** 관련 출처 라벨 (예: "Reuters", "📺 영상") */
+  label: string;
+  link: string;
+}
+
+export interface NewsItem {
+  /** 한국어 제목 */
+  title: string;
+  /** 출처 (예: "TechCrunch", "GeekNews", "📺 YouTube (@mkbhd)") */
+  source: string;
+  /** 발행일 YYYY-MM-DD */
+  date: string;
+  /** 한국어 요약 (5줄 이내) */
+  summary: string;
+  link: string | null;
+  /** 중복 통합 시 관련 출처 (최대 2개) */
+  related: NewsRelated[];
+}
+
+export interface NewsCategory {
+  key: NewsCategoryKey;
+  /** 표시 라벨 (예: "AI / LLM") */
+  label: string;
+  emoji: string;
+  /** 섹션 색상 (hex) */
+  color: string;
+  items: NewsItem[];
+}
+
+export interface NewsSnapshot {
+  date: string; // YYYY-MM-DD (로컬)
+  updatedAt: string; // ISO
+  /** 큐레이션 출처: LLM or 미수집(empty) */
+  source: "llm" | "empty";
+  categories: NewsCategory[];
+  notes: string | null;
+}

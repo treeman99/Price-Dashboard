@@ -5,6 +5,7 @@ import type {
   CollectResult,
   PeriodDays,
   EventsSnapshot,
+  NewsSnapshot,
 } from "@shared/types";
 
 async function j<T>(res: Response): Promise<T> {
@@ -65,4 +66,9 @@ export const api = {
 
   refreshEvents: () =>
     fetch("/api/events/refresh", { method: "POST" }).then((r) => j<EventsSnapshot>(r)),
+
+  news: () => fetch("/api/news").then((r) => j<NewsSnapshot | null>(r)),
+
+  refreshNews: () =>
+    fetch("/api/news/refresh", { method: "POST" }).then((r) => j<NewsSnapshot>(r)),
 };
