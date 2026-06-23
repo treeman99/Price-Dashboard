@@ -207,7 +207,7 @@ export function NewsBoard() {
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          매일 08:00 자동 수집 · 최근 24시간 뉴스 · 이메일 발송
+          매일 08:00 자동 수집 · 최근 24시간 뉴스 · 수집 시 이메일 발송(지금 갱신 포함)
           {updated && ` · 최종 갱신 ${updated}`}
           {snap && ` · 총 ${total}건`}
         </p>

@@ -197,10 +197,10 @@ api.get("/news", (_req, res) => {
   res.json(getNewsSnapshot());
 });
 
-/** 지금 갱신 (수동). 이메일은 보내지 않음(중복 방지) */
+/** 지금 갱신 (수동). 수집한 내용을 이메일로도 발송(0건이면 생략). */
 api.post("/news/refresh", async (_req, res) => {
   try {
-    const snapshot = await refreshNews({ trigger: "manual", notify: false });
+    const snapshot = await refreshNews({ trigger: "manual", notify: true });
     res.json(snapshot);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
