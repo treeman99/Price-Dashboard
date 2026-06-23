@@ -19,15 +19,19 @@ import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryD
 
 function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
   return (
-    <Card className="border-l-4 p-4" style={{ borderLeftColor: color }}>
-      <h4 className="font-semibold leading-snug">{item.title}</h4>
+    <Card className="flex h-full flex-col border-l-4 p-4" style={{ borderLeftColor: color }}>
+      {/* 제목 — 2줄 고정 */}
+      <h4 className="line-clamp-2 min-h-[2.6em] font-semibold leading-snug">{item.title}</h4>
+      {/* 출처 / 날짜 */}
       <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
         <span>{item.source}</span>
         <span className="inline-flex items-center gap-1">
           <CalendarDays className="h-3 w-3" /> {item.date}
         </span>
       </p>
-      {item.summary && <p className="mt-2 text-sm leading-relaxed text-foreground/80">{item.summary}</p>}
+      {/* 요약 — 남는 공간을 채워 액션을 항상 카드 하단으로 밀어냄 */}
+      <p className="mt-2 line-clamp-4 flex-1 text-sm leading-relaxed text-foreground/80">{item.summary}</p>
+      {/* 액션 — 항상 카드 하단 같은 위치 */}
       <div className="mt-3 flex flex-wrap items-center gap-3 border-t pt-2 text-xs">
         {item.link && (
           <a
