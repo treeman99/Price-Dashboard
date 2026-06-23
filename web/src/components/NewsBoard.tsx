@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Loader2, Newspaper, Link as LinkIcon, CalendarDays, X, Pencil, Plus } from "lucide-react";
+import {
+  RefreshCw,
+  Loader2,
+  Newspaper,
+  Link as LinkIcon,
+  CalendarDays,
+  X,
+  Pencil,
+  Plus,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import type { NewsSnapshot, NewsItem, NewsCategoryDef } from "@shared/types";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -48,15 +59,23 @@ function Section({
   def,
   items,
   canDelete,
+  canUp,
+  canDown,
+  onMove,
   onEdit,
   onDelete,
 }: {
   def: NewsCategoryDef;
   items: NewsItem[];
   canDelete: boolean;
+  canUp: boolean;
+  canDown: boolean;
+  onMove: (def: NewsCategoryDef, dir: "up" | "down") => void;
   onEdit: (def: NewsCategoryDef) => void;
   onDelete: (def: NewsCategoryDef) => void;
 }) {
+  const ctrl =
+    "rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
   return (
     <section className="mt-8">
       <div
@@ -69,11 +88,13 @@ function Section({
           <span className="text-sm font-normal text-muted-foreground">({items.length})</span>
         </h2>
         <div className="ml-auto flex items-center gap-1">
-          <button
-            onClick={() => onEdit(def)}
-            title="카테고리 수정"
-            className="rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-          >
+          <button onClick={() => onMove(def, "up")} disabled={!canUp} title="위로" className={ctrl}>
+            <ChevronUp className="h-4 w-4" />
+          </button>
+          <button onClick={() => onMove(def, "down")} disabled={!canDown} title="아래로" className={ctrl}>
+            <ChevronDown className="h-4 w-4" />
+          </button>
+          <button onClick={() => onEdit(def)} title="카테고리 수정" className={ctrl}>
             <Pencil className="h-4 w-4" />
           </button>
           {canDelete && (
@@ -136,6 +157,22 @@ export function NewsBoard() {
       setErr((e as Error).message);
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function move(def: NewsCategoryDef, dir: "up" | "down") {
+    const idx = defs.findIndex((d) => d.key === def.key);
+    const j = dir === "up" ? idx - 1 : idx + 1;
+    if (idx < 0 || j < 0 || j >= defs.length) return;
+    const next = defs.slice();
+    [next[idx], next[j]] = [next[j], next[idx]];
+    setDefs(next); // 낙관적 업데이트
+    try {
+      await api.reorderNewsCategories(next.map((d) => d.key));
+      setErr(null);
+    } catch (e) {
+      setErr((e as Error).message);
+      load(); // 실패 시 서버 상태로 복구
     }
   }
 
@@ -202,12 +239,15 @@ export function NewsBoard() {
           </Button>
         </div>
       ) : (
-        defs.map((def) => (
+        defs.map((def, i) => (
           <Section
             key={def.key}
             def={def}
             items={itemsByKey.get(def.key) ?? []}
             canDelete={defs.length > 1}
+            canUp={i > 0}
+            canDown={i < defs.length - 1}
+            onMove={move}
             onEdit={(d) => setDialog({ mode: "edit", cat: d })}
             onDelete={deleteCategory}
           />

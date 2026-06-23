@@ -166,6 +166,25 @@ export function updateCategory(key: string, patch: UpdateCategoryInput): NewsCat
   return cat;
 }
 
+/** 카테고리 순서 재정렬. keys는 현재 전체 카테고리 키를 빠짐없이 포함해야 한다. */
+export function reorderCategories(keys: string[]): NewsCategoryDef[] {
+  const cats = loadCategories();
+  if (!Array.isArray(keys) || keys.length !== cats.length)
+    throw new Error("순서 목록이 현재 카테고리 수와 일치하지 않습니다.");
+  const byKey = new Map(cats.map((c) => [c.key, c]));
+  const reordered: NewsCategoryDef[] = [];
+  for (const k of keys) {
+    const c = byKey.get(k);
+    if (!c) throw new Error(`알 수 없거나 중복된 카테고리 키: ${k}`);
+    reordered.push(c);
+    byKey.delete(k);
+  }
+  if (byKey.size) throw new Error("일부 카테고리가 순서 목록에서 누락되었습니다.");
+  save(reordered);
+  memo = reordered;
+  return reordered;
+}
+
 /** 카테고리 삭제. 마지막 1개는 삭제 금지. */
 export function deleteCategory(key: string): boolean {
   const cats = loadCategories();

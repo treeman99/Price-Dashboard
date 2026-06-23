@@ -97,4 +97,11 @@ export const api = {
     fetch(`/api/news/categories/${encodeURIComponent(key)}`, { method: "DELETE" }).then((r) =>
       j<{ ok: boolean }>(r)
     ),
+
+  reorderNewsCategories: (keys: string[]) =>
+    fetch("/api/news/categories/order", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys }),
+    }).then((r) => j<NewsCategoryDef[]>(r)),
 };
