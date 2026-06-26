@@ -254,6 +254,14 @@ export function EventsBoard() {
 
   const updated = snap?.updatedAt ? new Date(snap.updatedAt).toLocaleString("ko-KR") : null;
 
+  // 출처(보기) 링크가 없는 항목은 확인이 불가하므로 표시하지 않는다.
+  const popups = (snap?.popups ?? []).filter((p) => p.link);
+  const venues = (snap?.exhibitions.venues ?? []).map((v) => ({
+    ...v,
+    items: v.items.filter((e) => e.link),
+  }));
+  const festivals = (snap?.festivals ?? []).filter((f) => f.link);
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -284,11 +292,11 @@ export function EventsBoard() {
       ) : (
         <>
           <SectionTitle icon={<Sparkles className="h-5 w-5 text-[#7C3AED]" />}>
-            팝업스토어 <span className="text-sm font-normal text-muted-foreground">({snap.popups.length})</span>
+            팝업스토어 <span className="text-sm font-normal text-muted-foreground">({popups.length})</span>
           </SectionTitle>
-          {snap.popups.length ? (
+          {popups.length ? (
             <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
-              {snap.popups.map((p, i) => (
+              {popups.map((p, i) => (
                 <PopupCard key={i} p={p} />
               ))}
             </div>
@@ -299,7 +307,7 @@ export function EventsBoard() {
           <SectionTitle icon={<Building2 className="h-5 w-5 text-[#FF8C00]" />}>
             주요 전시장 (코엑스 · 세텍 · 킨텍스 · 수원컨벤션 · 수원메쎄)
           </SectionTitle>
-          {snap.exhibitions.venues.map((v) => (
+          {venues.map((v) => (
             <div key={v.name} className="mb-5">
               <h3 className="mb-2 text-sm font-semibold text-muted-foreground">🏛 {v.name}</h3>
               {v.items.length ? (
@@ -315,11 +323,11 @@ export function EventsBoard() {
           ))}
 
           <SectionTitle icon={<PartyPopper className="h-5 w-5 text-[#E8590C]" />}>
-            대한민국 축제 <span className="text-sm font-normal text-muted-foreground">({(snap.festivals ?? []).length})</span>
+            대한민국 축제 <span className="text-sm font-normal text-muted-foreground">({festivals.length})</span>
           </SectionTitle>
-          {(snap.festivals ?? []).length ? (
+          {festivals.length ? (
             <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
-              {(snap.festivals ?? []).map((f, i) => (
+              {festivals.map((f, i) => (
                 <FestivalCard key={i} f={f} />
               ))}
             </div>

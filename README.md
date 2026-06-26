@@ -21,13 +21,15 @@
 ## 사전 요구사항
 - **macOS** (launchd 서비스 등록 기준) / **Node.js 18 이상** (`node -v`로 확인, 권장 20+)
 - 네이버 개발자센터 검색 API 키 (필수) — https://developers.naver.com/
-- (선택) Anthropic Console API 키 — 웹리서치(비교가/쿠팡/리뷰)용
+- (선택) Anthropic Console API 키 — 웹리서치(비교가/리뷰)용
+- (선택) Python 3 — 팝업/전시 날짜 검증(insane-engine)용. `bash tools/insane-engine/setup.sh` 1회 실행
 - 별도 DB 설치 불필요 (Node 내장 SQLite 사용)
 
 ## 빠른 시작 (TL;DR)
 ```bash
 npm install && npm install --prefix web   # 1) 의존성 설치
 cp .env.example .env                       # 2) .env 에 네이버 키 입력
+bash tools/insane-engine/setup.sh          # 2-1) (선택) 날짜 검증 엔진 venv 준비
 npm run import                             # 3) 기존 이력 임포트(최초 1회)
 npm run web:build                          # 4) 프론트 빌드
 npm start                                  # 5) http://localhost:7777 접속
@@ -58,7 +60,8 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | 키 | 필수 | 설명 |
 |---|---|---|
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | ✅ | 네이버 쇼핑 검색 API. 없으면 수집 fail-fast |
-| `ANTHROPIC_API_KEY` | 선택 | Agent SDK 웹리서치(가격 비교가/쿠팡/리뷰) + 팝업/전시 LLM 큐레이션. 없으면 가격은 네이버만, 팝업/전시는 검색 원본으로 표시 |
+| `ANTHROPIC_API_KEY` | 선택 | Agent SDK 웹리서치(가격 비교가/리뷰) + 팝업/전시 LLM 큐레이션. 없으면 가격은 네이버+쿠팡만, 팝업/전시는 검색 원본으로 표시 |
+| `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`. 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
 | `COLLECT_TIME` | 기본 09:00 | 매일 가격 수집 시각(로컬) |
 | `EVENTS_COLLECT_TIME` | 기본 10:00 | 매일 팝업/전시 갱신 시각(로컬) |

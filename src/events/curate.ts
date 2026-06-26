@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { MANDATORY_VENUES, type RawCorpus, type RawGroup } from "./gather.ts";
 import type {
@@ -136,6 +138,30 @@ function corpusToText(corpus: RawCorpus): string {
   return lines.join("\n");
 }
 
+/** insane-engine 사용 가능 여부 (기능 on + venv python 존재) */
+function engineAvailable(): boolean {
+  return config.eventsVerifyDates && fs.existsSync(config.insaneEngine.python);
+}
+
+/** 큐레이션 프롬프트에 삽입할 '실제 페이지 날짜 검증' 지침 (엔진 가용 시에만) */
+function engineDateCheckBlock(today: string): string {
+  if (!engineAvailable()) return "";
+  const { python, engineDir, maxAttempts } = config.insaneEngine;
+  return `
+실제 페이지 날짜 검증 (insane-engine, 매우 중요):
+- WebFetch가 차단(403/빈 페이지)되거나 행사의 **종료 여부·일자가 불확실하면, Bash로 아래 명령**을 실행해 실제 행사 페이지를 우회 fetch 하라:
+  cd "${engineDir}" && "${python}" -m engine "<행사 페이지 URL>" --no-playwright --max-attempts ${maxAttempts}
+  (성공 시 페이지 HTML이 stdout 으로 출력된다. exit 0=성공 / 1=차단. 그 HTML 안의 "기간/일정/운영" 표기를 읽어 시작/종료일을 확정한다.)
+- **네이버 블로그는 반드시 모바일 본문 URL로 fetch** 하라. \`blog.naver.com/{ID}/{NO}\` 는 빈 iframe 셸(≈수백 B)만 주므로,
+  \`https://m.blog.naver.com/PostView.naver?blogId={ID}&logNo={NO}\` 형태로 바꿔서 호출해야 본문이 나온다.
+- **날짜는 그 행사의 "특정/공식 페이지" 기준**으로 확정하라. "총정리/모음" 글에는 여러 행사 날짜가 섞여 있으니,
+  그 글에서 **해당 행사 이름 바로 옆의 기간**만 취하고, 가능하면 공식/전용 페이지(코엑스·세텍·킨텍스·SCC 등)를 우선한다.
+- 특히 **종료가 의심되는 행사는 반드시 이 명령으로 실제 페이지를 열어 종료일을 확인**하고, **오늘(${today})보다 종료일이 과거이면 출력에서 제외**하라. 모음/블로그 글의 옛 날짜를 그대로 믿지 마라.
+- 카드에 적는 startDate/endDate/period 는 **이렇게 확인한 실제 페이지의 일자와 정확히 일치**해야 한다.
+- 한 번에 과도하게 호출하지 말고(차단 유발), 종료·날짜가 애매한 핵심 행사 위주로 확인하라.
+`;
+}
+
 function buildPrompt(corpus: RawCorpus, today: string): string {
   return `너는 한국 팝업스토어·전시 큐레이터다. 아래 네이버 검색 결과(제목 | 설명 | 링크)는 단서일 뿐,
 대부분 블로그 "총정리/모음" 글이고 **날짜·내용이 부정확**하다. 절대 스니펫의 날짜를 그대로 믿지 마라.
@@ -147,7 +173,9 @@ WebSearch/WebFetch로 **실제 원문·공식 페이지를 직접 열어 검증*
 2. **하나의 글/링크에 여러 행사가 있으면 그 행사들을 모두 개별 항목으로 추출**한다. 한 개만 뽑지 말 것.
 3. **같은 행사는 하나로 합친다**(행사명+장소+기간 동일).
 4. "총정리/모음/추천/TOP/가볼만한곳" 묶음 글 자체는 행사가 아니므로 출력하지 않는다.
-5. 각 행사 startDate/endDate를 "YYYY-MM-DD"로(연도 모르면 ${corpus.month.slice(0, 4)} 가정). 확인 불가면 null.
+5. 각 행사 startDate/endDate를 "YYYY-MM-DD"로(연도 모르면 ${corpus.month.slice(0, 4)} 가정). **반드시 일(day)까지** 정확히. 일자를 확인 못하면 null(월만 알아도 1일로 추측해 채우지 마라).
+   - period는 화면 표시용이며 startDate/endDate와 **일관**되게, 일자까지 적는다. 예) "6.25~7.1", "2026.06.25~2026.07.01".
+   - **"2026.06~", "6월 중", "2026.06" 처럼 월만 적힌 모호한 표기 금지.** 일자를 모르면 period도 비우거나("") 일자를 알아낸 뒤 적는다.
 6. **이미 종료된 행사(endDate < ${today})는 출력하지 마라.** 진행 중이거나 시작 예정인 것만.
 7. **팝업은 서울·경기(수도권)만** 대상. 지역: 서울(성수/홍대/여의도/강남/잠실 등)+경기(판교/분당/수원/광교/일산/하남 스타필드/용인 등). 경기 누락 금지.
    **부산·대구·인천·광주·대전·울산·강원·충청·전라·경상·제주 등 서울/경기 외 지역의 팝업은 절대 포함하지 마라.** 장소가 불명확하면 제외.
@@ -159,7 +187,8 @@ WebSearch/WebFetch로 **실제 원문·공식 페이지를 직접 열어 검증*
 
 검증 강도(중요):
 - **팝업**: 검색 단서에서 **적극적으로 많이 추출**하라(최대 20개). 팝업은 공식 페이지 확인이 어려우니 WebFetch 검증을 강제하지 않는다.
-  날짜가 불명확하면 startDate/endDate만 null로 두고 **행사 자체는 버리지 마라.**
+  - 다만 **정확한 시작·종료 일자(day)는 최대한 알아내라.** 스니펫에 "6.25~7.1", "6/25-7/1" 등 일자가 보이면 그대로 반영하고, 월만 보이면 WebSearch/WebFetch로 일자를 확인해 본다.
+  - 그래도 일자를 못 구하면 startDate/endDate/period를 null·""로 두되 **행사 자체는 버리지 마라.** (월만 추측해서 채우지 말 것)
 - **전시(전시장별)**: 날짜가 중요하므로 가능하면 WebSearch/WebFetch로 공식 페이지를 열어 시작/종료일을 검증한다.
   공식 일정 페이지 예: 코엑스 https://www.coex.co.kr , 세텍 https://www.setec.or.kr , 킨텍스 https://www.kintex.com , 수원컨벤션센터 https://www.scc.or.kr , 수원메쎄 https://www.suwonmesse.com.
   스니펫 날짜와 공식 날짜가 다르면 **공식 날짜를 따른다**.
@@ -167,7 +196,7 @@ WebSearch/WebFetch로 **실제 원문·공식 페이지를 직접 열어 검증*
 - **link**: 도메인 루트(예: https://www.coex.co.kr)만 아는 경우엔 link를 null로 둬도 된다(서버가 출처 링크를 자동 보정함).
   임의의 URL은 절대 지어내지 마라.
 - tag 는 서버가 날짜로 자동 계산하니 출력하지 말 것.
-
+${engineDateCheckBlock(today)}
 검색 단서:
 ${corpusToText(corpus)}
 
@@ -375,16 +404,20 @@ function extractJson(text: string): unknown {
  */
 export async function curate(corpus: RawCorpus, date: string): Promise<EventsSnapshot> {
   try {
+    // 엔진 가용 시 Bash 허용 → 차단 페이지를 insane-engine 으로 우회 fetch 해 날짜 검증
+    const withEngine = engineAvailable();
     const q = query({
       prompt: buildPrompt(corpus, date),
       options: {
         // 실제 원문·공식 페이지를 열어 날짜/내용 검증
-        allowedTools: ["WebSearch", "WebFetch"],
+        allowedTools: withEngine
+          ? ["WebSearch", "WebFetch", "Bash"]
+          : ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
-        maxTurns: 40,
+        maxTurns: withEngine ? 60 : 40,
         systemPrompt:
-          "너는 꼼꼼한 팝업/전시 큐레이터다. 스니펫을 믿지 말고 WebSearch/WebFetch로 실제 날짜를 검증한 뒤, 실제 개별 행사를 중복 없이 추려 마지막에 지정된 JSON 한 개만 출력한다.",
+          "너는 꼼꼼한 팝업/전시 큐레이터다. 스니펫을 믿지 말고 WebSearch/WebFetch(차단 시 Bash로 insane-engine)로 실제 날짜를 검증하고, 이미 종료된 행사는 제외한 뒤, 실제 개별 행사를 중복 없이 추려 마지막에 지정된 JSON 한 개만 출력한다.",
       },
     });
     let finalText = "";
@@ -405,6 +438,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
         ? found!.items
             .map(normExhibition(name, date))
             .map((e) => ({ ...e, link: resolveLink(e.title, e.link, corpusLinks, corpusItems) }))
+            .filter((e) => e.link != null) // 출처(보기) 링크 없으면 표시하지 않음
             .filter((e) => !isEnded(e.endDate, date))
         : [];
       return { name, items: dedupeByTitle(items, (x) => x.title).slice(0, 8) };
@@ -414,6 +448,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       (Array.isArray(p?.popups) ? p.popups : [])
         .map(normPopup(date))
         .map((e: PopupItem) => ({ ...e, link: resolveLink(e.name, e.link, corpusLinks, corpusItems) }))
+        .filter((e: PopupItem) => e.link != null) // 출처(보기) 링크 없으면 표시하지 않음
         .filter((e: PopupItem) => !isEnded(e.endDate, date))
         .filter((e: PopupItem) => isCapitalArea(`${e.name} ${e.region} ${e.summary}`)),
       (x: PopupItem) => x.name
@@ -424,6 +459,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       (Array.isArray(p?.festivals) ? p.festivals : [])
         .map(normFestival(date))
         .map((e: FestivalItem) => ({ ...e, link: resolveLink(e.name, e.link, corpusLinks, corpusItems) }))
+        .filter((e: FestivalItem) => e.link != null) // 출처(보기) 링크 없으면 표시하지 않음
         .filter((e: FestivalItem) => !isEnded(e.endDate, date)),
       (x: FestivalItem) => x.name
     ).slice(0, 12);
@@ -457,20 +493,18 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/** 해당 연·월의 마지막 날 */
-function lastDayOfMonth(y: number, m: number): number {
-  return new Date(y, m, 0).getDate();
-}
-
 /**
- * period 문자열에서 시작/종료일 보완 파싱.
- * 예) "2026.06~2026.06.24", "2026.06", "6.24~6.28", "2026.05~2026.08"
- * 일(day)이 없으면 시작은 1일, 종료는 말일로 보정. 연도 없으면 fallbackYear 사용.
+ * period 문자열에서 시작/종료일 파싱.
+ * **일(day)까지 명시된 경우에만** 날짜를 반환한다. 월까지만 알 수 있으면(예: "2026.06~")
+ * 캘린더에 넣을 수 없는 부정확한 날짜이므로 null을 돌려준다(→ 캘린더 추가 버튼이 뜨지 않음).
+ * 예) "6.25~7.1" → 2026-06-25 / 2026-07-01,  "2026.06.24" → 2026-06-24 / 2026-06-24,
+ *     "2026.06" → null / null,  "2026.06.20~07" → 2026-06-20 / null(종료 일자 미상)
+ * 연도가 없으면 fallbackYear를 사용한다.
  */
 function parsePeriod(period: string, fallbackYear: number): { start: string | null; end: string | null } {
   if (!period) return { start: null, end: null };
   const parts = period.split(/[~∼〜\-–—]/).map((s) => s.trim()).filter(Boolean);
-  const parseOne = (s: string, isEnd: boolean): string | null => {
+  const parseOne = (s: string): string | null => {
     const nums = (s.match(/\d+/g) ?? []).map(Number);
     if (!nums.length) return null;
     // 첫 숫자가 4자리면 연도, 아니면 fallbackYear
@@ -480,18 +514,18 @@ function parsePeriod(period: string, fallbackYear: number): { start: string | nu
       year = nums[0];
       rest = nums.slice(1);
     }
-    if (!rest.length) return null; // 월을 알 수 없음(연도만)
+    // 월·일이 모두 있어야 정확한 날짜로 인정(일이 없으면 부정확 → null)
+    if (rest.length < 2) return null;
     const mo = rest[0];
-    if (mo < 1 || mo > 12) return null;
-    const day = rest[1] ?? (isEnd ? lastDayOfMonth(year, mo) : 1);
-    if (day < 1 || day > 31) return null;
+    const day = rest[1];
+    if (mo < 1 || mo > 12 || day < 1 || day > 31) return null;
     return `${year}-${pad(mo)}-${pad(day)}`;
   };
   if (parts.length === 1) {
-    // 단일: 시작은 1일, 종료는 말일
-    return { start: parseOne(parts[0], false), end: parseOne(parts[0], true) };
+    const d = parseOne(parts[0]);
+    return { start: d, end: d };
   }
-  return { start: parseOne(parts[0], false), end: parseOne(parts[parts.length - 1], true) };
+  return { start: parseOne(parts[0]), end: parseOne(parts[parts.length - 1]) };
 }
 
 /** startDate/endDate가 null이면 period에서 보완 */

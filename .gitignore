@@ -5,6 +5,11 @@
 # dependencies
 node_modules/
 web/node_modules/
+tools/insane-engine/.venv/
+
+# python cache (vendored insane-engine)
+__pycache__/
+*.pyc
 
 # build output
 dist/
