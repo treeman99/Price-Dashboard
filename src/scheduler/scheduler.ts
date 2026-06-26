@@ -4,7 +4,7 @@ import { log } from "../util/log.ts";
 import { runCollection } from "../collector/collect.ts";
 import { hasSuccessfulRun } from "../db/repo.ts";
 import { refreshEvents, hasTodaySnapshot } from "../events/events.ts";
-import { refreshNews, hasTodayNewsSnapshot } from "../news/news.ts";
+import { refreshNews, getNewsSnapshot } from "../news/news.ts";
 import { localDate } from "../util/date.ts";
 
 function today(): string {
@@ -90,11 +90,37 @@ async function safeRefreshNews(trigger: string, notify: boolean) {
   }
 }
 
+/**
+ * 뉴스 catch-up: 오늘 예정된 시간 중 하나라도 지났고 스냅샷이 없거나
+ * 마지막 갱신 이후 새로운 예정 시간이 지났으면 보충한다.
+ */
 async function checkNewsCatchup() {
   if (newsRunning) return;
-  if (pastTime(config.newsCollectTime) && !hasTodayNewsSnapshot()) {
-    log.info(`오늘(${today()}) 뉴스 다이제스트 누락 감지 → catch-up 실행`);
-    await safeRefreshNews("catchup", true);
+  const snapshot = getNewsSnapshot();
+  const snapshotDate = snapshot?.date;
+  const snapshotTime = snapshot?.updatedAt ? new Date(snapshot.updatedAt) : null;
+
+  for (const t of config.newsCollectTimes) {
+    if (!pastTime(t)) continue;
+
+    // 오늘자 스냅샷이 없으면 catch-up
+    if (snapshotDate !== today()) {
+      log.info(`오늘(${today()}) 뉴스 다이제스트 누락 감지 → catch-up 실행 (${t})`);
+      await safeRefreshNews("catchup", true);
+      return;
+    }
+
+    // 오늘 스냅샷이 있지만 이 예정 시간 이전에 갱신된 경우 catch-up
+    if (snapshotTime) {
+      const { hour, minute } = parseCollectTime(t);
+      const scheduled = new Date();
+      scheduled.setHours(hour, minute, 0, 0);
+      if (snapshotTime < scheduled) {
+        log.info(`오늘(${today()}) ${t} 뉴스 갱신 누락 감지 → catch-up 실행`);
+        await safeRefreshNews("catchup", true);
+        return;
+      }
+    }
   }
 }
 
@@ -117,14 +143,16 @@ export function startScheduler() {
   });
   log.info(`스케줄러: 팝업/전시 매일 ${config.eventsCollectTime} (cron: ${evExpr})`);
 
-  // 뉴스 다이제스트 수집
-  const news = parseCollectTime(config.newsCollectTime);
-  const newsExpr = `${news.minute} ${news.hour} * * *`;
-  cron.schedule(newsExpr, () => {
-    log.info(`정시 뉴스 다이제스트 수집 (${config.newsCollectTime})`);
-    void safeRefreshNews("schedule", true);
-  });
-  log.info(`스케줄러: 뉴스 매일 ${config.newsCollectTime} (cron: ${newsExpr})`);
+  // 뉴스 다이제스트 수집 (복수 시간 지원)
+  for (const t of config.newsCollectTimes) {
+    const news = parseCollectTime(t);
+    const newsExpr = `${news.minute} ${news.hour} * * *`;
+    cron.schedule(newsExpr, () => {
+      log.info(`정시 뉴스 다이제스트 수집 (${t})`);
+      void safeRefreshNews("schedule", true);
+    });
+    log.info(`스케줄러: 뉴스 매일 ${t} (cron: ${newsExpr})`);
+  }
 
   // 기동 직후 1회 + 30분마다 누락 점검 (잠자기 복귀 대응)
   void checkCatchup();

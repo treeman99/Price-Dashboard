@@ -19,11 +19,19 @@ export interface AppConfig {
   port: number;
   collectTime: string; // HH:mm (가격 수집)
   eventsCollectTime: string; // HH:mm (팝업/전시 수집)
-  newsCollectTime: string; // HH:mm (뉴스 다이제스트 수집)
+  newsCollectTimes: string[]; // HH:mm[] (뉴스 다이제스트 수집, 복수 시간 지원)
   dbPath: string;
   legacyHistoryJson: string;
   historyRetentionDays: number;
   naver: { clientId: string; clientSecret: string };
+  /** insane-engine (vendored): 차단 사이트 fetch. 팝업/전시 날짜 검증에 사용 */
+  insaneEngine: {
+    engineDir: string;
+    python: string;
+    maxAttempts: number;
+  };
+  /** 팝업/전시 큐레이션 시 insane-engine 으로 실제 페이지 날짜 검증 on/off */
+  eventsVerifyDates: boolean;
   anthropicApiKey: string;
   notify: {
     email: boolean;
@@ -36,7 +44,7 @@ export const config: AppConfig = {
   port: int(process.env.PORT, 7777),
   collectTime: process.env.COLLECT_TIME?.trim() || "09:00",
   eventsCollectTime: process.env.EVENTS_COLLECT_TIME?.trim() || "10:00",
-  newsCollectTime: process.env.NEWS_COLLECT_TIME?.trim() || "08:00",
+  newsCollectTimes: parseCollectTimes(process.env.NEWS_COLLECT_TIMES?.trim() || "08:00,17:00"),
   dbPath: process.env.DB_PATH?.trim() || path.join(repoRoot, "data", "price.db"),
   legacyHistoryJson:
     process.env.LEGACY_HISTORY_JSON?.trim() ||
@@ -46,6 +54,15 @@ export const config: AppConfig = {
     clientId: process.env.NAVER_CLIENT_ID?.trim() || "",
     clientSecret: process.env.NAVER_CLIENT_SECRET?.trim() || "",
   },
+  insaneEngine: {
+    engineDir: process.env.INSANE_ENGINE_DIR?.trim() || path.join(repoRoot, "tools", "insane-engine"),
+    python:
+      process.env.INSANE_PYTHON?.trim() ||
+      path.join(repoRoot, "tools", "insane-engine", ".venv", "bin", "python3"),
+    // fetch 격자 시도 상한(차단 시 무한 에스컬레이션 방지)
+    maxAttempts: int(process.env.INSANE_MAX_ATTEMPTS, 18),
+  },
+  eventsVerifyDates: bool(process.env.EVENTS_VERIFY_DATES, true),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY?.trim() || "",
   notify: {
     email: bool(process.env.NOTIFY_EMAIL, false),
@@ -67,6 +84,14 @@ export function parseCollectTime(t: string): { hour: number; minute: number } {
   return { hour, minute };
 }
 
+/** 쉼표로 구분된 시간 목록 파싱 (예: "08:00,17:00") */
+function parseCollectTimes(s: string): string[] {
+  const times = s.split(",").map((t) => t.trim()).filter(Boolean);
+  if (times.length === 0) throw new Error("NEWS_COLLECT_TIMES: 최소 1개 시간 필요");
+  times.forEach((t) => parseCollectTime(t));
+  return times;
+}
+
 /**
  * 필수 자격증명 검증.
  * - 수집에 반드시 필요한 값(네이버)이 없으면 throw (fail-fast).
@@ -80,7 +105,7 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
   // 수집 시각 형식 검증
   parseCollectTime(config.collectTime);
   parseCollectTime(config.eventsCollectTime);
-  parseCollectTime(config.newsCollectTime);
+  config.newsCollectTimes.forEach((t) => parseCollectTime(t));
 
   if (opts.forCollect) {
     if (!config.naver.clientId || !config.naver.clientSecret) {
