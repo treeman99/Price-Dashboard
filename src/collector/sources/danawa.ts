@@ -110,22 +110,24 @@ export function parseProductPage(html: string): DanawaProductPage {
     return m ? m[1] : null;
   };
   const pcodeM = /productCode\s*[=:]\s*['"](\d+)['"]/.exec(html);
+  const productCode = pcodeM ? pcodeM[1] : null;
 
-  // SSR 요약 최저가 — 두 단계 전략.
-  // 1차: data-base-price 속성 (실제 다나와 HTML의 `.lowest` 컨테이너에 존재, 안정적).
-  // 2차: `.lowest` 컨테이너 → <em class="prc_c"> 거리창 2000자(클래스와 em 사이에
-  //      배지/sell-price 영역이 200자 초과로 끼어 기존 정규식이 null을 반환하는 버그 수정).
-  const basePriceM = /class="[^"]*\blowest\b[^"]*"[^>]*data-base-price="(\d+)"/.exec(html)
-    ?? /data-base-price="(\d+)"[^>]*class="[^"]*\blowest\b/.exec(html);
-  const lowestClassM =
-    /class="[^"]*\blowest\b[^"]*"[\s\S]{0,2000}?<em class="prc_c">([\d,]+)<\/em>/.exec(
-      html
-    );
-  const sumRaw = basePriceM
-    ? basePriceM[1]                         // data-base-price (숫자, 콤마 없음)
-    : lowestClassM
-      ? lowestClassM[1]                     // prc_c em (콤마 있을 수 있음)
-      : null;
+  // SSR 요약 최저가 — 2026-06 라이브 info 페이지 실측 앵커 기반(2가지).
+  // 1차(가장 안정적): id="min_price_{pcode}" hidden input value. 콤마 없는 숫자값.
+  //   속성 순서(id-먼저·value-먼저)가 바뀔 수 있어 양방향 매칭.
+  //   productCode 를 페이지 내부에서 파싱했으므로 specific하게 쓰되,
+  //   미파싱 시 generic 패턴(id="min_price_\d+")으로 폴백.
+  // 2차(보조): og:description content에서 "최저가 N,NNN원" 추출.
+  // ※ data-base-price / .lowest+prc_c 전략은 ajax mall list 응답 마크업 — info 페이지에 없으므로 제거.
+  const minPriceRe = productCode
+    ? new RegExp(`id="min_price_${productCode}"[^>]*value="(\\d+)"`)
+    : /id="min_price_\d+"[^>]*value="(\d+)"/;
+  const minPriceRevRe = productCode
+    ? new RegExp(`value="(\\d+)"[^>]*id="min_price_${productCode}"`)
+    : /value="(\d+)"[^>]*id="min_price_\d+"/;
+  const minPriceM = minPriceRe.exec(html) ?? minPriceRevRe.exec(html);
+  const ogDescM = /content="[^"]*최저가\s*([\d,]+)\s*원/.exec(html);
+  const sumRaw = minPriceM?.[1] ?? ogDescM?.[1] ?? null;
 
   const ogM = /<meta\s+property="og:title"\s+content="([^"]+)"/.exec(html);
   const titleM = /<title>([^<]+)<\/title>/.exec(html);

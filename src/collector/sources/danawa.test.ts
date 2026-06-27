@@ -50,11 +50,13 @@ const MALL_LIST_NO_COUPANG = `
     <em class="prc_c">1,520,000</em></td></tr>
 </tbody>`;
 
+// 실제 라이브 다나와 info 페이지 앵커 라인을 그대로 사용 (2026-06 실측).
 const INFO_PAGE = `<!doctype html><html><head>
 <meta property="og:title" content="로보락 S10 MaxV Ultra (정품)">
+<meta property="og:description" content="최저가 1,571,700원">
 <title>로보락 - 다나와</title></head><body>
 <script>var cate1='862'; var cate2='874'; var cate3='12366'; var cate4='0'; var productCode = '106736861';</script>
-<div class="summary"><span class="price lowest"><em class="prc_c">1,571,700</em></span></div>
+<input type="hidden" id="min_price_106736861" value="1571700">
 </body></html>`;
 
 const SEARCH_PAGE = `<ul class="product_list">
@@ -111,65 +113,34 @@ test("parseProductPage: cate/productCode/요약최저가/상품명 추출(단순
   assert.equal(p.productName, "로보락 S10 MaxV Ultra (정품)");
 });
 
-// 실제 다나와 HTML 픽스처: .lowest 컨테이너와 <em class="prc_c"> 사이에 배지/sell-price 영역이
-// 200자를 초과해 끼어 있어 기존 정규식(거리 200자 제한)이 null을 반환하는 버그를 재현한다.
-// data-base-price 속성을 1차 파서로, 2000자 창을 2차로 사용해야 올바른 값을 반환해야 한다.
-const INFO_PAGE_REAL_HTML = `<!doctype html><html><head>
-<meta property="og:title" content="로보락 S10 MaxV Ultra (화이트) (정품)">
-<title>로보락 S10 MaxV Ultra - 다나와</title></head><body>
-<script>var cate1='862'; var cate2='874'; var cate3='12366'; var cate4='0'; var productCode = '106736861';</script>
-<div class="box__price lowest" data-base-price="1571700">
-  <div class="box__sell-price">
-    <span class="txt__sell-price">최저</span>
-    <span class="badge_area">
-      <span class="badge badge--red badge--square">최저가</span>
-      <span class="badge badge--gray">가격비교</span>
-      <span class="badge badge--blue">인증판매자</span>
-    </span>
-    <span class="price_list">
-      <span class="txt__price-info">이 제품의 최저가는</span>
-      <em class="prc_c">1,571,700</em>
-      <em class="unit">원</em>
-    </span>
-    <a href="..." class="btn__buy">최저가 구매</a>
-  </div>
-</div>
+// ── 실제 라이브 다나와 info 페이지 앵커(스파이크 실측, pcode 106736861) ──
+// 라이브 페이지엔 data-base-price도 `box__price lowest`+prc_c도 없다. 요약 최저가는
+// hidden input id="min_price_{pcode}" 와 og:description 에만 존재한다.
+// (예전 합성 data-base-price 픽스처는 테스트 통과해도 라이브에선 null 이던 버그를 재현·고정한다.)
+const INFO_PAGE_LIVE_ANCHORS = `<!doctype html><html><head>
+<meta property="og:title" content="로보락 S10 MaxV Ultra (화이트)">
+<meta property="og:description" content="최저가 1,571,700원"/>
+<title>로보락 S10 MaxV Ultra (화이트) : 다나와 가격비교</title></head><body>
+<script>var cate1=72; var cate2=80; var cate3=88; var cate4=0;</script>
+<script>var productCode = '106736861';</script>
+<input type="hidden" id="min_price_106736861" value="1571700" />
+<input type="hidden" id="strDeliveryFee" value="1,571,700원+무료배송" />
 </body></html>`;
 
-// data-base-price 속성 사용(1차 파서): .lowest와 <em> 사이 거리 무관
-test("parseProductPage: 실제 HTML(200자 초과 배지 영역) — data-base-price 1차 파서", () => {
-  const p = parseProductPage(INFO_PAGE_REAL_HTML);
-  assert.equal(p.summaryLowest, 1571700, "summaryLowest가 null이면 파서 버그");
-  assert.equal(p.productName, "로보락 S10 MaxV Ultra (화이트) (정품)");
-  assert.equal(p.cate.cate1, "862");
+test("parseProductPage: 실제 라이브 앵커 — min_price hidden input 1차 (data-base-price/.lowest 부재)", () => {
+  // 회귀 방지: 라이브 마크업엔 data-base-price 가 없어야 진짜 라이브 조건이다.
+  assert.ok(!/data-base-price/.test(INFO_PAGE_LIVE_ANCHORS), "픽스처에 data-base-price 없어야 라이브 재현");
+  assert.ok(!/box__price lowest/.test(INFO_PAGE_LIVE_ANCHORS), "픽스처에 .lowest+prc_c 없어야 라이브 재현");
+  const p = parseProductPage(INFO_PAGE_LIVE_ANCHORS);
+  assert.equal(p.summaryLowest, 1571700, "min_price 앵커로 못 잡으면 라이브 버그 재발");
+  assert.equal(p.productCode, "106736861");
+  assert.deepEqual(p.cate, { cate1: "72", cate2: "80", cate3: "88", cate4: "0" });
 });
 
-// 2차 파서(data-base-price 없음, 2000자 창 사용) 검증 — 배지 영역이 200~2000자 사이
-const INFO_PAGE_NO_DATA_ATTR = `<!doctype html><html><head>
-<meta property="og:title" content="DJI 오즈모 포켓4 (정품)">
-<title>DJI 오즈모 - 다나와</title></head><body>
-<script>var cate1='100'; var cate2='200'; var cate3='300'; var cate4='0'; var productCode = '122628409';</script>
-<div class="box__price lowest">
-  <div class="box__sell-price">
-    <span class="txt__sell-price">최저</span>
-    <span class="badge_area">
-      ${"<span class='badge'>배지내용</span>".repeat(15)}
-    </span>
-    <span class="price_list">
-      <em class="prc_c">662,000</em>
-      <em class="unit">원</em>
-    </span>
-  </div>
-</div>
-</body></html>`;
-
-test("parseProductPage: data-base-price 없고 배지 영역 200자 초과 — 2000자 창 폴백 파서", () => {
-  const p = parseProductPage(INFO_PAGE_NO_DATA_ATTR);
-  // 배지 반복이 200자를 넘어야 기존 버그가 재현된다 — 실제로 넘는지 확인
-  const distanceInHtml = INFO_PAGE_NO_DATA_ATTR.indexOf('<em class="prc_c">662,000</em>') -
-    INFO_PAGE_NO_DATA_ATTR.indexOf('class="box__price lowest"');
-  assert.ok(distanceInHtml > 200, `배지 영역이 ${distanceInHtml}자 — 픽스처 수정 필요`);
-  assert.equal(p.summaryLowest, 662000, "summaryLowest가 null이면 2차 파서 버그");
+test("parseProductPage: min_price 없고 og:description만 있어도 요약최저가 추출(2차 앵커)", () => {
+  const noMinPrice = INFO_PAGE_LIVE_ANCHORS.replace(/<input type="hidden" id="min_price_[^>]*>/, "");
+  const p = parseProductPage(noMinPrice);
+  assert.equal(p.summaryLowest, 1571700, "og:description 폴백 실패");
 });
 
 test("parseSearchCandidates + matchCandidates: pcode 후보 해석 + 해외구매 제외 + mustInclude", () => {
