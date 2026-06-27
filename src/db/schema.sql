@@ -58,6 +58,19 @@ CREATE TABLE IF NOT EXISTS product_sources (
   PRIMARY KEY (product_id, source)
 );
 
+-- 소스별 당일 fetch 캐시 (§11 하드요구사항: 상품×소스당 하루 1회 네트워크 절대 금지)
+-- PK (product_id, source, date): 같은 날 재실행 시 캐시 hit → 소스 재호출 없음.
+-- 모든 터미널 상태(ok/blocked/not-listed/parse-error/empty)를 캐시 — 실패도 당일 재요청 금지.
+CREATE TABLE IF NOT EXISTS source_fetch_cache (
+  product_id  INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  source      TEXT NOT NULL,    -- 'danawa' | 'enuri' | 'llm-websearch'
+  date        TEXT NOT NULL,    -- YYYY-MM-DD
+  status      TEXT NOT NULL,
+  result_json TEXT NOT NULL,    -- JSON(SourcePriceResult)
+  fetched_at  TEXT NOT NULL,    -- ISO datetime
+  PRIMARY KEY (product_id, source, date)
+);
+
 -- 수집 실행 로그 (catch-up 판단/감사용)
 CREATE TABLE IF NOT EXISTS collect_runs (
   date        TEXT PRIMARY KEY,  -- YYYY-MM-DD, 하루 1행 (멱등)

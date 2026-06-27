@@ -13,6 +13,7 @@ import type {
   ProductSource,
   UpsertProductSourceInput,
 } from "../../shared/types.ts";
+import type { SourcePriceResult } from "../collector/sources/types.ts";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -483,6 +484,49 @@ export function hasSuccessfulRun(date: string): boolean {
   return r?.ok === 1;
 }
 
+// ── 소스 당일 fetch 캐시 (§11: 상품×소스×날짜 하루 1회) ──
+
+/**
+ * 당일 캐시 조회. 모든 터미널 상태(ok/blocked/not-listed/parse-error/empty)가 캐시됨.
+ * hit이면 source.fetch를 호출하지 않고 이 결과를 그대로 사용한다.
+ */
+export function getSourceFetchCache(
+  productId: number,
+  source: string,
+  date: string
+): SourcePriceResult | null {
+  const r = db()
+    .prepare(
+      "SELECT result_json FROM source_fetch_cache WHERE product_id = ? AND source = ? AND date = ?"
+    )
+    .get(productId, source, date) as { result_json: string } | undefined;
+  if (!r) return null;
+  try {
+    return JSON.parse(r.result_json) as SourcePriceResult;
+  } catch {
+    return null;
+  }
+}
+
+/** 소스 결과 캐시 기록. ON CONFLICT 시 덮어쓰기(같은 날 재실행 멱등). */
+export function putSourceFetchCache(
+  productId: number,
+  source: string,
+  date: string,
+  result: SourcePriceResult
+): void {
+  db()
+    .prepare(
+      `INSERT INTO source_fetch_cache (product_id, source, date, status, result_json, fetched_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(product_id, source, date) DO UPDATE SET
+         status=excluded.status,
+         result_json=excluded.result_json,
+         fetched_at=excluded.fetched_at`
+    )
+    .run(productId, source, date, result.status, JSON.stringify(result), result.fetchedAt);
+}
+
 // ── 보존 정책 ───────────────────────────────────────────
 
 export function pruneOldData(retentionDays: number): number {
@@ -493,5 +537,6 @@ export function pruneOldData(retentionDays: number): number {
     .run(cutoffStr);
   conn.prepare("DELETE FROM listings WHERE date < ?").run(cutoffStr);
   conn.prepare("DELETE FROM reviews WHERE date < ?").run(cutoffStr);
+  conn.prepare("DELETE FROM source_fetch_cache WHERE date < ?").run(cutoffStr);
   return Number(info.changes);
 }

@@ -5,7 +5,7 @@ import type { ResearchResult } from "./research.ts";
 import { createDanawaSource } from "./sources/danawa.ts";
 import { createEnuriSource } from "./sources/enuri.ts";
 import { createLlmWebsearchSource } from "./sources/llm-websearch.ts";
-import { collectFromSources } from "./sources/orchestrator.ts";
+import { collectFromSources, type FetchCache } from "./sources/orchestrator.ts";
 import { delay, jitterMs } from "./sources/http.ts";
 import type { PriceSource, SourceId, SourceRef, SourcePriceResult } from "./sources/types.ts";
 import {
@@ -19,6 +19,8 @@ import {
   getRunResult,
   getProductSummary,
   pruneOldData,
+  getSourceFetchCache,
+  putSourceFetchCache,
 } from "../db/repo.ts";
 import { sendEmailReport } from "../notify/email.ts";
 import type { CollectResult, PricePoint, Product, Review } from "../../shared/types.ts";
@@ -146,9 +148,16 @@ async function collectProduct(
     return null;
   };
 
+  // §11 당일 캐시: (product_id, source, date) 기준. 모든 터미널 상태를 캐시.
+  const cache: FetchCache = {
+    get: (ref) => getSourceFetchCache(product.id, ref.source, date),
+    set: (ref, result) => putSourceFetchCache(product.id, ref.source, date, result),
+  };
+
   const { chosen } = await collectFromSources({
     refs,
     getSource,
+    cache,
     label: product.name,
     onBlocked: (r) =>
       log.warn(`소스 차단 [${product.name}/${r.source}] → 당일 스킵 + 폴백`),
