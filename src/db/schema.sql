@@ -47,6 +47,17 @@ CREATE TABLE IF NOT EXISTS reviews (
   PRIMARY KEY (product_id, date, idx)
 );
 
+-- 상품 × 소스 고정 ref (watchlist 핵심, pcode 드리프트 방지)
+CREATE TABLE IF NOT EXISTS product_sources (
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  source     TEXT NOT NULL,              -- 'danawa' | 'enuri' | 'llm-websearch'
+  ref_id     TEXT,                       -- pcode 등 (LLM은 null)
+  url        TEXT NOT NULL,
+  confirmed  INTEGER NOT NULL DEFAULT 0, -- 사람이 확정했는지 (1이어야 매일 재조회)
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (product_id, source)
+);
+
 -- 수집 실행 로그 (catch-up 판단/감사용)
 CREATE TABLE IF NOT EXISTS collect_runs (
   date        TEXT PRIMARY KEY,  -- YYYY-MM-DD, 하루 1행 (멱등)

@@ -10,6 +10,8 @@ import type {
   ProductHistory,
   ChangeDirection,
   CollectResult,
+  ProductSource,
+  UpsertProductSourceInput,
 } from "../../shared/types.ts";
 
 function nowIso(): string {
@@ -46,6 +48,10 @@ interface PointRow {
   avg_price: number | null;
   overall_lowest: number | null;
   lowest_source: string;
+  // 신규 컬럼 (ALTER 로 추가, 기존 행은 null)
+  coupang_is_rocket?: number | null;
+  lowest_mall?: string | null;
+  source?: string | null;
 }
 
 function rowToPoint(r: PointRow): PricePoint {
@@ -57,6 +63,30 @@ function rowToPoint(r: PointRow): PricePoint {
     avgPrice: r.avg_price,
     overallLowest: r.overall_lowest,
     lowestSource: r.lowest_source ?? "",
+    coupangIsRocket:
+      r.coupang_is_rocket == null ? null : r.coupang_is_rocket === 1,
+    lowestMall: r.lowest_mall ?? null,
+    source: r.source ?? null,
+  };
+}
+
+interface ProductSourceRow {
+  product_id: number;
+  source: string;
+  ref_id: string | null;
+  url: string;
+  confirmed: number;
+  created_at: string;
+}
+
+function rowToProductSource(r: ProductSourceRow): ProductSource {
+  return {
+    productId: r.product_id,
+    source: r.source,
+    refId: r.ref_id,
+    url: r.url,
+    confirmed: r.confirmed === 1,
+    createdAt: r.created_at,
   };
 }
 
@@ -139,8 +169,8 @@ export function upsertPricePoint(
   db()
     .prepare(
       `INSERT INTO price_points
-         (product_id, date, naver_lowest, coupang_lowest, danawa_lowest, avg_price, overall_lowest, lowest_source, collected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (product_id, date, naver_lowest, coupang_lowest, danawa_lowest, avg_price, overall_lowest, lowest_source, collected_at, coupang_is_rocket, lowest_mall, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(product_id, date) DO UPDATE SET
          naver_lowest=excluded.naver_lowest,
          coupang_lowest=excluded.coupang_lowest,
@@ -148,7 +178,10 @@ export function upsertPricePoint(
          avg_price=excluded.avg_price,
          overall_lowest=excluded.overall_lowest,
          lowest_source=excluded.lowest_source,
-         collected_at=excluded.collected_at`
+         collected_at=excluded.collected_at,
+         coupang_is_rocket=excluded.coupang_is_rocket,
+         lowest_mall=excluded.lowest_mall,
+         source=excluded.source`
     )
     .run(
       productId,
@@ -159,7 +192,10 @@ export function upsertPricePoint(
       p.avgPrice,
       p.overallLowest,
       p.lowestSource ?? "",
-      collectedAt
+      collectedAt,
+      p.coupangIsRocket == null ? null : p.coupangIsRocket ? 1 : 0,
+      p.lowestMall ?? null,
+      p.source ?? null
     );
 }
 
@@ -338,6 +374,62 @@ export function getProductHistory(id: number, sinceDate?: string): ProductHistor
   const product = getProduct(id);
   if (!product) return null;
   return { product, points: getHistory(id, sinceDate) };
+}
+
+// ── 상품 × 소스 ref (watchlist) ─────────────────────────
+
+/** 상품의 모든 소스 ref. 우선순위(danawa→enuri→llm-websearch)로 정렬해 반환. */
+export function listProductSources(productId: number): ProductSource[] {
+  const rows = db()
+    .prepare("SELECT * FROM product_sources WHERE product_id = ?")
+    .all(productId) as unknown as ProductSourceRow[];
+  const order: Record<string, number> = { danawa: 0, enuri: 1, "llm-websearch": 2 };
+  return rows
+    .map(rowToProductSource)
+    .sort((a, b) => (order[a.source] ?? 99) - (order[b.source] ?? 99));
+}
+
+/** 확정(confirmed=1)된 소스 ref만, 우선순위 정렬. 매일 수집은 이것만 재조회. */
+export function listConfirmedSources(productId: number): ProductSource[] {
+  return listProductSources(productId).filter((s) => s.confirmed);
+}
+
+export function getProductSource(productId: number, source: string): ProductSource | null {
+  const r = db()
+    .prepare("SELECT * FROM product_sources WHERE product_id = ? AND source = ?")
+    .get(productId, source) as ProductSourceRow | undefined;
+  return r ? rowToProductSource(r) : null;
+}
+
+/** (product_id, source) 기준 멱등 upsert. confirmed 미지정 시 기존값 유지(신규는 0). */
+export function upsertProductSource(input: UpsertProductSourceInput): ProductSource {
+  const existing = getProductSource(input.productId, input.source);
+  const confirmed =
+    input.confirmed != null ? (input.confirmed ? 1 : 0) : existing ? (existing.confirmed ? 1 : 0) : 0;
+  db()
+    .prepare(
+      `INSERT INTO product_sources (product_id, source, ref_id, url, confirmed, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(product_id, source) DO UPDATE SET
+         ref_id=excluded.ref_id,
+         url=excluded.url,
+         confirmed=excluded.confirmed`
+    )
+    .run(
+      input.productId,
+      input.source,
+      input.refId,
+      input.url,
+      confirmed,
+      existing?.createdAt ?? nowIso()
+    );
+  return getProductSource(input.productId, input.source)!;
+}
+
+export function deleteProductSource(productId: number, source: string): void {
+  db()
+    .prepare("DELETE FROM product_sources WHERE product_id = ? AND source = ?")
+    .run(productId, source);
 }
 
 // ── 수집 실행 로그 ──────────────────────────────────────
