@@ -1,10 +1,15 @@
-// 에누리 소스 — 폴백 골격(문서 §2 작업2).
-// 에누리 robots 는 친화적(Allow:/, Crawl-delay 1s, ClaudeBot 허용)이나
-// 쿠팡가 노출 방식(SSR vs 허용 ajax)이 스파이크에서 미검증.
-// 따라서 깊이 구현하지 않고, resolve/fetch 최소 골격 + 차단/미편입 분기만 둔다.
+// 에누리 소스 — 폴백(문서 §2 작업2). 2026-06 라이브 실측 기반 구현.
 //
-// TODO: 쿠팡가 노출 방식 미검증 — 상세(/detail.jsp 등)에서 쿠팡 판매가가
-//   SSR HTML 인지 허용 ajax 인지 1회 실측 후 파서 구현. 그 전까지 fetch 는 not-listed/empty.
+// 실측 결과(스파이크):
+// - robots 친화적: Allow:/, Crawl-delay 1s, ClaudeBot 허용, ajax 디스얼로우 없음. /detail.jsp 허용.
+// - ⚠️ 에누리는 **쿠팡 개별가/로켓을 깔끔히 노출하지 않는다.** SSR HTML에 "쿠팡" 0회,
+//   쿠팡 토큰은 기획전(coupangexh.jsp)·광고(ad_coupang)뿐 — 다나와 cmpnyc=TP40F 같은
+//   판매처 가격 행이 없다. 따라서 enuri 에서 쿠팡 개별가는 추출 불가 → coupang=null 고정.
+// - 단, **전체 최저가는 매우 안정적으로 노출**: JSON-LD schema.org Product "lowPrice"(1차),
+//   og:description "최저가 N원"(2차). 상품명은 og:title.
+//
+// 역할: 다나와(1차)가 차단/실패했을 때 **전체 최저가 시계열을 유지**하는 폴백.
+//   쿠팡 개별가가 필요하면 폴백 체인이 llm-websearch 로 이어진다.
 
 import { log } from "../../util/log.ts";
 import {
@@ -22,9 +27,37 @@ export interface EnuriDeps {
   now?: () => string;
 }
 
-/** 에누리 검색 HTML → 상품 상세 링크 후보(최소 파싱). 매칭/확정은 사람 검수에 위임. */
+function parsePriceNum(s: string): number | null {
+  const n = Number(s.replace(/[,\s]/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export interface EnuriDetail {
+  productName: string | null;
+  /** 전체 최저가(원). 쿠팡 개별가가 아니라 에누리 집계 최저가. */
+  overallLowest: number | null;
+}
+
+/** 에누리 상세 HTML → 전체 최저가 + 상품명. 순수함수(고정 픽스처로 단위테스트). */
+export function parseEnuriDetail(html: string): EnuriDetail {
+  // 전체 최저가 — 라이브 실측 안정 앵커.
+  // 1차: JSON-LD schema.org Product "lowPrice": N (구조화 데이터, 가장 안정적)
+  // 2차: og:description content="최저가 N원"
+  const ldM = /"lowPrice"\s*:\s*"?([\d,]+)"?/.exec(html);
+  const ogM = /<meta\s+property="og:description"\s+content="[^"]*최저가\s*([\d,]+)\s*원/.exec(html);
+  const raw = ldM?.[1] ?? ogM?.[1] ?? null;
+  const overallLowest = raw ? parsePriceNum(raw) : null;
+
+  const ogTitleM = /<meta\s+property="og:title"\s+content="([^"]+)"/.exec(html);
+  const productName = ogTitleM
+    ? ogTitleM[1].replace(/\s*-\s*에누리\s*가격비교\s*$/, "").trim() || null
+    : null;
+
+  return { productName, overallLowest };
+}
+
+/** 에누리 검색 HTML → 상품 상세 링크 후보(modelno). 매칭/확정은 사람 검수에 위임. */
 export function parseEnuriCandidates(html: string): Array<{ refId: string; url: string; title: string }> {
-  // TODO: 쿠팡가 노출 방식 미검증 — 상세 페이지 모델번호 추출 패턴도 실측 후 확정.
   const out: Array<{ refId: string; url: string; title: string }> = [];
   const re = /href="([^"]*\/detail\.jsp\?[^"]*modelno=(\d+)[^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
   const seen = new Set<string>();
@@ -39,7 +72,7 @@ export function parseEnuriCandidates(html: string): Array<{ refId: string; url: 
   return out;
 }
 
-/** 에누리 PriceSource 인스턴스 생성 (폴백 골격). */
+/** 에누리 PriceSource 인스턴스 생성. 전체최저가 폴백(쿠팡 개별가는 미노출 → null). */
 export function createEnuriSource(deps: EnuriDeps = {}): PriceSource {
   const fetcher = deps.fetcher ?? realFetcher;
   const now = deps.now ?? (() => new Date().toISOString());
@@ -80,14 +113,24 @@ export function createEnuriSource(deps: EnuriDeps = {}): PriceSource {
     },
 
     async fetch(ref: SourceRef): Promise<SourcePriceResult> {
-      // TODO: 쿠팡가 노출 방식 미검증 — 현재는 차단 감지만 하고 가격 추출은 미구현.
       try {
         const res = await fetcher(ref.url, {
           headers: baseHeaders({ Referer: "https://www.enuri.com/" }),
         });
         if (looksBlocked(res)) return base("blocked", { raw: { stage: "detail" } });
-        // 파서 미구현 → 쿠팡가/최저가 추출 불가. 폴백 체인이 llm-websearch 로 이어진다.
-        return base("not-listed", { raw: { note: "enuri 파서 미구현(미검증)" } });
+
+        const d = parseEnuriDetail(res.body);
+        if (d.overallLowest == null) {
+          return base("not-listed", {
+            productName: d.productName,
+            raw: { note: "에누리 최저가 추출 실패" },
+          });
+        }
+        // 에누리는 쿠팡 개별가/로켓 미노출 → coupang 은 null. 전체최저가만 채운다.
+        return base("ok", {
+          productName: d.productName,
+          overallLowest: { price: d.overallLowest, mall: "에누리최저가", url: ref.url },
+        });
       } catch (e) {
         return base("parse-error", { raw: { error: (e as Error).message } });
       }
