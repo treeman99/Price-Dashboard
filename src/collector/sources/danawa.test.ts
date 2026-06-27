@@ -103,12 +103,73 @@ test("parseOverallLowest: 최저가 배지가 다른 몰이면 그 몰을 반환
   assert.equal(r!.mall, "네이버");
 });
 
-test("parseProductPage: cate/productCode/요약최저가/상품명 추출", () => {
+test("parseProductPage: cate/productCode/요약최저가/상품명 추출(단순 픽스처)", () => {
   const p = parseProductPage(INFO_PAGE);
   assert.deepEqual(p.cate, { cate1: "862", cate2: "874", cate3: "12366", cate4: "0" });
   assert.equal(p.productCode, "106736861");
   assert.equal(p.summaryLowest, 1571700);
   assert.equal(p.productName, "로보락 S10 MaxV Ultra (정품)");
+});
+
+// 실제 다나와 HTML 픽스처: .lowest 컨테이너와 <em class="prc_c"> 사이에 배지/sell-price 영역이
+// 200자를 초과해 끼어 있어 기존 정규식(거리 200자 제한)이 null을 반환하는 버그를 재현한다.
+// data-base-price 속성을 1차 파서로, 2000자 창을 2차로 사용해야 올바른 값을 반환해야 한다.
+const INFO_PAGE_REAL_HTML = `<!doctype html><html><head>
+<meta property="og:title" content="로보락 S10 MaxV Ultra (화이트) (정품)">
+<title>로보락 S10 MaxV Ultra - 다나와</title></head><body>
+<script>var cate1='862'; var cate2='874'; var cate3='12366'; var cate4='0'; var productCode = '106736861';</script>
+<div class="box__price lowest" data-base-price="1571700">
+  <div class="box__sell-price">
+    <span class="txt__sell-price">최저</span>
+    <span class="badge_area">
+      <span class="badge badge--red badge--square">최저가</span>
+      <span class="badge badge--gray">가격비교</span>
+      <span class="badge badge--blue">인증판매자</span>
+    </span>
+    <span class="price_list">
+      <span class="txt__price-info">이 제품의 최저가는</span>
+      <em class="prc_c">1,571,700</em>
+      <em class="unit">원</em>
+    </span>
+    <a href="..." class="btn__buy">최저가 구매</a>
+  </div>
+</div>
+</body></html>`;
+
+// data-base-price 속성 사용(1차 파서): .lowest와 <em> 사이 거리 무관
+test("parseProductPage: 실제 HTML(200자 초과 배지 영역) — data-base-price 1차 파서", () => {
+  const p = parseProductPage(INFO_PAGE_REAL_HTML);
+  assert.equal(p.summaryLowest, 1571700, "summaryLowest가 null이면 파서 버그");
+  assert.equal(p.productName, "로보락 S10 MaxV Ultra (화이트) (정품)");
+  assert.equal(p.cate.cate1, "862");
+});
+
+// 2차 파서(data-base-price 없음, 2000자 창 사용) 검증 — 배지 영역이 200~2000자 사이
+const INFO_PAGE_NO_DATA_ATTR = `<!doctype html><html><head>
+<meta property="og:title" content="DJI 오즈모 포켓4 (정품)">
+<title>DJI 오즈모 - 다나와</title></head><body>
+<script>var cate1='100'; var cate2='200'; var cate3='300'; var cate4='0'; var productCode = '122628409';</script>
+<div class="box__price lowest">
+  <div class="box__sell-price">
+    <span class="txt__sell-price">최저</span>
+    <span class="badge_area">
+      ${"<span class='badge'>배지내용</span>".repeat(15)}
+    </span>
+    <span class="price_list">
+      <em class="prc_c">662,000</em>
+      <em class="unit">원</em>
+    </span>
+  </div>
+</div>
+</body></html>`;
+
+test("parseProductPage: data-base-price 없고 배지 영역 200자 초과 — 2000자 창 폴백 파서", () => {
+  const p = parseProductPage(INFO_PAGE_NO_DATA_ATTR);
+  // 배지 반복이 200자를 넘어야 기존 버그가 재현된다 — 실제로 넘는지 확인
+  const distanceInHtml = INFO_PAGE_NO_DATA_ATTR.indexOf('<em class="prc_c">662,000</em>') -
+    INFO_PAGE_NO_DATA_ATTR.indexOf('class="box__price lowest"');
+  assert.ok(distanceInHtml > 200, `배지 영역이 ${distanceInHtml}자 — 픽스처 수정 필요`);
+  assert.equal(p.summaryLowest, 662000, "summaryLowest가 null이면 2차 파서 버그");
 });
 
 test("parseSearchCandidates + matchCandidates: pcode 후보 해석 + 해외구매 제외 + mustInclude", () => {

@@ -110,11 +110,23 @@ export function parseProductPage(html: string): DanawaProductPage {
     return m ? m[1] : null;
   };
   const pcodeM = /productCode\s*[=:]\s*['"](\d+)['"]/.exec(html);
-  // SSR 요약 최저가: <span class="price lowest"> ... <em class="prc_c">NNN</em>
-  const sumM =
-    /class="[^"]*\blowest\b[^"]*"[\s\S]{0,200}?<em class="prc_c">([\d,]+)<\/em>/.exec(
+
+  // SSR 요약 최저가 — 두 단계 전략.
+  // 1차: data-base-price 속성 (실제 다나와 HTML의 `.lowest` 컨테이너에 존재, 안정적).
+  // 2차: `.lowest` 컨테이너 → <em class="prc_c"> 거리창 2000자(클래스와 em 사이에
+  //      배지/sell-price 영역이 200자 초과로 끼어 기존 정규식이 null을 반환하는 버그 수정).
+  const basePriceM = /class="[^"]*\blowest\b[^"]*"[^>]*data-base-price="(\d+)"/.exec(html)
+    ?? /data-base-price="(\d+)"[^>]*class="[^"]*\blowest\b/.exec(html);
+  const lowestClassM =
+    /class="[^"]*\blowest\b[^"]*"[\s\S]{0,2000}?<em class="prc_c">([\d,]+)<\/em>/.exec(
       html
     );
+  const sumRaw = basePriceM
+    ? basePriceM[1]                         // data-base-price (숫자, 콤마 없음)
+    : lowestClassM
+      ? lowestClassM[1]                     // prc_c em (콤마 있을 수 있음)
+      : null;
+
   const ogM = /<meta\s+property="og:title"\s+content="([^"]+)"/.exec(html);
   const titleM = /<title>([^<]+)<\/title>/.exec(html);
   const name = ogM ? stripTags(ogM[1]) : titleM ? stripTags(titleM[1]) : null;
@@ -122,7 +134,7 @@ export function parseProductPage(html: string): DanawaProductPage {
   return {
     cate: { cate1: cateOf(1), cate2: cateOf(2), cate3: cateOf(3), cate4: cateOf(4) },
     productCode: pcodeM ? pcodeM[1] : null,
-    summaryLowest: sumM ? parsePriceNum(sumM[1]) : null,
+    summaryLowest: sumRaw != null ? parsePriceNum(sumRaw) : null,
     productName: name,
   };
 }
