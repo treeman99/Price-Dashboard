@@ -15,7 +15,12 @@ import {
   deleteProductHard,
   getProduct,
   getRunResult,
+  listProductSources,
+  upsertProductSource,
+  deleteProductSource,
 } from "../db/repo.ts";
+import { parseSourceInput } from "./sources.ts";
+import { resolveCandidates } from "./resolve.ts";
 import { runCollection } from "../collector/collect.ts";
 import { getEventsSnapshot, refreshEvents } from "../events/events.ts";
 import { getNewsSnapshot, refreshNews } from "../news/news.ts";
@@ -29,6 +34,7 @@ import {
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type { CreateProductInput, PeriodDays } from "../../shared/types.ts";
+import type { ResolveQuery } from "../collector/sources/types.ts";
 
 export const api = Router();
 
@@ -136,6 +142,62 @@ api.post("/products/:id/reactivate", (req, res) => {
   if (!getProduct(id)) return res.status(404).json({ error: "상품 없음" });
   setProductActive(id, true);
   res.json({ ok: true });
+});
+
+// ── 상품 × 소스 ref (watchlist / pcode 확정) ──────────────
+
+/** 상품의 소스 ref 목록 (danawa→enuri→llm 정렬). */
+api.get("/products/:id/sources", (req, res) => {
+  const id = Number(req.params.id);
+  if (!getProduct(id)) return res.status(404).json({ error: "상품 없음" });
+  res.json(listProductSources(id));
+});
+
+/**
+ * 소스 ref upsert (pcode 확정/수정). (product_id, source) 멱등.
+ * confirmed:true 로 보내면 그 소스를 사람이 확정한 것으로 표시(매일 고정 ref 재조회 대상).
+ */
+api.post("/products/:id/sources", (req, res) => {
+  const id = Number(req.params.id);
+  if (!getProduct(id)) return res.status(404).json({ error: "상품 없음" });
+  const parsed = parseSourceInput(id, req.body);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  res.json(upsertProductSource(parsed.value));
+});
+
+/** 소스 ref 삭제. */
+api.delete("/products/:id/sources/:source", (req, res) => {
+  const id = Number(req.params.id);
+  if (!getProduct(id)) return res.status(404).json({ error: "상품 없음" });
+  deleteProductSource(id, req.params.source);
+  res.json({ ok: true });
+});
+
+/**
+ * resolve 프록시: 상품의 name/mustInclude/mustExclude/minPrice 로 가격비교 검색 1회 호출,
+ * 사람이 고를 pcode 후보(refId/title/url)를 반환. 사람이 하나 골라 POST(confirmed:true)로 확정한다.
+ * 외부 호출 실패/차단 시에도 200 + { candidates: [], note } 로 안내(서버 죽이지 않음).
+ */
+api.get("/products/:id/resolve", async (req, res) => {
+  const id = Number(req.params.id);
+  const product = getProduct(id);
+  if (!product) return res.status(404).json({ error: "상품 없음" });
+  const source =
+    typeof req.query.source === "string" && req.query.source.trim()
+      ? req.query.source.trim()
+      : "danawa";
+  const q: ResolveQuery = {
+    name: product.name,
+    mustInclude: product.mustInclude,
+    mustExclude: product.mustExclude,
+    minPrice: product.minPrice,
+  };
+  try {
+    res.json(await resolveCandidates(source, q));
+  } catch (e) {
+    // resolveCandidates 가 자체 try/catch 하지만 최종 안전망.
+    res.json({ source, candidates: [], note: `resolve 실패: ${(e as Error).message}` });
+  }
 });
 
 /** launchd 서비스 설치 여부 */
