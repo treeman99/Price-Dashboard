@@ -150,12 +150,7 @@ export function upsertProductByName(input: CreateProductInput): Product {
   return createProduct(input);
 }
 
-export function setProductActive(id: number, active: boolean): void {
-  db()
-    .prepare("UPDATE products SET active = ? WHERE id = ?")
-    .run(active ? 1 : 0, id);
-}
-
+/** 영구 삭제. FK ON DELETE CASCADE 로 price_points·listings·reviews·product_sources·source_fetch_cache 동반 정리. */
 export function deleteProductHard(id: number): void {
   db().prepare("DELETE FROM products WHERE id = ?").run(id);
 }

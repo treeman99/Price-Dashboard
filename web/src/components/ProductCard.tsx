@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Minus, Trash2, RotateCcw, Star, Rocket } from "lucide-react";
+import { ArrowDown, ArrowUp, Minus, Trash2, Star, Rocket } from "lucide-react";
 import type { ProductSummary, ProductHistory, PeriodDays } from "@shared/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -95,40 +95,30 @@ export function ProductCard({
   }, [product.id, days]);
 
   async function handleDelete() {
-    if (!confirm(`'${product.name}' 추적을 중지할까요? (이력은 보존됩니다)`)) return;
-    await api.softDelete(product.id);
-    onChanged();
-  }
-  async function handleReactivate() {
-    await api.reactivate(product.id);
+    if (
+      !confirm(
+        `'${product.name}'을(를) 영구 삭제할까요?\n가격 이력까지 모두 삭제되며 복구할 수 없습니다.`
+      )
+    )
+      return;
+    await api.deleteProduct(product.id, product.name);
     onChanged();
   }
 
   return (
-    <Card className={cn(!product.active && "opacity-60")}>
+    <Card>
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
-          <CardTitle className="flex items-center gap-2">
-            {product.name}
-            {!product.active && (
-              <Badge className="border-transparent bg-muted text-muted-foreground">추적중지</Badge>
-            )}
-          </CardTitle>
+          <CardTitle className="flex items-center gap-2">{product.name}</CardTitle>
           <div className="flex shrink-0 items-center">
             <SourceLinkDialog
               productId={product.id}
               productName={product.name}
               onChanged={onChanged}
             />
-            {product.active ? (
-              <Button variant="ghost" size="icon" onClick={handleDelete} title="추적 중지">
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            ) : (
-              <Button variant="ghost" size="icon" onClick={handleReactivate} title="추적 재개">
-                <RotateCcw className="h-4 w-4" />
-              </Button>
-            )}
+            <Button variant="ghost" size="icon" onClick={handleDelete} title="영구 삭제">
+              <Trash2 className="h-4 w-4" />
+            </Button>
           </div>
         </div>
       </CardHeader>

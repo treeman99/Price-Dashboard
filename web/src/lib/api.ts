@@ -30,8 +30,7 @@ export interface AppConfig {
 export const api = {
   config: () => fetch("/api/config").then((r) => j<AppConfig>(r)),
 
-  products: (all = false) =>
-    fetch(`/api/products${all ? "?all=1" : ""}`).then((r) => j<ProductSummary[]>(r)),
+  products: () => fetch("/api/products").then((r) => j<ProductSummary[]>(r)),
 
   history: (id: number, days: PeriodDays) =>
     fetch(`/api/products/${id}/history?days=${days}`).then((r) => j<ProductHistory>(r)),
@@ -45,16 +44,11 @@ export const api = {
       body: JSON.stringify(input),
     }).then((r) => j<ProductSummary>(r)),
 
-  softDelete: (id: number) =>
-    fetch(`/api/products/${id}`, { method: "DELETE" }).then((r) => j(r)),
-
-  hardDelete: (id: number, name: string) =>
-    fetch(`/api/products/${id}?hard=1&confirm=${encodeURIComponent(name)}`, {
+  /** 영구 삭제(가격 이력 포함). 오삭제 방지로 상품명을 confirm 으로 전달. */
+  deleteProduct: (id: number, name: string) =>
+    fetch(`/api/products/${id}?confirm=${encodeURIComponent(name)}`, {
       method: "DELETE",
     }).then((r) => j(r)),
-
-  reactivate: (id: number) =>
-    fetch(`/api/products/${id}/reactivate`, { method: "POST" }).then((r) => j(r)),
 
   collectNow: () => fetch("/api/collect", { method: "POST" }).then((r) => j<CollectResult>(r)),
 
