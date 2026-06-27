@@ -11,12 +11,11 @@ export function Dashboard() {
   const [cfg, setCfg] = useState<AppConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
-  const [showInactive, setShowInactive] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [s, c] = await Promise.all([api.products(showInactive), api.config()]);
+      const [s, c] = await Promise.all([api.products(), api.config()]);
       setSummaries(s);
       setCfg(c);
       setErr(null);
@@ -25,7 +24,7 @@ export function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [showInactive]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -53,14 +52,6 @@ export function Dashboard() {
             : " "}
         </p>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={showInactive}
-              onChange={(e) => setShowInactive(e.target.checked)}
-            />
-            중지된 항목
-          </label>
           <Button variant="outline" onClick={collectNow} disabled={collecting}>
             {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             지금 수집

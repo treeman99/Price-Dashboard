@@ -11,7 +11,6 @@ import {
   getProductHistory,
   createProduct,
   getProductByName,
-  setProductActive,
   deleteProductHard,
   getProduct,
   getRunResult,
@@ -65,11 +64,9 @@ api.get("/runs/today", (_req, res) => {
   res.json(getRunResult(today()));
 });
 
-/** 상품 요약 목록 (대시보드 카드). ?all=1 이면 비활성 포함 */
-api.get("/products", (req, res) => {
-  const all = req.query.all === "1";
-  // all=false → 활성만, all=true → 비활성 포함
-  const products = listProducts(!all);
+/** 상품 요약 목록 (대시보드 카드). 추적 중인 전체 상품. */
+api.get("/products", (_req, res) => {
+  const products = listProducts();
   const summaries = products
     .map((p) => getProductSummary(p.id))
     .filter((s) => s != null);
@@ -116,32 +113,22 @@ api.post("/products", async (req, res) => {
   res.status(201).json(getProductSummary(product.id));
 });
 
-/** 삭제: 기본 soft delete(추적 중지). ?hard=1 + confirm=상품명 일 때만 영구 삭제 */
+/**
+ * 삭제: 영구 삭제(하드). 가격 이력·Top3·리뷰·소스 ref·당일 캐시까지 cascade 정리.
+ * 오삭제 방지를 위해 confirm 파라미터에 정확한 상품명이 일치해야 한다.
+ * 삭제된 상품은 더 이상 수집/이메일 대상이 아니다.
+ */
 api.delete("/products/:id", (req, res) => {
   const id = Number(req.params.id);
   const product = getProduct(id);
   if (!product) return res.status(404).json({ error: "상품 없음" });
-
-  if (req.query.hard === "1") {
-    if (req.query.confirm !== product.name) {
-      return res.status(400).json({
-        error: "영구 삭제는 confirm 파라미터에 정확한 상품명이 필요합니다.",
-      });
-    }
-    deleteProductHard(id);
-    return res.json({ ok: true, mode: "hard" });
+  if (req.query.confirm !== product.name) {
+    return res.status(400).json({
+      error: "영구 삭제는 confirm 파라미터에 정확한 상품명이 필요합니다.",
+    });
   }
-
-  setProductActive(id, false);
-  res.json({ ok: true, mode: "soft" });
-});
-
-/** 추적 재개 */
-api.post("/products/:id/reactivate", (req, res) => {
-  const id = Number(req.params.id);
-  if (!getProduct(id)) return res.status(404).json({ error: "상품 없음" });
-  setProductActive(id, true);
-  res.json({ ok: true });
+  deleteProductHard(id);
+  res.json({ ok: true, mode: "hard" });
 });
 
 // ── 상품 × 소스 ref (watchlist / pcode 확정) ──────────────
