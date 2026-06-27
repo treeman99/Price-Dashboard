@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Minus, Trash2, RotateCcw, Star } from "lucide-react";
+import { ArrowDown, ArrowUp, Minus, Trash2, RotateCcw, Star, Rocket } from "lucide-react";
 import type { ProductSummary, ProductHistory, PeriodDays } from "@shared/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PriceChart } from "./PriceChart";
+import { SourceLinkDialog } from "./SourceLinkDialog";
 import { api } from "@/lib/api";
 import { cn, formatWon } from "@/lib/utils";
+import { sourceLabel, isDegradedSource } from "@/lib/sources";
 
 const PERIODS: PeriodDays[] = [7, 30, 90];
 
@@ -31,6 +33,43 @@ function ChangeBadge({ change }: { change: ProductSummary["change"] }) {
   );
 }
 
+/** 쿠팡 로켓배송 배지 (쿠팡 톤 블루). coupangIsRocket === true 일 때만 노출. */
+function RocketBadge() {
+  return (
+    <Badge
+      className="border-transparent gap-0.5 px-1.5 py-0 text-[10px] font-semibold text-white"
+      style={{ backgroundColor: "#346aff" }}
+      title="쿠팡 로켓배송"
+    >
+      <Rocket className="h-2.5 w-2.5" /> 로켓
+    </Badge>
+  );
+}
+
+/** 가격 출처(소스) 배지. LLM 검색 degrade는 은근히 앰버 톤으로 구분. */
+function SourceBadge({ source }: { source: string }) {
+  const label = sourceLabel(source);
+  if (!label) return null;
+  const degraded = isDegradedSource(source);
+  return (
+    <Badge
+      className={cn(
+        "px-1.5 py-0 text-[10px] font-normal",
+        degraded
+          ? "border-amber-200 bg-amber-100 text-amber-700"
+          : "border-transparent bg-muted text-muted-foreground"
+      )}
+      title={
+        degraded
+          ? "확정된 pcode 연결이 없어 LLM 검색으로 수집된 가격입니다"
+          : `가격 출처: ${label}`
+      }
+    >
+      {label}
+    </Badge>
+  );
+}
+
 export function ProductCard({
   summary,
   onChanged,
@@ -41,6 +80,9 @@ export function ProductCard({
   const { product, latest, change, topListings, reviews } = summary;
   const [days, setDays] = useState<PeriodDays>(30);
   const [history, setHistory] = useState<ProductHistory | null>(null);
+
+  // 종합 최저가 표시용: 판매처(lowestMall)가 더 구체적이면 우선, 없으면 기존 lowestSource.
+  const mallText = latest?.lowestMall ?? latest?.lowestSource ?? null;
 
   useEffect(() => {
     let alive = true;
@@ -72,15 +114,22 @@ export function ProductCard({
               <Badge className="border-transparent bg-muted text-muted-foreground">추적중지</Badge>
             )}
           </CardTitle>
-          {product.active ? (
-            <Button variant="ghost" size="icon" onClick={handleDelete} title="추적 중지">
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          ) : (
-            <Button variant="ghost" size="icon" onClick={handleReactivate} title="추적 재개">
-              <RotateCcw className="h-4 w-4" />
-            </Button>
-          )}
+          <div className="flex shrink-0 items-center">
+            <SourceLinkDialog
+              productId={product.id}
+              productName={product.name}
+              onChanged={onChanged}
+            />
+            {product.active ? (
+              <Button variant="ghost" size="icon" onClick={handleDelete} title="추적 중지">
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button variant="ghost" size="icon" onClick={handleReactivate} title="추적 재개">
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -102,19 +151,25 @@ export function ProductCard({
               ) : (
                 formatWon(latest?.overallLowest ?? null)
               )}
-              {latest?.lowestSource && (
-                <span className="ml-2 text-xs font-normal text-muted-foreground">
-                  {latest.lowestSource}
-                </span>
+              {mallText && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">{mallText}</span>
               )}
             </div>
+            {latest?.source && (
+              <div className="mt-1">
+                <SourceBadge source={latest.source} />
+              </div>
+            )}
           </div>
           <ChangeBadge change={change} />
         </div>
 
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="rounded-md bg-muted/50 px-3 py-2">
-            <div className="text-xs text-muted-foreground">쿠팡 최저가</div>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span>쿠팡 최저가</span>
+              {latest?.coupangIsRocket === true && <RocketBadge />}
+            </div>
             <div className="font-medium">{formatWon(latest?.coupangLowest ?? null)}</div>
           </div>
           <div className="rounded-md bg-muted/50 px-3 py-2">

@@ -7,6 +7,9 @@ import type {
   EventsSnapshot,
   NewsSnapshot,
   NewsCategoryDef,
+  ProductSource,
+  UpsertProductSourceInput,
+  ResolveResult,
 } from "@shared/types";
 
 async function j<T>(res: Response): Promise<T> {
@@ -54,6 +57,29 @@ export const api = {
     fetch(`/api/products/${id}/reactivate`, { method: "POST" }).then((r) => j(r)),
 
   collectNow: () => fetch("/api/collect", { method: "POST" }).then((r) => j<CollectResult>(r)),
+
+  // ── 상품 × 소스 ref (pcode 확정) ──
+  listSources: (id: number) =>
+    fetch(`/api/products/${id}/sources`).then((r) => j<ProductSource[]>(r)),
+
+  /** pcode 확정/수정 (멱등). productId 는 경로에서 채워지므로 본문에서 생략. */
+  upsertSource: (id: number, input: Omit<UpsertProductSourceInput, "productId">) =>
+    fetch(`/api/products/${id}/sources`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<ProductSource>(r)),
+
+  deleteSource: (id: number, source: string) =>
+    fetch(`/api/products/${id}/sources/${encodeURIComponent(source)}`, {
+      method: "DELETE",
+    }).then((r) => j<{ ok: boolean }>(r)),
+
+  /** resolve 프록시: 사람이 고를 pcode 후보 목록. 실패/차단 시 candidates:[] + note. */
+  resolveSource: (id: number, source = "danawa") =>
+    fetch(`/api/products/${id}/resolve?source=${encodeURIComponent(source)}`).then((r) =>
+      j<ResolveResult>(r)
+    ),
 
   serviceStatus: () =>
     fetch("/api/service/status").then((r) => j<{ installed: boolean; label: string }>(r)),

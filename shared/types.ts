@@ -29,6 +29,60 @@ export interface PricePoint {
   avgPrice: number | null;
   overallLowest: number | null;
   lowestSource: string;
+  // ── 쿠팡 가격 수집 강화(신규, 기존 코드 호환 위해 옵셔널) ──
+  /** 쿠팡 로켓배송 여부. 미수집/미편입이면 null. */
+  coupangIsRocket?: boolean | null;
+  /** 전체 최저가 판매처 상호. */
+  lowestMall?: string | null;
+  /** 가격을 채택한 소스: 'danawa' | 'enuri' | 'llm-websearch' (없으면 null). */
+  source?: string | null;
+}
+
+/** 상품 × 소스 고정 ref (watchlist). source 는 'danawa'|'enuri'|'llm-websearch'. */
+export interface ProductSource {
+  productId: number;
+  source: string;
+  /** 소스 내부 식별자(다나와 pcode 등). LLM 등은 null. */
+  refId: string | null;
+  /** 매일 재조회할 고정 URL. */
+  url: string;
+  /** 사람이 확정했는지(1이어야 매일 고정 ref 재조회, 아니면 degrade). */
+  confirmed: boolean;
+  createdAt: string;
+}
+
+/** 상품 × 소스 ref upsert 입력. */
+export interface UpsertProductSourceInput {
+  productId: number;
+  source: string;
+  refId: string | null;
+  url: string;
+  confirmed?: boolean;
+}
+
+/**
+ * resolve 프록시 후보 1건 (사람이 보고 pcode 확정하는 표시 단위).
+ * SourceRef(source/refId/url)에 사람 검수용 표시 라벨(title)을 더한 형태.
+ */
+export interface ResolveCandidate {
+  /** 'danawa' | 'enuri' | 'llm-websearch' */
+  source: string;
+  /** 소스 내부 식별자(다나와 pcode 등). */
+  refId: string | null;
+  /** 확정 시 그대로 저장할 고정 URL. */
+  url: string;
+  /** 사람 검수용 표시 제목(검색 결과 상품명). */
+  title: string;
+}
+
+/** resolve 프록시 응답. 외부 호출 실패/차단 시에도 200 + 빈 후보 + note 로 내려준다. */
+export interface ResolveResult {
+  /** 조회한 소스. */
+  source: string;
+  /** pcode 후보 목록. 실패/미매칭 시 빈 배열. */
+  candidates: ResolveCandidate[];
+  /** 후보가 없거나 차단 시 프론트가 안내할 사유(정상이면 null). */
+  note: string | null;
 }
 
 /** 당일 Top3 후보 (판매처/가격/링크) */
