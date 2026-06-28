@@ -1,5 +1,6 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "../util/log.ts";
+import { config } from "../config.ts";
+import { runAgentQueryText } from "../util/agent-query.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import { loadCategories } from "./categories.ts";
 import type {
@@ -39,9 +40,13 @@ function buildPrompt(defs: NewsCategoryDef[], today: string, yesterday: string, 
 - 날짜가 불명확/미상이면 **제외**. 쿼터를 채우려고 오래된 기사를 넣지 마라. 0건이어도 괜찮다.
 - 각 기사 date는 발행일을 "YYYY-MM-DD"로. ${today} 또는 (cutoff 이후가 확실한) ${yesterday}만 허용.
 
+⚠️ 유튜브/영상 제외(중요):
+- 이 뉴스 다이제스트는 **텍스트 기사 전용**이다. YouTube 등 영상은 출처로도 related로도 넣지 마라.
+  (유튜브 소식은 별도 "유튜브 소식" 탭에서 전문적으로 다룬다.)
+
 중복 통합:
 - 제목이 달라도 "누가+무엇을"이 같으면 동일 사건. 카테고리를 넘어서도 중복 제거(더 맞는 한 곳에만).
-- 가장 상세한 출처를 대표로 삼고, 나머지는 related(최대 2개, 영상은 label에 "📺" 포함)로 붙인다.
+- 가장 상세한 출처를 대표로 삼고, 나머지는 related(최대 2개, 텍스트 기사만)로 붙인다.
 
 출력 형식 — 검증을 마친 뒤 **아래 JSON 한 개만** 출력(다른 텍스트 없이). 각 카테고리 key 아래 기사 배열, 없으면 빈 배열:
 {"categories":{${defs.map((c) => `"${c.key}":[{"title":string,"source":string,"date":"YYYY-MM-DD","summary":string,"link":string|null,"related":[{"label":string,"link":string}]}]`).join(",")}},
@@ -109,9 +114,9 @@ export async function curateNews(date: string): Promise<NewsSnapshot> {
   const yesterday = localDateDaysAgo(1);
   const defs = loadCategories();
   try {
-    const q = query({
-      prompt: buildPrompt(defs, today, yesterday, nowLabel()),
-      options: {
+    const finalText = await runAgentQueryText(
+      buildPrompt(defs, today, yesterday, nowLabel()),
+      {
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
@@ -120,11 +125,9 @@ export async function curateNews(date: string): Promise<NewsSnapshot> {
           "너는 꼼꼼한 한국어 뉴스 큐레이터다. 최근 24시간 기사만 채택하고(오래되거나 날짜 불명확하면 버림), " +
           "같은 사건은 통합하며, 영문 소스도 한국어로 요약해 마지막에 지정된 JSON 한 개만 출력한다.",
       },
-    });
-    let finalText = "";
-    for await (const msg of q) {
-      if (msg.type === "result" && msg.subtype === "success") finalText = msg.result;
-    }
+      config.agentQueryTimeoutMs,
+      "뉴스 큐레이션"
+    );
     if (!finalText) return emptySnapshot(today, "뉴스 큐레이션 결과가 비어 있습니다.");
 
     const p = extractJson(finalText) as any;

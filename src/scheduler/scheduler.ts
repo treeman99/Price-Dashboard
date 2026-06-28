@@ -5,6 +5,7 @@ import { runCollection } from "../collector/collect.ts";
 import { hasSuccessfulRun } from "../db/repo.ts";
 import { refreshEvents, hasTodaySnapshot } from "../events/events.ts";
 import { refreshNews, getNewsSnapshot } from "../news/news.ts";
+import { refreshYoutube, getYoutubeSnapshot } from "../youtube/youtube.ts";
 import { localDate } from "../util/date.ts";
 
 function today(): string {
@@ -124,6 +125,55 @@ async function checkNewsCatchup() {
   }
 }
 
+// ── 유튜브 소식 스케줄 ──
+let youtubeRunning = false;
+async function safeRefreshYoutube(trigger: string, notify: boolean) {
+  if (youtubeRunning) {
+    log.warn(`유튜브 수집 진행 중 → ${trigger} 건너뜀`);
+    return;
+  }
+  youtubeRunning = true;
+  try {
+    await refreshYoutube({ trigger, notify });
+  } catch (e) {
+    log.error(`유튜브 수집 오류 [${trigger}]: ${(e as Error).message}`);
+  } finally {
+    youtubeRunning = false;
+  }
+}
+
+/**
+ * 유튜브 catch-up: 오늘 예정된 시간 중 하나라도 지났고 스냅샷이 없거나
+ * 마지막 갱신 이후 새로운 예정 시간이 지났으면 보충한다. (뉴스와 동일 패턴)
+ */
+async function checkYoutubeCatchup() {
+  if (youtubeRunning) return;
+  const snapshot = getYoutubeSnapshot();
+  const snapshotDate = snapshot?.date;
+  const snapshotTime = snapshot?.updatedAt ? new Date(snapshot.updatedAt) : null;
+
+  for (const t of config.youtubeCollectTimes) {
+    if (!pastTime(t)) continue;
+
+    if (snapshotDate !== today()) {
+      log.info(`오늘(${today()}) 유튜브 소식 누락 감지 → catch-up 실행 (${t})`);
+      await safeRefreshYoutube("catchup", true);
+      return;
+    }
+
+    if (snapshotTime) {
+      const { hour, minute } = parseCollectTime(t);
+      const scheduled = new Date();
+      scheduled.setHours(hour, minute, 0, 0);
+      if (snapshotTime < scheduled) {
+        log.info(`오늘(${today()}) ${t} 유튜브 갱신 누락 감지 → catch-up 실행`);
+        await safeRefreshYoutube("catchup", true);
+        return;
+      }
+    }
+  }
+}
+
 export function startScheduler() {
   // 가격 수집
   const price = parseCollectTime(config.collectTime);
@@ -154,13 +204,26 @@ export function startScheduler() {
     log.info(`스케줄러: 뉴스 매일 ${t} (cron: ${newsExpr})`);
   }
 
+  // 유튜브 소식 수집 (복수 시간 지원)
+  for (const t of config.youtubeCollectTimes) {
+    const yt = parseCollectTime(t);
+    const ytExpr = `${yt.minute} ${yt.hour} * * *`;
+    cron.schedule(ytExpr, () => {
+      log.info(`정시 유튜브 소식 수집 (${t})`);
+      void safeRefreshYoutube("schedule", true);
+    });
+    log.info(`스케줄러: 유튜브 매일 ${t} (cron: ${ytExpr})`);
+  }
+
   // 기동 직후 1회 + 30분마다 누락 점검 (잠자기 복귀 대응)
   void checkCatchup();
   void checkEventsCatchup();
   void checkNewsCatchup();
+  void checkYoutubeCatchup();
   setInterval(() => {
     void checkCatchup();
     void checkEventsCatchup();
     void checkNewsCatchup();
+    void checkYoutubeCatchup();
   }, 30 * 60 * 1000);
 }

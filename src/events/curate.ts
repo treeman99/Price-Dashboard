@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
+import { runAgentQueryText } from "../util/agent-query.ts";
 import { MANDATORY_VENUES, type RawCorpus, type RawGroup } from "./gather.ts";
 import type {
   EventsSnapshot,
@@ -406,9 +406,9 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
   try {
     // 엔진 가용 시 Bash 허용 → 차단 페이지를 insane-engine 으로 우회 fetch 해 날짜 검증
     const withEngine = engineAvailable();
-    const q = query({
-      prompt: buildPrompt(corpus, date),
-      options: {
+    const finalText = await runAgentQueryText(
+      buildPrompt(corpus, date),
+      {
         // 실제 원문·공식 페이지를 열어 날짜/내용 검증
         allowedTools: withEngine
           ? ["WebSearch", "WebFetch", "Bash"]
@@ -419,11 +419,9 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
         systemPrompt:
           "너는 꼼꼼한 팝업/전시 큐레이터다. 스니펫을 믿지 말고 WebSearch/WebFetch(차단 시 Bash로 insane-engine)로 실제 날짜를 검증하고, 이미 종료된 행사는 제외한 뒤, 실제 개별 행사를 중복 없이 추려 마지막에 지정된 JSON 한 개만 출력한다.",
       },
-    });
-    let finalText = "";
-    for await (const msg of q) {
-      if (msg.type === "result" && msg.subtype === "success") finalText = msg.result;
-    }
+      config.agentQueryTimeoutMs,
+      "팝업/전시 큐레이션"
+    );
     if (!finalText) return rawSnapshot(corpus, date);
 
     const p = extractJson(finalText) as any;

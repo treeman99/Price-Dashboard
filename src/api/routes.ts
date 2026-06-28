@@ -30,6 +30,15 @@ import {
   deleteCategory,
   reorderCategories,
 } from "../news/categories.ts";
+import { getYoutubeSnapshot, refreshYoutube, isYoutubeCollecting } from "../youtube/youtube.ts";
+import {
+  loadCategories as ytLoadCategories,
+  addCategory as ytAddCategory,
+  updateCategory as ytUpdateCategory,
+  deleteCategory as ytDeleteCategory,
+  reorderCategories as ytReorderCategories,
+} from "../youtube/categories.ts";
+import { loadBlocklist, addBlock, removeBlock, applyBlocklist } from "../youtube/blocklist.ts";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type { CreateProductInput, PeriodDays } from "../../shared/types.ts";
@@ -303,4 +312,108 @@ api.delete("/news/categories/:key", (req, res) => {
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
+});
+
+// ── 유튜브 소식 ──
+
+/** 최신 유튜브 스냅샷 (차단 채널은 읽기 시점에 제외 → 해제 시 즉시 복원) */
+api.get("/youtube", (_req, res) => {
+  res.json(applyBlocklist(getYoutubeSnapshot()));
+});
+
+/**
+ * 지금 갱신 (수동). 수집은 수 분~수십 분 걸리므로 **백그라운드로 시작**하고 즉시 202를 반환한다.
+ * 프론트는 /youtube/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /youtube 를 다시 불러온다.
+ * 이미 수집 중이면 새로 시작하지 않고 409로 안내(중복 수집 방지).
+ */
+api.post("/youtube/refresh", (_req, res) => {
+  if (isYoutubeCollecting()) {
+    return res.status(409).json({ error: "이미 유튜브 수집이 진행 중입니다.", collecting: true });
+  }
+  // 응답을 막지 않도록 await 하지 않고 시작(내부에서 running 가드/이메일/저장 처리).
+  void refreshYoutube({ trigger: "manual", notify: true }).catch((e) =>
+    log.warn(`유튜브 수동 수집 예외: ${(e as Error).message}`)
+  );
+  res.status(202).json({ started: true, collecting: true });
+});
+
+/** 유튜브 수집 진행 상태(프론트 폴링용). */
+api.get("/youtube/status", (_req, res) => {
+  const snap = getYoutubeSnapshot();
+  res.json({ collecting: isYoutubeCollecting(), updatedAt: snap?.updatedAt ?? null });
+});
+
+/** 유튜브 카테고리 목록 */
+api.get("/youtube/categories", (_req, res) => {
+  res.json(ytLoadCategories());
+});
+
+/** 카테고리 추가 */
+api.post("/youtube/categories", (req, res) => {
+  try {
+    const { label, emoji, color, description, region, excludeKeywords } = req.body ?? {};
+    const cat = ytAddCategory({ label, emoji, color, description, region, excludeKeywords });
+    res.json(cat);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/** 카테고리 순서 변경 (전체 key 순서 전달) */
+api.put("/youtube/categories/order", (req, res) => {
+  try {
+    const keys = (req.body?.keys ?? []) as string[];
+    const cats = ytReorderCategories(keys);
+    res.json(cats);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/** 카테고리 수정 */
+api.patch("/youtube/categories/:key", (req, res) => {
+  try {
+    const { label, emoji, color, description, region, excludeKeywords } = req.body ?? {};
+    const cat = ytUpdateCategory(req.params.key, { label, emoji, color, description, region, excludeKeywords });
+    res.json(cat);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/** 카테고리 삭제 */
+api.delete("/youtube/categories/:key", (req, res) => {
+  try {
+    const ok = ytDeleteCategory(req.params.key);
+    if (!ok) return res.status(404).json({ error: "카테고리를 찾을 수 없습니다." });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+// ── 유튜브 채널 차단 목록(조사 제외) ──
+
+/** 차단 채널 목록 (최근 차단 먼저) */
+api.get("/youtube/blocklist", (_req, res) => {
+  const list = [...loadBlocklist()].sort((a, b) => b.blockedAt.localeCompare(a.blockedAt));
+  res.json(list);
+});
+
+/** 채널 차단(카드의 '이 채널 제외' 버튼). 멱등. */
+api.post("/youtube/blocklist", (req, res) => {
+  try {
+    const { channel, handle } = req.body ?? {};
+    const entry = addBlock({ channel: String(channel ?? ""), handle: handle ? String(handle) : null });
+    res.json(entry);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/** 차단 해제(되돌리기). id는 channelKey. */
+api.delete("/youtube/blocklist/:id", (req, res) => {
+  const ok = removeBlock(req.params.id);
+  if (!ok) return res.status(404).json({ error: "차단 목록에 없습니다." });
+  res.json({ ok: true });
 });
