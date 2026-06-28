@@ -11,15 +11,17 @@ import { YoutubeBoard } from "@/components/YoutubeBoard";
 interface TabDef {
   id: string;
   label: string;
+  /** 탭 고유색(HEX). 선택 시 배경, 비선택 시 글자/연한 배경에 사용 */
+  color: string;
   content: ReactNode;
 }
 
-// 새 게시판은 여기에 항목만 추가하면 탭이 늘어난다.
+// 새 게시판은 여기에 항목만 추가하면 탭이 늘어난다. color는 탭 고유색.
 const TABS: TabDef[] = [
-  { id: "price", label: "가격 대시보드", content: <Dashboard /> },
-  { id: "events", label: "팝업·전시", content: <EventsBoard /> },
-  { id: "news", label: "뉴스", content: <NewsBoard /> },
-  { id: "youtube", label: "유튜브 소식", content: <YoutubeBoard /> },
+  { id: "price", label: "가격 대시보드", color: "#2563eb", content: <Dashboard /> },
+  { id: "events", label: "팝업·전시", color: "#db2777", content: <EventsBoard /> },
+  { id: "news", label: "뉴스", color: "#d97706", content: <NewsBoard /> },
+  { id: "youtube", label: "유튜브 소식", color: "#dc2626", content: <YoutubeBoard /> },
 ];
 
 export default function App() {
@@ -59,7 +61,11 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div
+      className="min-h-screen bg-background transition-colors duration-300"
+      // 선택된 탭 고유색을 아주 옅게(약 7%) 깔아 내용 영역 배경에 반영
+      style={{ backgroundColor: `${activeTab.color}12` }}
+    >
       <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
         <div className="mx-auto max-w-[1920px] px-4">
           <div className="flex items-center justify-between gap-6 pt-3">
@@ -77,24 +83,30 @@ export default function App() {
               </Button>
             )}
           </div>
-          {/* 게시판 탭 메뉴 */}
-          <nav className="-mb-px flex gap-1 pt-2" role="tablist">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                role="tab"
-                aria-selected={active === t.id}
-                onClick={() => setActive(t.id)}
-                className={cn(
-                  "border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-                  active === t.id
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
+          {/* 게시판 탭 메뉴 — 전체폭, 탭 갯수만큼 균등분할, 탭별 고유색 */}
+          <nav className="-mb-px flex w-full gap-2 pt-3" role="tablist">
+            {TABS.map((t) => {
+              const selected = active === t.id;
+              return (
+                <button
+                  key={t.id}
+                  role="tab"
+                  aria-selected={selected}
+                  onClick={() => setActive(t.id)}
+                  style={
+                    selected
+                      ? { backgroundColor: t.color, borderColor: t.color, color: "#fff" }
+                      : { backgroundColor: `${t.color}14`, borderColor: `${t.color}33`, color: t.color }
+                  }
+                  className={cn(
+                    "flex-1 rounded-t-lg border border-b-0 px-4 py-3 text-center text-[15px] font-semibold transition-all",
+                    selected ? "shadow-sm" : "hover:brightness-95"
+                  )}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
           </nav>
         </div>
       </header>
