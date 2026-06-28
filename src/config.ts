@@ -20,6 +20,10 @@ export interface AppConfig {
   collectTime: string; // HH:mm (가격 수집)
   eventsCollectTime: string; // HH:mm (팝업/전시 수집)
   newsCollectTimes: string[]; // HH:mm[] (뉴스 다이제스트 수집, 복수 시간 지원)
+  youtubeCollectTimes: string[]; // HH:mm[] (유튜브 소식 수집, 복수 시간 지원)
+  youtubeFreshDays: number; // 최근 N일 이내 게시 영상만 채택
+  /** Agent SDK 큐레이션 1회 최대 대기(ms). 초과 시 중단(hang 방지). */
+  agentQueryTimeoutMs: number;
   dbPath: string;
   legacyHistoryJson: string;
   historyRetentionDays: number;
@@ -45,6 +49,10 @@ export const config: AppConfig = {
   collectTime: process.env.COLLECT_TIME?.trim() || "09:00",
   eventsCollectTime: process.env.EVENTS_COLLECT_TIME?.trim() || "10:00",
   newsCollectTimes: parseCollectTimes(process.env.NEWS_COLLECT_TIMES?.trim() || "08:00,17:00"),
+  youtubeCollectTimes: parseCollectTimes(process.env.YOUTUBE_COLLECT_TIMES?.trim() || "08:30"),
+  youtubeFreshDays: Math.max(1, int(process.env.YOUTUBE_FRESH_DAYS, 7)),
+  // 기본 30분: 카테고리가 많으면 정상 수집도 20분 넘게 걸릴 수 있어 넉넉히 두되, 무한 hang 은 차단
+  agentQueryTimeoutMs: Math.max(60_000, int(process.env.AGENT_QUERY_TIMEOUT_MS, 1_800_000)),
   dbPath: process.env.DB_PATH?.trim() || path.join(repoRoot, "data", "price.db"),
   legacyHistoryJson:
     process.env.LEGACY_HISTORY_JSON?.trim() ||
@@ -106,6 +114,7 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
   parseCollectTime(config.collectTime);
   parseCollectTime(config.eventsCollectTime);
   config.newsCollectTimes.forEach((t) => parseCollectTime(t));
+  config.youtubeCollectTimes.forEach((t) => parseCollectTime(t));
 
   if (opts.forCollect) {
     if (!config.naver.clientId || !config.naver.clientSecret) {

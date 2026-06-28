@@ -7,6 +7,9 @@ import type {
   EventsSnapshot,
   NewsSnapshot,
   NewsCategoryDef,
+  YoutubeSnapshot,
+  YoutubeCategoryDef,
+  BlockedChannel,
   ProductSource,
   UpsertProductSourceInput,
   ResolveResult,
@@ -96,7 +99,14 @@ export const api = {
   newsCategories: () =>
     fetch("/api/news/categories").then((r) => j<NewsCategoryDef[]>(r)),
 
-  addNewsCategory: (input: { label: string; emoji?: string; color?: string; description?: string }) =>
+  addNewsCategory: (input: {
+    label: string;
+    emoji?: string;
+    color?: string;
+    description?: string;
+    region?: "kr" | "global";
+    excludeKeywords?: string[];
+  }) =>
     fetch("/api/news/categories", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -105,7 +115,14 @@ export const api = {
 
   updateNewsCategory: (
     key: string,
-    patch: { label?: string; emoji?: string; color?: string; description?: string }
+    patch: {
+      label?: string;
+      emoji?: string;
+      color?: string;
+      description?: string;
+      region?: "kr" | "global";
+      excludeKeywords?: string[];
+    }
   ) =>
     fetch(`/api/news/categories/${encodeURIComponent(key)}`, {
       method: "PATCH",
@@ -124,4 +141,85 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ keys }),
     }).then((r) => j<NewsCategoryDef[]>(r)),
+
+  // ── 유튜브 소식 ──
+  youtube: () => fetch("/api/youtube").then((r) => j<YoutubeSnapshot | null>(r)),
+
+  /**
+   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
+   * 완료 여부는 youtubeStatus() 폴링으로 확인한다.
+   */
+  refreshYoutube: async (): Promise<{ started: boolean; busy: boolean }> => {
+    const res = await fetch("/api/youtube/refresh", { method: "POST" });
+    if (res.status === 409) return { started: false, busy: true };
+    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
+    return { started: true, busy: false };
+  },
+
+  youtubeStatus: () =>
+    fetch("/api/youtube/status").then((r) =>
+      j<{ collecting: boolean; updatedAt: string | null }>(r)
+    ),
+
+  youtubeCategories: () =>
+    fetch("/api/youtube/categories").then((r) => j<YoutubeCategoryDef[]>(r)),
+
+  addYoutubeCategory: (input: {
+    label: string;
+    emoji?: string;
+    color?: string;
+    description?: string;
+    region?: "kr" | "global";
+    excludeKeywords?: string[];
+  }) =>
+    fetch("/api/youtube/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<YoutubeCategoryDef>(r)),
+
+  updateYoutubeCategory: (
+    key: string,
+    patch: {
+      label?: string;
+      emoji?: string;
+      color?: string;
+      description?: string;
+      region?: "kr" | "global";
+      excludeKeywords?: string[];
+    }
+  ) =>
+    fetch(`/api/youtube/categories/${encodeURIComponent(key)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => j<YoutubeCategoryDef>(r)),
+
+  deleteYoutubeCategory: (key: string) =>
+    fetch(`/api/youtube/categories/${encodeURIComponent(key)}`, { method: "DELETE" }).then((r) =>
+      j<{ ok: boolean }>(r)
+    ),
+
+  reorderYoutubeCategories: (keys: string[]) =>
+    fetch("/api/youtube/categories/order", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys }),
+    }).then((r) => j<YoutubeCategoryDef[]>(r)),
+
+  // ── 유튜브 채널 차단(조사 제외) ──
+  youtubeBlocklist: () =>
+    fetch("/api/youtube/blocklist").then((r) => j<BlockedChannel[]>(r)),
+
+  blockYoutubeChannel: (input: { channel: string; handle?: string | null }) =>
+    fetch("/api/youtube/blocklist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<BlockedChannel>(r)),
+
+  unblockYoutubeChannel: (id: string) =>
+    fetch(`/api/youtube/blocklist/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) =>
+      j<{ ok: boolean }>(r)
+    ),
 };

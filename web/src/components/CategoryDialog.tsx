@@ -17,19 +17,44 @@ export interface CategoryDialogState {
   cat?: NewsCategoryDef;
 }
 
+/** 보드 종류별 API/표시문구. CategoryDialog를 뉴스/유튜브가 공유한다. */
+const KIND_CONFIG = {
+  news: {
+    noun: "뉴스",
+    add: api.addNewsCategory,
+    update: api.updateNewsCategory,
+    guidePlaceholder: "예: 해외 축구·국내 프로야구·올림픽 등 스포츠 주요 뉴스",
+    hasRegion: false,
+  },
+  youtube: {
+    noun: "유튜브",
+    add: api.addYoutubeCategory,
+    update: api.updateYoutubeCategory,
+    guidePlaceholder: "예: AI 코딩 도구 리뷰·튜토리얼 (추천 채널을 함께 적으면 더 잘 찾습니다)",
+    hasRegion: true, // 유튜브만 검색 범위(한국/해외) 선택 노출
+  },
+} as const;
+
+export type CategoryKind = keyof typeof KIND_CONFIG;
+
 export function CategoryDialog({
   state,
+  kind = "news",
   onClose,
   onSaved,
 }: {
   state: CategoryDialogState | null;
+  kind?: CategoryKind;
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const cfg = KIND_CONFIG[kind];
   const editing = state?.mode === "edit";
   const [label, setLabel] = useState("");
   const [emoji, setEmoji] = useState("");
   const [description, setDescription] = useState("");
+  const [region, setRegion] = useState<"kr" | "global">("kr");
+  const [excludeKw, setExcludeKw] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -39,6 +64,8 @@ export function CategoryDialog({
     setLabel(state.cat?.label ?? "");
     setEmoji(state.cat?.emoji ?? "");
     setDescription(state.cat?.description ?? "");
+    setRegion(state.cat?.region === "global" ? "global" : "kr"); // 미지정=한국 전용
+    setExcludeKw((state.cat?.excludeKeywords ?? []).join(", "));
     setErr(null);
   }, [state]);
 
@@ -50,17 +77,29 @@ export function CategoryDialog({
     setBusy(true);
     setErr(null);
     try {
+      // 유튜브 전용 필드(검색 범위 + 제외 키워드). 쉼표로 구분 입력을 배열로.
+      const ytFields = cfg.hasRegion
+        ? {
+            region,
+            excludeKeywords: excludeKw
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          }
+        : {};
       if (editing && state?.cat) {
-        await api.updateNewsCategory(state.cat.key, {
+        await cfg.update(state.cat.key, {
           label: label.trim(),
           emoji: emoji.trim(), // 빈 문자열 → 서버가 자동 재배정
           description: description.trim(),
+          ...ytFields,
         });
       } else {
-        await api.addNewsCategory({
+        await cfg.add({
           label: label.trim(),
           emoji: emoji.trim() || undefined,
           description: description.trim() || undefined,
+          ...ytFields,
         });
       }
       onSaved();
@@ -76,7 +115,7 @@ export function CategoryDialog({
     <Dialog open={!!state} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{editing ? "카테고리 수정" : "뉴스 카테고리 추가"}</DialogTitle>
+          <DialogTitle>{editing ? "카테고리 수정" : `${cfg.noun} 카테고리 추가`}</DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
             {editing
               ? "변경 사항은 다음 수집부터 반영됩니다."
@@ -94,13 +133,54 @@ export function CategoryDialog({
             <Input value={emoji} onChange={(e) => setEmoji(e.target.value)} placeholder="예: ⚽ (비우면 자동)" />
           </div>
           <div className="space-y-1">
-            <Label>수집 가이드 (선택) — 어떤 뉴스를 원하는지</Label>
+            <Label>수집 가이드 (선택) — 무엇을 원하는지</Label>
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="예: 해외 축구·국내 프로야구·올림픽 등 스포츠 주요 뉴스"
+              placeholder={cfg.guidePlaceholder}
             />
           </div>
+          {cfg.hasRegion && (
+            <div className="space-y-1">
+              <Label>검색 범위</Label>
+              <div className="flex gap-2">
+                {([
+                  ["kr", "🇰🇷 한국 영상만"],
+                  ["global", "🌐 해외 포함"],
+                ] as const).map(([val, text]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setRegion(val)}
+                    className={
+                      "flex-1 rounded-md border px-3 py-2 text-sm transition-colors " +
+                      (region === val
+                        ? "border-primary bg-primary/10 font-medium text-foreground"
+                        : "border-input text-muted-foreground hover:bg-muted")
+                    }
+                  >
+                    {text}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                한국 영상만: 한국 채널·한국어 영상만 수집 · 해외 포함: 국가 제한 없이 수집(요약은 한국어)
+              </p>
+            </div>
+          )}
+          {cfg.hasRegion && (
+            <div className="space-y-1">
+              <Label>제외 키워드 (선택, 쉼표로 구분)</Label>
+              <Input
+                value={excludeKw}
+                onChange={(e) => setExcludeKw(e.target.value)}
+                placeholder="예: 자동차, 차량, SUV, 모빌리티, 시승"
+              />
+              <p className="text-xs text-muted-foreground">
+                제목·채널명에 이 단어가 들어간 영상은 제외합니다(대소문자 무시).
+              </p>
+            </div>
+          )}
           {err && <p className="text-sm text-up">{err}</p>}
         </div>
 
