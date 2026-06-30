@@ -53,6 +53,14 @@ export const api = {
       method: "DELETE",
     }).then((r) => j(r)),
 
+  /** 대시보드 카드 표시 순서 변경(전체 상품 id 순서 전달). 재정렬된 요약 목록 반환. */
+  reorderProducts: (ids: number[]) =>
+    fetch("/api/products/order", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).then((r) => j<ProductSummary[]>(r)),
+
   collectNow: () => fetch("/api/collect", { method: "POST" }).then((r) => j<CollectResult>(r)),
 
   // ── 상품 × 소스 ref (pcode 확정) ──

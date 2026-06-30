@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS products (
   must_exclude TEXT NOT NULL DEFAULT '[]', -- JSON array
   min_price    INTEGER NOT NULL DEFAULT 0,
   active       INTEGER NOT NULL DEFAULT 1, -- 0/1 (soft delete)
+  sort_order   INTEGER NOT NULL DEFAULT 0, -- 대시보드 카드 표시 순서(오름차순)
   created_at   TEXT NOT NULL
 );
 

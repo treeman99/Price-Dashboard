@@ -26,6 +26,7 @@ interface ProductRow {
   must_exclude: string;
   min_price: number;
   active: number;
+  sort_order: number;
   created_at: string;
 }
 
@@ -37,6 +38,7 @@ function rowToProduct(r: ProductRow): Product {
     mustExclude: JSON.parse(r.must_exclude),
     minPrice: r.min_price,
     active: r.active === 1,
+    sortOrder: r.sort_order,
     createdAt: r.created_at,
   };
 }
@@ -94,9 +96,10 @@ function rowToProductSource(r: ProductSourceRow): ProductSource {
 // ── 상품 ────────────────────────────────────────────────
 
 export function listProducts(activeOnly = false): Product[] {
+  // sort_order 우선, 동률은 id로 tie-break(안정적). 사용자가 ↑/↓로 조정한 순서를 반영.
   const sql = activeOnly
-    ? "SELECT * FROM products WHERE active = 1 ORDER BY id"
-    : "SELECT * FROM products ORDER BY id";
+    ? "SELECT * FROM products WHERE active = 1 ORDER BY sort_order, id"
+    : "SELECT * FROM products ORDER BY sort_order, id";
   return (db().prepare(sql).all() as unknown as ProductRow[]).map(rowToProduct);
 }
 
@@ -116,16 +119,22 @@ export function getProductByName(name: string): Product | null {
 
 export function createProduct(input: CreateProductInput): Product {
   const created = nowIso();
+  // 신규 상품은 목록 맨 뒤(현재 최대 sort_order + 1)에 배치.
+  const maxRow = db()
+    .prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM products")
+    .get() as { m: number };
+  const nextOrder = maxRow.m + 1;
   const info = db()
     .prepare(
-      `INSERT INTO products (name, must_include, must_exclude, min_price, active, created_at)
-       VALUES (?, ?, ?, ?, 1, ?)`
+      `INSERT INTO products (name, must_include, must_exclude, min_price, active, sort_order, created_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?)`
     )
     .run(
       input.name,
       JSON.stringify(input.mustInclude ?? []),
       JSON.stringify(input.mustExclude ?? []),
       Math.round(input.minPrice ?? 0),
+      nextOrder,
       created
     );
   return getProduct(Number(info.lastInsertRowid))!;
@@ -153,6 +162,35 @@ export function upsertProductByName(input: CreateProductInput): Product {
 /** 영구 삭제. FK ON DELETE CASCADE 로 price_points·listings·reviews·product_sources·source_fetch_cache 동반 정리. */
 export function deleteProductHard(id: number): void {
   db().prepare("DELETE FROM products WHERE id = ?").run(id);
+}
+
+/**
+ * 대시보드 카드 표시 순서 변경. 전체 상품 id 를 원하는 순서대로 전달받아
+ * sort_order 를 0..n-1 로 재할당한다. (카테고리 reorder 와 동일한 검증 규칙)
+ * 누락/미지/중복 id 가 있으면 throw → 부분 적용 방지(단일 트랜잭션).
+ */
+export function reorderProducts(ids: number[]): Product[] {
+  const current = listProducts();
+  if (!Array.isArray(ids) || ids.length !== current.length)
+    throw new Error("순서 목록이 현재 상품 수와 일치하지 않습니다.");
+  const remaining = new Set(current.map((p) => p.id));
+  for (const id of ids) {
+    if (!remaining.has(id)) throw new Error(`알 수 없거나 중복된 상품 id: ${id}`);
+    remaining.delete(id);
+  }
+  if (remaining.size) throw new Error("일부 상품이 순서 목록에서 누락되었습니다.");
+
+  const conn = db();
+  const update = conn.prepare("UPDATE products SET sort_order = ? WHERE id = ?");
+  conn.exec("BEGIN");
+  try {
+    ids.forEach((id, i) => update.run(i, id));
+    conn.exec("COMMIT");
+  } catch (e) {
+    conn.exec("ROLLBACK");
+    throw e;
+  }
+  return listProducts();
 }
 
 // ── 가격 포인트 (멱등 upsert) ───────────────────────────

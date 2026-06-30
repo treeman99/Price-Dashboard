@@ -42,6 +42,25 @@ export function Dashboard() {
     }
   }
 
+  /** 카드 표시 순서 조정(인접 카드와 교환). 낙관적 업데이트 후 서버 저장, 실패 시 복구. */
+  async function move(summary: ProductSummary, dir: "up" | "down") {
+    const idx = summaries.findIndex((s) => s.product.id === summary.product.id);
+    const j = dir === "up" ? idx - 1 : idx + 1;
+    if (idx < 0 || j < 0 || j >= summaries.length) return;
+    const prev = summaries; // 실패 시 되돌릴 직전 순서
+    const next = summaries.slice();
+    [next[idx], next[j]] = [next[j], next[idx]];
+    setSummaries(next); // 낙관적 업데이트
+    try {
+      await api.reorderProducts(next.map((s) => s.product.id));
+      setErr(null);
+    } catch (e) {
+      // 직전 순서로 로컬 복구하고 에러는 유지(load()로 덮어써 에러가 깜빡 사라지는 것 방지)
+      setSummaries(prev);
+      setErr(`순서 저장 실패: ${(e as Error).message}`);
+    }
+  }
+
   return (
     <div>
       {/* 대시보드 전용 툴바 */}
@@ -89,8 +108,15 @@ export function Dashboard() {
         </div>
       ) : (
         <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
-          {summaries.map((s) => (
-            <ProductCard key={s.product.id} summary={s} onChanged={load} />
+          {summaries.map((s, i) => (
+            <ProductCard
+              key={s.product.id}
+              summary={s}
+              onChanged={load}
+              canUp={i > 0}
+              canDown={i < summaries.length - 1}
+              onMove={move}
+            />
           ))}
         </div>
       )}

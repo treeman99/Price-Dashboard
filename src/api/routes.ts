@@ -12,6 +12,7 @@ import {
   createProduct,
   getProductByName,
   deleteProductHard,
+  reorderProducts,
   getProduct,
   getRunResult,
   listProductSources,
@@ -120,6 +121,25 @@ api.post("/products", async (req, res) => {
     log.warn(`신규 상품 1차 수집 실패 [${product.name}]: ${(e as Error).message}`);
   }
   res.status(201).json(getProductSummary(product.id));
+});
+
+/**
+ * 대시보드 카드 표시 순서 변경. 전체 상품 id 를 원하는 순서대로 { ids: number[] } 로 전달.
+ * 성공 시 재정렬된 상품 요약 목록(GET /products 와 동일 형태)을 반환.
+ * 카테고리 순서 변경(PUT /news|youtube/categories/order)과 동일한 계약.
+ * 라우트 등록 순서: GET/DELETE /products/:id 는 메서드가 달라 충돌하지 않는다.
+ */
+api.put("/products/order", (req, res) => {
+  try {
+    const ids = (req.body?.ids ?? []) as number[];
+    const products = reorderProducts(ids); // 재정렬된 목록을 그대로 재사용(중복 조회 제거)
+    const summaries = products
+      .map((p) => getProductSummary(p.id))
+      .filter((s) => s != null);
+    res.json(summaries);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
 });
 
 /**

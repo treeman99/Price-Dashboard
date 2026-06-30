@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Minus, Trash2, Star, Rocket } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronUp, ChevronDown, Minus, Trash2, Star, Rocket } from "lucide-react";
 import type { ProductSummary, ProductHistory, PeriodDays } from "@shared/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -73,9 +73,18 @@ function SourceBadge({ source }: { source: string }) {
 export function ProductCard({
   summary,
   onChanged,
+  canUp,
+  canDown,
+  onMove,
 }: {
   summary: ProductSummary;
   onChanged: () => void;
+  /** 목록에서 앞으로 이동 가능(첫 카드가 아님) */
+  canUp: boolean;
+  /** 목록에서 뒤로 이동 가능(마지막 카드가 아님) */
+  canDown: boolean;
+  /** 카드 표시 순서 조정. dir="up"=앞으로, "down"=뒤로 */
+  onMove: (summary: ProductSummary, dir: "up" | "down") => void;
 }) {
   const { product, latest, change, topListings, reviews } = summary;
   const [days, setDays] = useState<PeriodDays>(30);
@@ -111,6 +120,26 @@ export function ProductCard({
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="flex items-center gap-2">{product.name}</CardTitle>
           <div className="flex shrink-0 items-center">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onMove(summary, "up")}
+              disabled={!canUp}
+              title="순서 앞으로"
+              aria-label="순서 앞으로"
+            >
+              <ChevronUp className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onMove(summary, "down")}
+              disabled={!canDown}
+              title="순서 뒤로"
+              aria-label="순서 뒤로"
+            >
+              <ChevronDown className="h-4 w-4" />
+            </Button>
             <SourceLinkDialog
               productId={product.id}
               productName={product.name}

@@ -17,6 +17,8 @@ export interface Product {
   minPrice: number;
   /** false면 추적 중지(soft delete) */
   active: boolean;
+  /** 대시보드 카드 표시 순서(오름차순). 사용자가 ↑/↓로 조정, 서버에 영구 저장. */
+  sortOrder: number;
   createdAt: string;
 }
 

@@ -45,6 +45,18 @@ function migrate(conn: DatabaseSync): void {
       conn.exec(`ALTER TABLE price_points ADD COLUMN ${name} ${type}`);
     }
   }
+
+  // products.sort_order: 기존 DB엔 컬럼이 없으므로 1회 ADD 후 id 순서로 백필.
+  // (백필로 기존 카드 표시 순서가 종전(id 오름차순)과 동일하게 유지된다.)
+  const productCols = new Set(
+    (conn.prepare("PRAGMA table_info(products)").all() as Array<{ name: string }>).map(
+      (r) => r.name
+    )
+  );
+  if (!productCols.has("sort_order")) {
+    conn.exec("ALTER TABLE products ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
+    conn.exec("UPDATE products SET sort_order = id");
+  }
 }
 
 /** 테스트/재시작용 */
