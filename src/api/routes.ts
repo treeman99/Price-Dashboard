@@ -10,6 +10,7 @@ import {
   getProductSummary,
   getProductHistory,
   createProduct,
+  updateProduct,
   getProductByName,
   deleteProductHard,
   reorderProducts,
@@ -40,9 +41,18 @@ import {
   reorderCategories as ytReorderCategories,
 } from "../youtube/categories.ts";
 import { loadBlocklist, addBlock, removeBlock, applyBlocklist } from "../youtube/blocklist.ts";
+import { applyRegionFilter } from "../youtube/curate.ts";
+import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
+import { rescheduleAll } from "../scheduler/scheduler.ts";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
-import type { CreateProductInput, PeriodDays } from "../../shared/types.ts";
+import type {
+  Product,
+  CreateProductInput,
+  UpdateProductInput,
+  PeriodDays,
+  ScheduleSettings,
+} from "../../shared/types.ts";
 import type { ResolveQuery } from "../collector/sources/types.ts";
 
 export const api = Router();
@@ -53,6 +63,25 @@ const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_
 
 function today(): string {
   return localDate();
+}
+
+// ── 상품 입력 정규화(신뢰 못 할 body 방어) ──
+/** mustInclude 를 string[][] 형태로 얕게 정규화. 배열 아닌 원소/문자열 아닌 토큰 제거. */
+function sanitizeInclude(v: unknown): string[][] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((g): g is unknown[] => Array.isArray(g))
+    .map((g) => g.filter((t): t is string => typeof t === "string"));
+}
+/** mustExclude 를 string[] 로 얕게 정규화. */
+function sanitizeExclude(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((t): t is string => typeof t === "string");
+}
+/** 최소가(원) 정규화: 유한 정수, 음수는 0으로 클램프. */
+function sanitizeMinPrice(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
 }
 
 api.get("/health", (_req, res) => {
@@ -72,6 +101,33 @@ api.get("/config", (_req, res) => {
 /** 오늘 수집 상태 (catch-up/배지 표시용) */
 api.get("/runs/today", (_req, res) => {
   res.json(getRunResult(today()));
+});
+
+// ── 탭별 자동 수집 시각 (스케줄) ──
+
+/** 현재 유효 스케줄(.env 기본값 + 사용자 변경 병합). */
+api.get("/schedule", (_req, res) => {
+  res.json(getSchedule());
+});
+
+/**
+ * 스케줄 부분 수정. 전달된 탭(price/events/news/youtube)만 갱신하고 영구 저장한 뒤,
+ * 재시작 없이 cron 을 즉시 재등록한다. HH:mm 형식 오류면 400.
+ */
+api.put("/schedule", (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Partial<ScheduleSettings>;
+    const patch: Partial<ScheduleSettings> = {};
+    if (body.price !== undefined) patch.price = body.price;
+    if (body.events !== undefined) patch.events = body.events;
+    if (body.news !== undefined) patch.news = body.news;
+    if (body.youtube !== undefined) patch.youtube = body.youtube;
+    const updated = saveSchedule(patch);
+    rescheduleAll();
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
 });
 
 /** 상품 요약 목록 (대시보드 카드). 추적 중인 전체 상품. */
@@ -99,20 +155,28 @@ api.get("/products/:id/history", (req, res) => {
 
 /** 상품 추가 → 즉시 1차 수집으로 추적 시작 (F4) */
 api.post("/products", async (req, res) => {
-  const body = req.body as Partial<CreateProductInput>;
-  if (!body.name || typeof body.name !== "string") {
+  const body = (req.body ?? {}) as Partial<CreateProductInput>;
+  // dedup 검사 전에 trim: 저장은 trim된 name으로 하므로 raw name으로 검사하면 공백 차이로 우회된다.
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) {
     return res.status(400).json({ error: "name 필수" });
   }
-  if (getProductByName(body.name)) {
+  if (getProductByName(name)) {
     return res.status(409).json({ error: "이미 존재하는 상품명" });
   }
   const input: CreateProductInput = {
-    name: body.name.trim(),
-    mustInclude: Array.isArray(body.mustInclude) ? body.mustInclude : [],
-    mustExclude: Array.isArray(body.mustExclude) ? body.mustExclude : [],
-    minPrice: Number(body.minPrice) || 0,
+    name,
+    mustInclude: sanitizeInclude(body.mustInclude),
+    mustExclude: sanitizeExclude(body.mustExclude),
+    minPrice: sanitizeMinPrice(body.minPrice),
   };
-  const product = createProduct(input);
+  // UNIQUE 충돌(동시 요청 등)이 나도 async 핸들러가 hang 하지 않도록 명시적으로 409 응답.
+  let product: Product;
+  try {
+    product = createProduct(input);
+  } catch {
+    return res.status(409).json({ error: "이미 존재하는 상품명" });
+  }
 
   // 즉시 1차 수집 (알림 없이 해당 상품만)
   try {
@@ -158,6 +222,50 @@ api.delete("/products/:id", (req, res) => {
   }
   deleteProductHard(id);
   res.json({ ok: true, mode: "hard" });
+});
+
+/**
+ * 상품 정보 수정 (검색어/포함·제외 규칙/최소가). 부분 수정 — 전달된 필드만 갱신.
+ * 가격 이력·표시 순서·추적 여부는 유지한다. 매칭 규칙 변경은 다음 수집부터 반영.
+ * name 을 바꾸는 경우 다른 상품과 중복이면 409.
+ */
+api.patch("/products/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const product = getProduct(id);
+  if (!product) return res.status(404).json({ error: "상품 없음" });
+
+  const body = (req.body ?? {}) as Partial<UpdateProductInput>;
+  const patch: UpdateProductInput = {};
+
+  if (body.name != null) {
+    const name = String(body.name).trim();
+    if (!name) return res.status(400).json({ error: "상품명은 비울 수 없습니다." });
+    const dup = getProductByName(name);
+    if (dup && dup.id !== id) return res.status(409).json({ error: "이미 존재하는 상품명" });
+    patch.name = name;
+  }
+  if (Array.isArray(body.mustInclude)) patch.mustInclude = sanitizeInclude(body.mustInclude);
+  if (Array.isArray(body.mustExclude)) patch.mustExclude = sanitizeExclude(body.mustExclude);
+  if (body.minPrice != null) patch.minPrice = sanitizeMinPrice(body.minPrice);
+
+  updateProduct(id, patch);
+  res.json(getProductSummary(id));
+});
+
+/**
+ * 단일 상품만 즉시 재수집. 매칭 규칙(검색어/포함·제외/최소가)을 고친 뒤 오늘 가격을
+ * 바로 정정할 때 사용. 이메일은 보내지 않고(onlyProductId 경로) 갱신된 요약을 반환.
+ */
+api.post("/products/:id/collect", async (req, res) => {
+  const id = Number(req.params.id);
+  const product = getProduct(id);
+  if (!product) return res.status(404).json({ error: "상품 없음" });
+  try {
+    await runCollection({ date: today(), trigger: "manual", onlyProductId: id });
+    res.json(getProductSummary(id));
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
 });
 
 // ── 상품 × 소스 ref (watchlist / pcode 확정) ──────────────
@@ -336,9 +444,13 @@ api.delete("/news/categories/:key", (req, res) => {
 
 // ── 유튜브 소식 ──
 
-/** 최신 유튜브 스냅샷 (차단 채널은 읽기 시점에 제외 → 해제 시 즉시 복원) */
+/**
+ * 최신 유튜브 스냅샷. 읽기 시점 필터: 차단 채널 제외(해제 시 즉시 복원) +
+ * kr 카테고리의 해외 영상 제외(카테고리 검색범위 반영 → 재수집 없이 즉시 정리).
+ */
 api.get("/youtube", (_req, res) => {
-  res.json(applyBlocklist(getYoutubeSnapshot()));
+  const snap = applyBlocklist(getYoutubeSnapshot());
+  res.json(applyRegionFilter(snap, ytLoadCategories()));
 });
 
 /**

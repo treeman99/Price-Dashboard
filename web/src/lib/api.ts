@@ -2,6 +2,7 @@ import type {
   ProductSummary,
   ProductHistory,
   CreateProductInput,
+  UpdateProductInput,
   CollectResult,
   PeriodDays,
   EventsSnapshot,
@@ -13,6 +14,7 @@ import type {
   ProductSource,
   UpsertProductSourceInput,
   ResolveResult,
+  ScheduleSettings,
 } from "@shared/types";
 
 async function j<T>(res: Response): Promise<T> {
@@ -40,12 +42,35 @@ export const api = {
 
   runToday: () => fetch("/api/runs/today").then((r) => j<CollectResult | null>(r)),
 
+  /** 탭별 자동 수집 시각(스케줄) 조회. */
+  schedule: () => fetch("/api/schedule").then((r) => j<ScheduleSettings>(r)),
+
+  /** 스케줄 부분 수정. 저장 즉시 서버가 cron 재등록. 갱신된 전체 스케줄 반환. */
+  updateSchedule: (patch: Partial<ScheduleSettings>) =>
+    fetch("/api/schedule", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => j<ScheduleSettings>(r)),
+
   addProduct: (input: CreateProductInput) =>
     fetch("/api/products", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     }).then((r) => j<ProductSummary>(r)),
+
+  /** 상품 정보 수정(검색어/포함·제외 규칙/최소가). 부분 수정 가능. 수정된 요약 반환. */
+  updateProduct: (id: number, patch: UpdateProductInput) =>
+    fetch(`/api/products/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => j<ProductSummary>(r)),
+
+  /** 단일 상품만 즉시 재수집(매칭 규칙 수정 후 오늘 가격 정정). 갱신된 요약 반환. */
+  collectProduct: (id: number) =>
+    fetch(`/api/products/${id}/collect`, { method: "POST" }).then((r) => j<ProductSummary>(r)),
 
   /** 영구 삭제(가격 이력 포함). 오삭제 방지로 상품명을 confirm 으로 전달. */
   deleteProduct: (id: number, name: string) =>

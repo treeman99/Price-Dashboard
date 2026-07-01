@@ -6,6 +6,7 @@ import type {
   Listing,
   Review,
   CreateProductInput,
+  UpdateProductInput,
   ProductSummary,
   ProductHistory,
   ChangeDirection,
@@ -138,6 +139,26 @@ export function createProduct(input: CreateProductInput): Product {
       created
     );
   return getProduct(Number(info.lastInsertRowid))!;
+}
+
+/**
+ * 상품 정보 수정(부분). 전달된 필드만 갱신하고 나머지는 기존값 유지.
+ * 가격 이력·표시 순서(sort_order)·추적 여부(active)는 건드리지 않는다.
+ * 상품이 없으면 null. (name UNIQUE 충돌은 호출부에서 사전 검사)
+ */
+export function updateProduct(id: number, patch: UpdateProductInput): Product | null {
+  const existing = getProduct(id);
+  if (!existing) return null;
+  const name = patch.name != null ? patch.name : existing.name;
+  const mustInclude = patch.mustInclude != null ? patch.mustInclude : existing.mustInclude;
+  const mustExclude = patch.mustExclude != null ? patch.mustExclude : existing.mustExclude;
+  const minPrice = patch.minPrice != null ? Math.round(patch.minPrice) : existing.minPrice;
+  db()
+    .prepare(
+      "UPDATE products SET name = ?, must_include = ?, must_exclude = ?, min_price = ? WHERE id = ?"
+    )
+    .run(name, JSON.stringify(mustInclude), JSON.stringify(mustExclude), minPrice, id);
+  return getProduct(id)!;
 }
 
 /** 임포트/시드용: 이름 기준 멱등 upsert. 이미 있으면 매칭규칙만 보강(가격이력은 건드리지 않음). */

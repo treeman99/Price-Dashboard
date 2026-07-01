@@ -15,6 +15,7 @@ import type { NewsSnapshot, NewsItem, NewsCategoryDef } from "@shared/types";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 
 function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
@@ -212,11 +213,14 @@ export function NewsBoard() {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          매일 08:00 자동 수집 · 최근 24시간 뉴스 · 수집 시 이메일 발송(지금 갱신 포함)
-          {updated && ` · 최종 갱신 ${updated}`}
-          {snap && ` · 총 ${total}건`}
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <ScheduleControl kind="news" />
+          <span>
+            · 최근 24시간 뉴스 · 수집 시 이메일 발송(지금 갱신 포함)
+            {updated && ` · 최종 갱신 ${updated}`}
+            {snap && ` · 총 ${total}건`}
+          </span>
+        </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
             <Plus className="h-4 w-4" /> 카테고리 추가

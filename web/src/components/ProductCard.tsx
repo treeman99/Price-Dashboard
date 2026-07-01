@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PriceChart } from "./PriceChart";
 import { SourceLinkDialog } from "./SourceLinkDialog";
+import { EditProductDialog } from "./EditProductDialog";
 import { api } from "@/lib/api";
 import { cn, formatWon } from "@/lib/utils";
 import { sourceLabel, isDegradedSource } from "@/lib/sources";
@@ -140,6 +141,7 @@ export function ProductCard({
             >
               <ChevronDown className="h-4 w-4" />
             </Button>
+            <EditProductDialog product={product} onChanged={onChanged} />
             <SourceLinkDialog
               productId={product.id}
               productName={product.name}

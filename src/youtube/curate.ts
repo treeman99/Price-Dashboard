@@ -46,6 +46,45 @@ function scopeLabel(region: YoutubeCategoryDef["region"]): string {
   return region === "global" ? "해외(영어 포함) 가능" : "한국 채널·한국어 영상만";
 }
 
+/**
+ * region="kr"(한국 전용) 카테고리인데 실제로는 해외 영상인지 판정.
+ * 큐레이터가 제목(title)은 한국어로 번역하므로 title 로는 판별 불가 → 원제(originalTitle)를 본다.
+ * 원제에 한글이 없고 라틴 문자가 있으면(=번역 전 원문이 영어 등) 해외 영상 후보.
+ * 단, 그 경우에도 채널명에 한글이 있으면(영어 제목을 단 한국 유튜버) 한국 영상으로 보고 통과 —
+ * 원제가 없으면(한국 영상이면 큐레이터가 원제를 비우거나 title과 같게 둠) 통과.
+ */
+export function isForeignForKr(
+  v: { originalTitle?: string | null; channel?: string },
+  region: YoutubeCategoryDef["region"]
+): boolean {
+  if (region === "global") return false;
+  const orig = (v.originalTitle ?? "").trim();
+  if (!orig) return false;
+  if (/[가-힣]/.test(orig)) return false; // 원제에 한글 → 한국 영상
+  if (!/[A-Za-z]/.test(orig)) return false; // 라틴도 없음(숫자/기호뿐) → 판정 보류(통과)
+  if (/[가-힣]/.test(v.channel ?? "")) return false; // 채널명에 한글 → 한국 채널(오탐 방지)
+  return true; // 원제·채널 모두 비한국어 → 해외 영상
+}
+
+/**
+ * 스냅샷 읽기 시점 지역 필터. kr 카테고리에서 해외 영상을 제거한 사본 반환.
+ * (이미 저장된 스냅샷도 재수집 없이 즉시 정리 — applyBlocklist 와 동일한 읽기 필터 패턴)
+ */
+export function applyRegionFilter(
+  snapshot: YoutubeSnapshot | null,
+  defs: YoutubeCategoryDef[]
+): YoutubeSnapshot | null {
+  if (!snapshot) return snapshot;
+  const regionByKey = new Map(defs.map((d) => [d.key, d.region]));
+  return {
+    ...snapshot,
+    categories: snapshot.categories.map((c) => ({
+      ...c,
+      items: c.items.filter((v) => !isForeignForKr(v, regionByKey.get(c.key))),
+    })),
+  };
+}
+
 /** 제목/채널/원제 중 하나라도 제외 키워드를 포함하면 true(대소문자 무시). */
 export function matchesExclude(
   v: { title: string; channel: string; originalTitle?: string | null },
@@ -91,8 +130,11 @@ export function buildPrompt(
   - ${cats}${blockSection}
 
 🌐 검색 범위(각 카테고리의 [검색범위]를 반드시 준수):
-- "한국 채널·한국어 영상만": **한국 유튜버/한국어 영상만** 채택한다. 해외(영어 등) 채널·영상은 제외.
-  검색도 한국어 키워드 위주로 하고, 한국 채널을 우선 확인한다.
+- "한국 채널·한국어 영상만": **한국 유튜버가 만든 한국어(음성/자막) 영상만** 채택한다.
+  - 해외 유튜버(예: MKBHD, Dave2D, Linus Tech Tips, JerryRigEverything 등) 영상은 **절대 넣지 마라**.
+  - 원본이 영어 등 외국어인 영상은, 제목을 한국어로 번역할 수 있더라도 이 카테고리에 **넣지 마라**.
+  - 즉 "번역해서 넣기"는 금지 — 한국인이 한국어로 말하는 영상만.
+  - 검색도 한국어 키워드 위주로 하고, 한국 채널을 우선 확인한다. 애매하면 제외한다.
 - "해외(영어 포함) 가능": 국가 제한 없이 좋은 영상을 채택하되(요약은 한국어).
 
 조사 방법(WebSearch / WebFetch 사용 — 전문적으로 충분히 조사):
@@ -238,9 +280,11 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
         const enriched = await enrichVideos(candidates);
 
         // 차단 채널 제외(실제 채널명 기준) + 카테고리 제외 키워드(제목/채널) 하드 필터
+        // + 한국 전용(kr) 카테고리는 해외(원제가 비한국어) 영상 하드 제외.
         const items = enriched
           .filter((x) => !isBlocked(x.channel, x.channelHandle))
-          .filter((x) => !matchesExclude(x, meta.excludeKeywords));
+          .filter((x) => !matchesExclude(x, meta.excludeKeywords))
+          .filter((x) => !isForeignForKr(x, meta.region));
         return toCategory(meta, items);
       })
     );

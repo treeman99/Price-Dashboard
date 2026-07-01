@@ -18,6 +18,7 @@ import { UNKNOWN_CHANNEL } from "@shared/youtube";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 import { BlockedChannelsDialog } from "@/components/BlockedChannelsDialog";
 
@@ -355,11 +356,14 @@ export function YoutubeBoard() {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          매일 자동 수집 · 최근 {freshDays}일 이내 영상 · AI·LLM/신제품 리뷰 전문 조사 · 수집 시 이메일 발송(지금 갱신 포함)
-          {updated && ` · 최종 갱신 ${updated}`}
-          {snap && ` · 총 ${total}건`}
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <ScheduleControl kind="youtube" />
+          <span>
+            · 최근 {freshDays}일 이내 영상 · AI·LLM/신제품 리뷰 전문 조사 · 수집 시 이메일 발송(지금 갱신 포함)
+            {updated && ` · 최종 갱신 ${updated}`}
+            {snap && ` · 총 ${total}건`}
+          </span>
+        </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setBlockDialogOpen(true)}>
             <Ban className="h-4 w-4" /> 제외 채널{blockCount > 0 ? ` (${blockCount})` : ""}

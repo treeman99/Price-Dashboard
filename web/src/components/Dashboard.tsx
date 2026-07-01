@@ -5,6 +5,7 @@ import { api, type AppConfig } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ProductCard } from "@/components/ProductCard";
 import { AddProductDialog } from "@/components/AddProductDialog";
+import { ScheduleControl } from "@/components/ScheduleControl";
 
 export function Dashboard() {
   const [summaries, setSummaries] = useState<ProductSummary[]>([]);
@@ -65,11 +66,10 @@ export function Dashboard() {
     <div>
       {/* 대시보드 전용 툴바 */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          {cfg
-            ? `매일 ${cfg.collectTime} 자동 수집 · 이메일 알림 ${cfg.notify.email ? "켜짐" : "꺼짐"}`
-            : " "}
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <ScheduleControl kind="price" />
+          {cfg && <span>· 이메일 알림 {cfg.notify.email ? "켜짐" : "꺼짐"}</span>}
+        </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={collectNow} disabled={collecting}>
             {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}

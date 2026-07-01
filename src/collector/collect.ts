@@ -179,7 +179,10 @@ async function collectProduct(
 export async function runCollection(opts: CollectOptions): Promise<CollectResult> {
   const { date } = opts;
   const startedAt = new Date().toISOString();
-  recordRunStart(date);
+  // 단일 상품 즉시수집(상품 추가/재수집)은 '오늘의 일일 실행'이 아니므로 collect_runs 를 건드리지 않는다.
+  // (건드리면 hasSuccessfulRun/getRunResult 가 오염되어 catch-up·이메일 멱등이 깨진다.)
+  const isDailyRun = !opts.onlyProductId;
+  if (isDailyRun) recordRunStart(date);
 
   const all = listProducts(true);
   const products = opts.onlyProductId
@@ -253,7 +256,7 @@ export async function runCollection(opts: CollectOptions): Promise<CollectResult
     notified: { email: emailed },
     error: anyOk ? null : "모든 상품 수집 실패",
   };
-  recordRunFinish(result);
+  if (isDailyRun) recordRunFinish(result);
   log.info(
     `수집 종료 [${opts.trigger}] ${date} — 성공 ${perProduct.filter((r) => r.ok).length}/${perProduct.length}`
   );

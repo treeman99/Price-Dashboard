@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ScheduleControl } from "@/components/ScheduleControl";
 
 const TAG_STYLE: Record<Exclude<EventTag, null>, { bg: string; label: string }> = {
   신규: { bg: "#03C75A", label: "신규" },
@@ -265,11 +266,14 @@ export function EventsBoard() {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          매일 10:00 자동 갱신 · 이메일 알림
-          {updated && ` · 최종 갱신 ${updated}`}
-          {snap?.source === "naver-raw" && " · (검색 원본 — LLM 큐레이션 비활성)"}
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <ScheduleControl kind="events" />
+          <span>
+            · 갱신 시 이메일 발송
+            {updated && ` · 최종 갱신 ${updated}`}
+            {snap?.source === "naver-raw" && " · (검색 원본 — LLM 큐레이션 비활성)"}
+          </span>
+        </div>
         <Button variant="outline" onClick={refresh} disabled={refreshing}>
           {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           지금 갱신

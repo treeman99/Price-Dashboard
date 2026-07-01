@@ -155,7 +155,29 @@ export interface CreateProductInput {
   minPrice: number;
 }
 
+/**
+ * 상품 정보 수정 요청 (부분 수정). 지정된 필드만 갱신하며,
+ * 가격 이력·표시 순서·추적 여부(active)는 건드리지 않는다.
+ */
+export interface UpdateProductInput {
+  name?: string;
+  mustInclude?: string[][];
+  mustExclude?: string[];
+  minPrice?: number;
+}
+
 export type PeriodDays = 7 | 30 | 90;
+
+/**
+ * 탭별 자동 수집(갱신) 시각. 모두 24시간 "HH:mm" 목록(하루 여러 번 가능).
+ * .env 기본값 위에 사용자가 대시보드에서 +/-로 바꾼 값이 병합된다.
+ */
+export interface ScheduleSettings {
+  price: string[];
+  events: string[];
+  news: string[];
+  youtube: string[];
+}
 
 // ── 팝업스토어 · 전시회 보드 (이력 저장 없음, 최신 스냅샷만) ──
 

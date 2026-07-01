@@ -1,5 +1,6 @@
 import cron from "node-cron";
-import { config, parseCollectTime } from "../config.ts";
+import { parseCollectTime } from "../config.ts";
+import { getSchedule } from "./schedule-store.ts";
 import { log } from "../util/log.ts";
 import { runCollection } from "../collector/collect.ts";
 import { hasSuccessfulRun } from "../db/repo.ts";
@@ -43,7 +44,8 @@ function pastTime(hhmm: string): boolean {
  */
 async function checkCatchup() {
   if (running) return;
-  if (pastTime(config.collectTime) && !hasSuccessfulRun(today())) {
+  if (hasSuccessfulRun(today())) return;
+  if (getSchedule().price.some((t) => pastTime(t))) {
     log.info(`오늘(${today()}) 가격 수집 누락 감지 → catch-up 실행`);
     await safeRun("catchup");
   }
@@ -68,7 +70,8 @@ async function safeRefreshEvents(trigger: string, notify: boolean) {
 
 async function checkEventsCatchup() {
   if (eventsRunning) return;
-  if (pastTime(config.eventsCollectTime) && !hasTodaySnapshot()) {
+  if (hasTodaySnapshot()) return;
+  if (getSchedule().events.some((t) => pastTime(t))) {
     log.info(`오늘(${today()}) 팝업/전시 갱신 누락 감지 → catch-up 실행`);
     await safeRefreshEvents("catchup", true);
   }
@@ -101,7 +104,7 @@ async function checkNewsCatchup() {
   const snapshotDate = snapshot?.date;
   const snapshotTime = snapshot?.updatedAt ? new Date(snapshot.updatedAt) : null;
 
-  for (const t of config.newsCollectTimes) {
+  for (const t of getSchedule().news) {
     if (!pastTime(t)) continue;
 
     // 오늘자 스냅샷이 없으면 catch-up
@@ -152,7 +155,7 @@ async function checkYoutubeCatchup() {
   const snapshotDate = snapshot?.date;
   const snapshotTime = snapshot?.updatedAt ? new Date(snapshot.updatedAt) : null;
 
-  for (const t of config.youtubeCollectTimes) {
+  for (const t of getSchedule().youtube) {
     if (!pastTime(t)) continue;
 
     if (snapshotDate !== today()) {
@@ -174,46 +177,63 @@ async function checkYoutubeCatchup() {
   }
 }
 
+/** HH:mm → 매일 실행 cron 식. */
+function cronExpr(hhmm: string): string {
+  const { hour, minute } = parseCollectTime(hhmm);
+  return `${minute} ${hour} * * *`;
+}
+
+// 등록된 cron 작업들(재등록 시 중지 대상). 모듈 싱글턴이라 startScheduler/rescheduleAll 이 공유.
+let tasks: ReturnType<typeof cron.schedule>[] = [];
+
+/**
+ * 한 탭의 여러 시각을 cron 으로 등록. name 을 (kind,index)로 고정해, 재등록 시
+ * node-cron 전역 레지스트리 항목이 무한 누적되지 않고 같은 키로 덮어써지게 한다(누수 방지).
+ */
+function scheduleGroup(kind: string, times: string[], label: string, run: () => void): void {
+  times.forEach((t, i) => {
+    tasks.push(
+      cron.schedule(
+        cronExpr(t),
+        () => {
+          log.info(`정시 ${label} 수집 (${t})`);
+          run();
+        },
+        { name: `dp-${kind}-${i}` }
+      )
+    );
+    log.info(`스케줄러: ${label} 매일 ${t}`);
+  });
+}
+
+/** 현재 스케줄 설정으로 모든 정시 cron 을 등록(전 탭 복수 시각). */
+function registerCrons() {
+  const s = getSchedule();
+  scheduleGroup("price", s.price, "가격", () => void safeRun("schedule"));
+  scheduleGroup("events", s.events, "팝업/전시", () => void safeRefreshEvents("schedule", true));
+  scheduleGroup("news", s.news, "뉴스 다이제스트", () => void safeRefreshNews("schedule", true));
+  scheduleGroup("youtube", s.youtube, "유튜브 소식", () => void safeRefreshYoutube("schedule", true));
+}
+
+/**
+ * 스케줄 설정 변경 후 즉시 cron 을 갈아끼운다(재시작 없이 반영).
+ * 기존 작업을 모두 중지하고 최신 설정으로 재등록한다.
+ */
+export function rescheduleAll() {
+  for (const t of tasks) {
+    try {
+      t.stop();
+    } catch {
+      /* 이미 중지된 작업 무시 */
+    }
+  }
+  tasks = [];
+  registerCrons();
+  log.info("스케줄러: 설정 변경으로 cron 재등록 완료");
+}
+
 export function startScheduler() {
-  // 가격 수집
-  const price = parseCollectTime(config.collectTime);
-  const priceExpr = `${price.minute} ${price.hour} * * *`;
-  cron.schedule(priceExpr, () => {
-    log.info(`정시 가격 수집 (${config.collectTime})`);
-    void safeRun("schedule");
-  });
-  log.info(`스케줄러: 가격 매일 ${config.collectTime} (cron: ${priceExpr})`);
-
-  // 팝업/전시 수집
-  const ev = parseCollectTime(config.eventsCollectTime);
-  const evExpr = `${ev.minute} ${ev.hour} * * *`;
-  cron.schedule(evExpr, () => {
-    log.info(`정시 팝업/전시 수집 (${config.eventsCollectTime})`);
-    void safeRefreshEvents("schedule", true);
-  });
-  log.info(`스케줄러: 팝업/전시 매일 ${config.eventsCollectTime} (cron: ${evExpr})`);
-
-  // 뉴스 다이제스트 수집 (복수 시간 지원)
-  for (const t of config.newsCollectTimes) {
-    const news = parseCollectTime(t);
-    const newsExpr = `${news.minute} ${news.hour} * * *`;
-    cron.schedule(newsExpr, () => {
-      log.info(`정시 뉴스 다이제스트 수집 (${t})`);
-      void safeRefreshNews("schedule", true);
-    });
-    log.info(`스케줄러: 뉴스 매일 ${t} (cron: ${newsExpr})`);
-  }
-
-  // 유튜브 소식 수집 (복수 시간 지원)
-  for (const t of config.youtubeCollectTimes) {
-    const yt = parseCollectTime(t);
-    const ytExpr = `${yt.minute} ${yt.hour} * * *`;
-    cron.schedule(ytExpr, () => {
-      log.info(`정시 유튜브 소식 수집 (${t})`);
-      void safeRefreshYoutube("schedule", true);
-    });
-    log.info(`스케줄러: 유튜브 매일 ${t} (cron: ${ytExpr})`);
-  }
+  registerCrons();
 
   // 기동 직후 1회 + 30분마다 누락 점검 (잠자기 복귀 대응)
   void checkCatchup();
