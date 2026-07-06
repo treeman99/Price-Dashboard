@@ -35,8 +35,13 @@ export const DEFAULT_YOUTUBE_CATEGORIES: YoutubeCategoryDef[] = [
     color: "#2a9d8f",
     region: "global",
     description:
-      "AI 도구 실전 활용·튜토리얼·생산성·코딩(에이전트/자동화/바이브코딩 포함). " +
-      "추천 채널: Fireship, Matthew Berman, NetworkChuck, 노마드 코더, 조코딩",
+      "AI 도구 실전 활용·생산성·코딩 자동화·바이브코딩을 기본으로, Claude Code 하네스(harness) 설계와 " +
+      "에이전트 루프(/loop·워크플로우 오케스트레이션·루프 엔지니어링), 서브에이전트·스킬·훅·MCP 연동, " +
+      "컨텍스트 엔지니어링(CLAUDE.md)까지 코딩 에이전트를 깊이 다루는 영상을 최우선으로 모은다. " +
+      "클로드코드·커서·코덱스 등 AI 코딩 도구의 강의·튜토리얼·입문 셋업과 실전 활용, 멀티에이전트 팀 오케스트레이션, " +
+      "에이전트 평가(evals)·스펙 기반 개발까지 폭넓게 포함한다. " +
+      "추천 채널(글로벌): IndyDevDan, Anthropic, How I AI, Cole Medin, AI Jason, Matthew Berman, AI Engineer, GosuCoder " +
+      "/ (한국): 잔재미코딩, 짐코딩, 코드팩토리, 커리어해커 알렉스, 테디노트, 노마드 코더, 조태호(혼공 바이브코딩), 조코딩",
   },
   {
     key: "deepdive",
