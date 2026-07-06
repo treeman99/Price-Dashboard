@@ -35,13 +35,14 @@ export const DEFAULT_YOUTUBE_CATEGORIES: YoutubeCategoryDef[] = [
     color: "#2a9d8f",
     region: "global",
     description:
-      "AI 도구 실전 활용·생산성·코딩 자동화·바이브코딩을 기본으로, Claude Code 하네스(harness) 설계와 " +
-      "에이전트 루프(/loop·워크플로우 오케스트레이션·루프 엔지니어링), 서브에이전트·스킬·훅·MCP 연동, " +
-      "컨텍스트 엔지니어링(CLAUDE.md)까지 코딩 에이전트를 깊이 다루는 영상을 최우선으로 모은다. " +
-      "클로드코드·커서·코덱스 등 AI 코딩 도구의 강의·튜토리얼·입문 셋업과 실전 활용, 멀티에이전트 팀 오케스트레이션, " +
-      "에이전트 평가(evals)·스펙 기반 개발까지 폭넓게 포함한다. " +
-      "추천 채널(글로벌): IndyDevDan, Anthropic, How I AI, Cole Medin, AI Jason, Matthew Berman, AI Engineer, GosuCoder " +
-      "/ (한국): 잔재미코딩, 짐코딩, 코드팩토리, 커리어해커 알렉스, 테디노트, 노마드 코더, 조태호(혼공 바이브코딩), 조코딩",
+      "다양한 AI 도구를 실전에서 활용하는 팁·노하우·강의·튜토리얼을 폭넓게 모은다(특정 도구 편중 금지 — 여러 도구를 고르게 섞어라). " +
+      "다음 세 갈래를 각각 검색해 골고루 채운다: " +
+      "(1) 범용 AI 활용·생산성 — ChatGPT·Gemini·Perplexity·NotebookLM·Grok 활용법과 문서·PPT·데이터 분석·리서치·업무 자동화(n8n·Make) 꿀팁, " +
+      "(2) AI 코딩 에이전트 — Cursor·GitHub Copilot·Codex·Gemini CLI·Windsurf·Cline·Claude Code의 셋업·실전·도구 비교와 바이브코딩, " +
+      "(3) 심화 — 에이전트 워크플로우·루프·하네스·서브에이전트·스킬·훅·MCP·컨텍스트 엔지니어링. " +
+      "각 갈래에서 최소 1~2건씩 확보하고 강의·입문 가이드·실전 꿀팁 영상을 우선한다. " +
+      "추천 채널(글로벌): Matthew Berman, AICodeKing, Riley Brown, WorldofAI, Fireship, Sam Witteveen, GosuCoder " +
+      "/ (한국): 조코딩, 노마드 코더, 커리어해커 알렉스, 테디노트, CONNECT AI LAB, 잔재미코딩",
   },
   {
     key: "deepdive",
