@@ -409,7 +409,9 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
     const finalText = await runAgentQueryText(
       buildPrompt(corpus, date),
       {
-        // 실제 원문·공식 페이지를 열어 날짜/내용 검증
+        // 실제 원문·공식 페이지를 열어 날짜/내용 검증.
+        // tools = 가용 도구 제한(그 외 차단 — 외부 페이지 프롬프트 인젝션 방어), allowedTools = 무프롬프트 허용
+        tools: withEngine ? ["WebSearch", "WebFetch", "Bash"] : ["WebSearch", "WebFetch"],
         allowedTools: withEngine
           ? ["WebSearch", "WebFetch", "Bash"]
           : ["WebSearch", "WebFetch"],

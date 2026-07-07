@@ -138,9 +138,12 @@ export function buildPrompt(
 - "해외(영어 포함) 가능": 국가 제한 없이 좋은 영상을 채택하되(요약은 한국어).
 
 조사 방법(WebSearch / WebFetch 사용 — 전문적으로 충분히 조사):
-1. 각 카테고리마다 WebSearch를 **여러 번** 수행한다. YouTube 영상을 노린 쿼리를 쓴다:
-   - 예: "site:youtube.com <주제> <올해/이번달>", "<채널명> latest video", "<제품명> review youtube".
-   - description에 적힌 추천 채널들의 **최근 업로드**를 직접 확인한다(채널명 + 핵심 키워드로 검색).
+1. 각 카테고리마다 WebSearch를 **서로 다른 각도로 최소 4회 이상** 수행한다. YouTube 영상을 노린 쿼리를 쓴다:
+   - 주제 키워드: "site:youtube.com <주제> <이번주/최신>", "<주제> 강의/튜토리얼/활용법 youtube".
+   - 도구·제품명: "<도구명> tutorial youtube", "<제품명> review youtube".
+   - 채널 확인: description에 적힌 추천 채널들의 **최근 업로드**를 직접 확인한다(채널명 + 핵심 키워드로 검색).
+   - description에 여러 갈래(번호 목록)가 있으면 **갈래마다 별도로 검색**한다. 한 갈래·한 도구가 결과를 독식하면 안 된다.
+   - description이 짧은 카테고리도 주제의 인접 영역(신제품 소식·비교·활용법·업계 이슈 등)까지 폭넓게 검색한다.
 2. 후보 영상은 WebFetch로 watch 페이지나 검색결과를 열어 **업로드 날짜·채널명·조회수·핵심 내용**을 확인한다.
    - watch URL은 반드시 정식 형식(https://www.youtube.com/watch?v=...)으로 적는다.
 3. 요약(summary)은 제목을 바꿔 쓴 게 아니라 **영상이 실제로 무엇을 다루는지**(주요 포인트 2~4개)를 한국어로 적는다.
@@ -151,9 +154,15 @@ export function buildPrompt(
 - 각 영상 date는 업로드일을 "YYYY-MM-DD"로. (정확한 일자를 모르면 그 영상은 버린다.)
 - 쿼터를 채우려고 오래된 영상을 넣지 마라. 카테고리가 0건이어도 괜찮다.
 
+🎯 다양성 규칙(신선도 다음으로 중요):
+- 한 카테고리 안에서 같은 도구·제품·주제로 편중 금지 — 서로 다른 주제·도구·채널을 고르게 섞어라.
+- 같은 채널의 영상은 카테고리당 최대 2개.
+- 카테고리 주제와 무관한 영상으로 개수를 채우지 마라(관련성이 애매하면 제외).
+
 품질 규칙:
 - 라이브 예정(아직 방송 전)·쇼츠 광고·중복 재업로드는 제외. 같은 영상은 한 번만.
-- 카테고리당 최신·고품질 영상 **최대 8개**. 조회수가 높거나 신뢰도 높은 채널을 우선한다.
+- 카테고리당 **6개 이상을 목표로, 최대 12개**까지 채택(단 신선도·관련성 규칙이 항상 우선 — 좋은 영상이 부족하면 적어도 된다).
+- 조회수가 높거나 신뢰도 높은 채널을 우선하되, 다양성 규칙을 지킨다.
 - 한 영상이 여러 카테고리에 맞으면 가장 잘 맞는 **한 곳**에만 넣는다.
 
 출력 형식 — 검증을 마친 뒤 **아래 JSON 한 개만** 출력(다른 텍스트 없이). 각 카테고리 key 아래 영상 배열, 없으면 빈 배열:
@@ -242,11 +251,14 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
     const finalText = await runAgentQueryText(
       buildPrompt(defs, today, cutoff, freshDays, nowLabel(), blockedLabels),
       {
+        // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
+        // allowedTools = 그 도구들을 무프롬프트 허용.
+        tools: ["WebSearch", "WebFetch"],
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
-        // 카테고리당 검색을 보장하되 과도한 탐색(=느린 수집)을 막기 위해 상한을 둔다.
-        maxTurns: 90,
+        // 카테고리당 갈래별 검색(최소 4회+)을 보장하되 과도한 탐색(=느린 수집)을 막기 위해 상한을 둔다.
+        maxTurns: 120,
         systemPrompt:
           "너는 꼼꼼한 한국어 유튜브 소식 큐레이터다. AI·LLM과 신제품 리뷰 등 최신 YouTube 영상을 " +
           `최근 ${freshDays}일 이내로만 채택하고(오래되거나 날짜 불명확하면 버림), 영어 영상도 한국어로 번역·요약하며, ` +
@@ -274,7 +286,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
             if (x.videoId) seen.add(x.videoId);
             return true;
           })
-          .slice(0, 8);
+          .slice(0, 12);
 
         // oEmbed로 실제 채널명/핸들 보강 + 존재하지 않는(지어낸) 영상 제거
         const enriched = await enrichVideos(candidates);

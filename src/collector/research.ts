@@ -67,6 +67,8 @@ export async function researchProduct(product: Product): Promise<ResearchResult>
     const q = query({
       prompt: buildPrompt(product),
       options: {
+        // tools = 가용 도구 제한(웹 검색 외 차단 — 외부 콘텐츠 프롬프트 인젝션 방어), allowedTools = 무프롬프트 허용
+        tools: ["WebSearch"],
         allowedTools: ["WebSearch"],
         permissionMode: "bypassPermissions",
         settingSources: [], // 로컬 CLAUDE.md/설정 로드 방지

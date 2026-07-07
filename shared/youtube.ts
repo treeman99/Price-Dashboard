@@ -15,7 +15,8 @@ export const DEFAULT_YOUTUBE_CATEGORIES: YoutubeCategoryDef[] = [
     color: "#4361ee",
     region: "global",
     description:
-      "AI·LLM 모델/연구/발표를 다루는 유튜브 영상. 새 모델(GPT·Claude·Gemini·Llama 등) 공개, 논문 해설, 업계 동향. " +
+      "AI·LLM 모델/연구/발표를 다루는 유튜브 영상. 새 모델 공개·업데이트(GPT·Claude·Gemini·Llama·Qwen·DeepSeek·Mistral 등 상용·오픈소스 불문), " +
+      "논문·기술 해설, 벤치마크 비교, 업계 동향·이슈. 특정 회사·모델 편중 금지 — 여러 모델과 연구 주제를 고르게 다룬다. " +
       "추천 채널: Two Minute Papers, AI Explained, Matt Wolfe, bycloud, Wes Roth, Yannic Kilcher, 안될공학, 조코딩",
   },
   {
@@ -35,11 +36,13 @@ export const DEFAULT_YOUTUBE_CATEGORIES: YoutubeCategoryDef[] = [
     color: "#2a9d8f",
     region: "global",
     description:
-      "다양한 AI 도구를 실전에서 활용하는 팁·노하우·강의·튜토리얼을 폭넓게 모은다(특정 도구 편중 금지 — 여러 도구를 고르게 섞어라). " +
-      "다음 세 갈래를 각각 검색해 골고루 채운다: " +
-      "(1) 범용 AI 활용·생산성 — ChatGPT·Gemini·Perplexity·NotebookLM·Grok 활용법과 문서·PPT·데이터 분석·리서치·업무 자동화(n8n·Make) 꿀팁, " +
-      "(2) AI 코딩 에이전트 — Cursor·GitHub Copilot·Codex·Gemini CLI·Windsurf·Cline·Claude Code의 셋업·실전·도구 비교와 바이브코딩, " +
-      "(3) 심화 — 에이전트 워크플로우·루프·하네스·서브에이전트·스킬·훅·MCP·컨텍스트 엔지니어링. " +
+      "다양한 AI 도구·모델(Claude·GPT·Gemini·Qwen·DeepSeek 등)을 실전에서 활용하는 방법·팁·강의·튜토리얼을 폭넓게 모은다" +
+      "(특정 모델·도구 편중 금지 — 갈래와 도구를 고르게 섞어라). 다음 다섯 갈래를 각각 검색해 골고루 채운다: " +
+      "(1) AI 코딩·개발 — Claude Code·Cursor·GitHub Copilot·Codex·Gemini CLI·Windsurf 등 코딩 에이전트 활용법·비교·바이브코딩, " +
+      "(2) 이미지 생성 — Midjourney·Nano Banana·Flux·Stable Diffusion 등 프롬프트 기법·워크플로우, " +
+      "(3) 영상·음악 제작 — Sora·Veo·Runway·Kling·Suno 등 AI 영상 제작법·편집 자동화, " +
+      "(4) 범용 활용·생산성 — ChatGPT·Gemini·Perplexity·NotebookLM·Grok 활용법과 문서·PPT·데이터 분석·리서치·업무 자동화(n8n·Make) 꿀팁, " +
+      "(5) 심화 — 에이전트 워크플로우·서브에이전트·스킬·MCP·컨텍스트 엔지니어링·로컬 LLM(Ollama·LM Studio). " +
       "각 갈래에서 최소 1~2건씩 확보하고 강의·입문 가이드·실전 꿀팁 영상을 우선한다. " +
       "추천 채널(글로벌): Matthew Berman, AICodeKing, Riley Brown, WorldofAI, Fireship, Sam Witteveen, GosuCoder " +
       "/ (한국): 조코딩, 노마드 코더, 커리어해커 알렉스, 테디노트, CONNECT AI LAB, 잔재미코딩",

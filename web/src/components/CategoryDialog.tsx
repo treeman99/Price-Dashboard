@@ -119,7 +119,7 @@ export function CategoryDialog({
           <DialogDescription className="text-sm text-muted-foreground">
             {editing
               ? "변경 사항은 다음 수집부터 반영됩니다."
-              : "추가한 카테고리는 다음 수집(또는 \"지금 갱신\")부터 채워집니다."}
+              : "추가한 카테고리는 다음 수집(또는 \"지금 갱신\")부터 채워집니다. 수집 가이드를 비우거나 짧게 적으면 AI가 상세 지침을 대신 작성합니다(십수 초 소요)."}
           </DialogDescription>
         </DialogHeader>
 
@@ -133,7 +133,11 @@ export function CategoryDialog({
             <Input value={emoji} onChange={(e) => setEmoji(e.target.value)} placeholder="예: ⚽ (비우면 자동)" />
           </div>
           <div className="space-y-1">
-            <Label>수집 가이드 (선택) — 무엇을 원하는지</Label>
+            <Label>
+              {editing
+                ? "수집 가이드 (선택) — 무엇을 원하는지"
+                : "수집 가이드 (선택) — 짧게 적어도 AI가 상세 지침으로 확장합니다"}
+            </Label>
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -190,7 +194,7 @@ export function CategoryDialog({
           </Button>
           <Button onClick={submit} disabled={busy}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            {editing ? "저장" : "추가"}
+            {editing ? "저장" : busy ? "AI 지침 작성 중…" : "추가"}
           </Button>
         </div>
       </DialogContent>

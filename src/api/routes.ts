@@ -44,6 +44,7 @@ import { loadBlocklist, addBlock, removeBlock, applyBlocklist } from "../youtube
 import { applyRegionFilter } from "../youtube/curate.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
 import { rescheduleAll } from "../scheduler/scheduler.ts";
+import { generateCategoryDescription, shouldAutoDescribe } from "../util/category-describe.ts";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type {
@@ -398,11 +399,19 @@ api.get("/news/categories", (_req, res) => {
   res.json(loadCategories());
 });
 
-/** 카테고리 추가 */
-api.post("/news/categories", (req, res) => {
+/** 카테고리 추가 — 설명이 없거나 짧으면 LLM이 수집 지침을 대신 작성(실패 시 입력값 유지) */
+api.post("/news/categories", async (req, res) => {
   try {
     const { label, emoji, color, description } = req.body ?? {};
-    const cat = addCategory({ label, emoji, color, description });
+    let cat = addCategory({ label, emoji, color, description });
+    if (shouldAutoDescribe(description)) {
+      const generated = await generateCategoryDescription({
+        kind: "news",
+        label: cat.label,
+        hint: typeof description === "string" ? description : undefined,
+      });
+      if (generated) cat = updateCategory(cat.key, { description: generated });
+    }
     res.json(cat);
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
@@ -480,11 +489,21 @@ api.get("/youtube/categories", (_req, res) => {
   res.json(ytLoadCategories());
 });
 
-/** 카테고리 추가 */
-api.post("/youtube/categories", (req, res) => {
+/** 카테고리 추가 — 설명이 없거나 짧으면 LLM이 수집 지침을 대신 작성(실패 시 입력값 유지) */
+api.post("/youtube/categories", async (req, res) => {
   try {
     const { label, emoji, color, description, region, excludeKeywords } = req.body ?? {};
-    const cat = ytAddCategory({ label, emoji, color, description, region, excludeKeywords });
+    let cat = ytAddCategory({ label, emoji, color, description, region, excludeKeywords });
+    if (shouldAutoDescribe(description)) {
+      const generated = await generateCategoryDescription({
+        kind: "youtube",
+        label: cat.label,
+        hint: typeof description === "string" ? description : undefined,
+        region: cat.region,
+        excludeKeywords: cat.excludeKeywords,
+      });
+      if (generated) cat = ytUpdateCategory(cat.key, { description: generated });
+    }
     res.json(cat);
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });

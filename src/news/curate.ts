@@ -117,6 +117,8 @@ export async function curateNews(date: string): Promise<NewsSnapshot> {
     const finalText = await runAgentQueryText(
       buildPrompt(defs, today, yesterday, nowLabel()),
       {
+        // tools = 가용 도구 제한(웹 조사 외 차단 — 외부 페이지 프롬프트 인젝션 방어), allowedTools = 무프롬프트 허용
+        tools: ["WebSearch", "WebFetch"],
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
