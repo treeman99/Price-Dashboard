@@ -4,6 +4,7 @@ import { runAgentQueryText } from "../util/agent-query.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import { loadCategories } from "./categories.ts";
 import { loadBlocklist, buildBlockMatcher, UNKNOWN_CHANNEL } from "./blocklist.ts";
+import { buildReclassSection } from "./reclass.ts";
 import { enrichVideos } from "./oembed.ts";
 import type {
   YoutubeSnapshot,
@@ -80,7 +81,8 @@ export function applyRegionFilter(
     ...snapshot,
     categories: snapshot.categories.map((c) => ({
       ...c,
-      items: c.items.filter((v) => !isForeignForKr(v, regionByKey.get(c.key))),
+      // 사용자가 수동으로 옮긴 카드(movedByUser)는 지역필터를 건너뛰어 배치를 존중한다.
+      items: c.items.filter((v) => v.movedByUser || !isForeignForKr(v, regionByKey.get(c.key))),
     })),
   };
 }
@@ -104,7 +106,8 @@ export function buildPrompt(
   cutoff: string,
   freshDays: number,
   now: string,
-  blocked: string[]
+  blocked: string[],
+  reclassSection = ""
 ): string {
   const cats = defs
     .map((c) => {
@@ -122,12 +125,12 @@ export function buildPrompt(
         "\n  - "
       )}\n  이 채널들의 영상은 어떤 카테고리에도 넣지 마라.`
     : "";
-  return `너는 한국어 유튜브 소식 큐레이터다. 지금 시각은 ${now}. **최근 ${freshDays}일 이내(${cutoff} 이후 ~ ${today})**에
-업로드된 YouTube 영상만 모아 아래 ${defs.length}개 카테고리로 정리한다.
+  return `너는 한국어 유튜브 소식 큐레이터다. 지금 시각은 ${now}. **조회 시점 기준 최근 ${freshDays}일 이내(${cutoff} 이후 ~ ${today})**에
+업로드된 YouTube 영상만 모아 아래 ${defs.length}개 카테고리로 정리한다. 이 신선도 기준은 **모든 카테고리에 예외 없이 동일하게** 적용된다.
 모든 제목·요약은 **반드시 한국어**로 작성한다(영어 영상도 한국어로 번역·요약). 원제는 originalTitle에 보존한다.
 
 카테고리:
-  - ${cats}${blockSection}
+  - ${cats}${blockSection}${reclassSection}
 
 🌐 검색 범위(각 카테고리의 [검색범위]를 반드시 준수):
 - "한국 채널·한국어 영상만": **한국 유튜버가 만든 한국어(음성/자막) 영상만** 채택한다.
@@ -249,7 +252,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
   const isBlocked = buildBlockMatcher();
   try {
     const finalText = await runAgentQueryText(
-      buildPrompt(defs, today, cutoff, freshDays, nowLabel(), blockedLabels),
+      buildPrompt(defs, today, cutoff, freshDays, nowLabel(), blockedLabels, buildReclassSection(defs)),
       {
         // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
         // allowedTools = 그 도구들을 무프롬프트 허용.

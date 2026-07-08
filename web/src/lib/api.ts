@@ -194,6 +194,14 @@ export const api = {
       j<{ collecting: boolean; updatedAt: string | null }>(r)
     ),
 
+  /** 카드(영상)를 다른 카테고리로 이동. 갱신된 스냅샷을 반환. */
+  moveYoutubeVideo: (input: { videoId: string; fromKey: string; toKey: string }) =>
+    fetch("/api/youtube/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<YoutubeSnapshot>(r)),
+
   youtubeCategories: () =>
     fetch("/api/youtube/categories").then((r) => j<YoutubeCategoryDef[]>(r)),
 

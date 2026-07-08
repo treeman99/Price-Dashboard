@@ -6,7 +6,8 @@ import { localDate } from "../util/date.ts";
 import { curateYoutube } from "./curate.ts";
 import { sendYoutubeEmail } from "../notify/youtube-email.ts";
 import { loadCategories } from "./categories.ts";
-import type { YoutubeSnapshot } from "../../shared/types.ts";
+import { addReclass } from "./reclass.ts";
+import type { YoutubeSnapshot, YoutubeCategory, YoutubeVideo } from "../../shared/types.ts";
 
 // 이력 저장 없음: 최신 스냅샷 1개만 캐시(JSON 파일 + 메모리)
 const SNAPSHOT_PATH = path.join(path.dirname(config.dbPath), "youtube-latest.json");
@@ -90,6 +91,68 @@ export async function refreshYoutube(
   } finally {
     running = false;
   }
+}
+
+/**
+ * 카드(영상)를 다른 카테고리로 이동한다.
+ * - 현재 스냅샷에서 videoId로 영상을 찾아 출발 카테고리에서 제거하고 도착 카테고리 맨 앞에 넣는다.
+ * - 이동 영상은 movedByUser=true 로 표시(읽기 시점 지역필터가 존중하도록).
+ * - 이동 사례를 재분류 기록(reclass)에 남겨 다음 수집 프롬프트가 학습하게 한다.
+ * 성공 시 갱신된 스냅샷을 반환, 실패 시 원인 Error throw.
+ */
+export function moveYoutubeVideo(videoId: string, fromKey: string, toKey: string): YoutubeSnapshot {
+  if (!videoId) throw new Error("영상 식별자(videoId)가 필요합니다.");
+  if (fromKey === toKey) throw new Error("같은 카테고리로는 이동할 수 없습니다.");
+  const snap = getYoutubeSnapshot();
+  if (!snap) throw new Error("이동할 유튜브 데이터가 아직 없습니다.");
+
+  const defs = loadCategories();
+  const toDef = defs.find((d) => d.key === toKey);
+  if (!toDef) throw new Error("이동 대상 카테고리를 찾을 수 없습니다.");
+
+  const fromCat = snap.categories.find((c) => c.key === fromKey);
+  const video = fromCat?.items.find((v) => v.videoId === videoId);
+  if (!video) throw new Error("이동할 영상을 현재 목록에서 찾을 수 없습니다.");
+
+  const moved: YoutubeVideo = { ...video, movedByUser: true };
+
+  // 모든 카테고리에서 해당 영상 제거(방어적 중복 제거) 후 대상 앞에 삽입.
+  let categories: YoutubeCategory[] = snap.categories.map((c) => ({
+    ...c,
+    items: c.items.filter((v) => v.videoId !== videoId),
+  }));
+  const hasTarget = categories.some((c) => c.key === toKey);
+  if (hasTarget) {
+    categories = categories.map((c) =>
+      c.key === toKey ? { ...c, items: [moved, ...c.items] } : c
+    );
+  } else {
+    // 대상 카테고리가 아직 스냅샷에 없으면(수집 이후 추가된 경우) 새 섹션으로 만든다.
+    categories.push({
+      key: toDef.key,
+      label: toDef.label,
+      emoji: toDef.emoji,
+      color: toDef.color,
+      items: [moved],
+    });
+  }
+
+  const next: YoutubeSnapshot = { ...snap, categories, updatedAt: new Date().toISOString() };
+  memo = next;
+  saveToDisk(next);
+
+  const fromLabel = fromCat?.label ?? defs.find((d) => d.key === fromKey)?.label ?? fromKey;
+  addReclass({
+    title: video.title,
+    channel: video.channel,
+    fromKey,
+    fromLabel,
+    toKey,
+    toLabel: toDef.label,
+    movedAt: new Date().toISOString(),
+  });
+  log.info(`유튜브 카드 이동: "${video.title}" ${fromLabel} → ${toDef.label}`);
+  return next;
 }
 
 function emptySnapshot(): YoutubeSnapshot {

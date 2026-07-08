@@ -342,6 +342,32 @@ export interface YoutubeVideo {
   views?: string | null;
   /** 영상 길이 표시 (예: "12:34"). 모르면 null. */
   duration?: string | null;
+  /**
+   * 사용자가 이 카드를 수동으로 이 카테고리로 옮겼는지.
+   * true면 읽기 시점 지역필터(applyRegionFilter)를 건너뛰어 사용자의 배치를 존중한다.
+   */
+  movedByUser?: boolean;
+}
+
+/**
+ * 사용자가 카드를 다른 카테고리로 옮긴 사례(재분류 피드백).
+ * 다음 수집 프롬프트에 few-shot 규칙으로 주입해 큐레이터의 분류를 교정한다.
+ */
+export interface YoutubeReclass {
+  /** 정규화된 식별키(제목+채널 기반). 같은 영상 재이동 시 최신으로 덮어씀. */
+  id: string;
+  /** 옮긴 영상 제목(학습 신호의 핵심 패턴). */
+  title: string;
+  /** 채널명. */
+  channel: string;
+  /** 출발 카테고리 key/라벨(삭제·개명 대비 라벨도 보존). */
+  fromKey: string;
+  fromLabel: string;
+  /** 도착 카테고리 key/라벨. */
+  toKey: string;
+  toLabel: string;
+  /** 이동 시각(ISO). */
+  movedAt: string;
 }
 
 export interface YoutubeCategory {

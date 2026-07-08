@@ -32,7 +32,12 @@ import {
   deleteCategory,
   reorderCategories,
 } from "../news/categories.ts";
-import { getYoutubeSnapshot, refreshYoutube, isYoutubeCollecting } from "../youtube/youtube.ts";
+import {
+  getYoutubeSnapshot,
+  refreshYoutube,
+  isYoutubeCollecting,
+  moveYoutubeVideo,
+} from "../youtube/youtube.ts";
 import {
   loadCategories as ytLoadCategories,
   addCategory as ytAddCategory,
@@ -482,6 +487,29 @@ api.post("/youtube/refresh", (_req, res) => {
 api.get("/youtube/status", (_req, res) => {
   const snap = getYoutubeSnapshot();
   res.json({ collecting: isYoutubeCollecting(), updatedAt: snap?.updatedAt ?? null });
+});
+
+/**
+ * 카드(영상)를 다른 카테고리로 이동. 스냅샷을 즉시 갱신하고, 이동 사례를 재분류 기록에 남겨
+ * 다음 수집 프롬프트가 학습하게 한다. 응답은 읽기 필터(차단/지역)를 적용한 최신 스냅샷.
+ */
+api.post("/youtube/move", (req, res) => {
+  try {
+    const { videoId, fromKey, toKey } = req.body ?? {};
+    if (!videoId || !fromKey || !toKey) {
+      return res.status(400).json({ error: "videoId, fromKey, toKey 가 모두 필요합니다." });
+    }
+    // 수집 중 이동은 완료 시점 스냅샷 덮어쓰기로 유실되므로 거부(재분류 기록도 남기지 않음).
+    if (isYoutubeCollecting()) {
+      return res
+        .status(409)
+        .json({ error: "수집이 진행 중입니다. 완료된 뒤 카드를 이동해 주세요.", collecting: true });
+    }
+    const snap = moveYoutubeVideo(String(videoId), String(fromKey), String(toKey));
+    res.json(applyRegionFilter(applyBlocklist(snap), ytLoadCategories()));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
 });
 
 /** 유튜브 카테고리 목록 */

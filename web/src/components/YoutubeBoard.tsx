@@ -12,6 +12,7 @@ import {
   Plus,
   ChevronUp,
   ChevronDown,
+  FolderInput,
 } from "lucide-react";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategoryDef } from "@shared/types";
 import { UNKNOWN_CHANNEL } from "@shared/youtube";
@@ -73,14 +74,76 @@ function Thumbnail({ video }: { video: YoutubeVideo }) {
   );
 }
 
+function MoveMenu({
+  video,
+  currentKey,
+  allDefs,
+  disabled,
+  onMove,
+}: {
+  video: YoutubeVideo;
+  currentKey: string;
+  allDefs: YoutubeCategoryDef[];
+  disabled: boolean;
+  onMove: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const targets = allDefs.filter((d) => d.key !== currentKey);
+  if (!targets.length) return null;
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        title={disabled ? "수집 중에는 이동할 수 없습니다" : "다른 카테고리로 이동"}
+        className="inline-flex items-center gap-1 text-muted-foreground/70 transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-muted-foreground/70"
+      >
+        <FolderInput className="h-3.5 w-3.5" /> 이동
+      </button>
+      {open && (
+        <>
+          {/* 바깥 클릭 시 닫기 */}
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute bottom-full right-0 z-20 mb-1 max-h-60 w-52 overflow-y-auto rounded-md border bg-card p-1 shadow-lg">
+            <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
+              이동할 카테고리 선택
+            </p>
+            {targets.map((d) => (
+              <button
+                key={d.key}
+                onClick={() => {
+                  setOpen(false);
+                  onMove(video, currentKey, d.key);
+                }}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+              >
+                <span>{d.emoji}</span>
+                <span className="truncate">{d.label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function VideoCard({
   video,
   color,
+  currentKey,
+  allDefs,
+  moveDisabled,
   onBlock,
+  onMove,
 }: {
   video: YoutubeVideo;
   color: string;
+  currentKey: string;
+  allDefs: YoutubeCategoryDef[];
+  moveDisabled: boolean;
   onBlock: (video: YoutubeVideo) => void;
+  onMove: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
 }) {
   return (
     <Card
@@ -124,18 +187,27 @@ function VideoCard({
           >
             <PlayCircle className="h-3.5 w-3.5" /> 영상 보기
           </a>
-          <button
-            onClick={() => onBlock(video)}
-            disabled={!canBlockChannel(video)}
-            title={
-              canBlockChannel(video)
-                ? `'${video.channel}' 채널을 조사에서 제외`
-                : "채널 정보가 없어 제외할 수 없습니다"
-            }
-            className="inline-flex items-center gap-1 text-muted-foreground/70 transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-muted-foreground/70"
-          >
-            <Ban className="h-3.5 w-3.5" /> 채널 제외
-          </button>
+          <div className="flex items-center gap-3">
+            <MoveMenu
+              video={video}
+              currentKey={currentKey}
+              allDefs={allDefs}
+              disabled={moveDisabled}
+              onMove={onMove}
+            />
+            <button
+              onClick={() => onBlock(video)}
+              disabled={!canBlockChannel(video)}
+              title={
+                canBlockChannel(video)
+                  ? `'${video.channel}' 채널을 조사에서 제외`
+                  : "채널 정보가 없어 제외할 수 없습니다"
+              }
+              className="inline-flex items-center gap-1 text-muted-foreground/70 transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-muted-foreground/70"
+            >
+              <Ban className="h-3.5 w-3.5" /> 채널 제외
+            </button>
+          </div>
         </div>
       </div>
     </Card>
@@ -145,23 +217,29 @@ function VideoCard({
 function Section({
   def,
   items,
+  allDefs,
   canDelete,
   canUp,
   canDown,
+  moveDisabled,
   onMove,
   onEdit,
   onDelete,
   onBlock,
+  onMoveVideo,
 }: {
   def: YoutubeCategoryDef;
   items: YoutubeVideo[];
+  allDefs: YoutubeCategoryDef[];
   canDelete: boolean;
   canUp: boolean;
   canDown: boolean;
+  moveDisabled: boolean;
   onMove: (def: YoutubeCategoryDef, dir: "up" | "down") => void;
   onEdit: (def: YoutubeCategoryDef) => void;
   onDelete: (def: YoutubeCategoryDef) => void;
   onBlock: (video: YoutubeVideo) => void;
+  onMoveVideo: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
 }) {
   const ctrl =
     "rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
@@ -197,7 +275,16 @@ function Section({
       {items.length ? (
         <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
           {items.map((it, i) => (
-            <VideoCard key={it.videoId ?? i} video={it} color={def.color} onBlock={onBlock} />
+            <VideoCard
+              key={it.videoId ?? i}
+              video={it}
+              color={def.color}
+              currentKey={def.key}
+              allDefs={allDefs}
+              moveDisabled={moveDisabled}
+              onBlock={onBlock}
+              onMove={onMoveVideo}
+            />
           ))}
         </div>
       ) : (
@@ -310,6 +397,54 @@ export function YoutubeBoard() {
     }
   }
 
+  async function moveVideo(video: YoutubeVideo, fromKey: string, toKey: string) {
+    if (!video.videoId) {
+      setErr("영상 식별자가 없어 이동할 수 없습니다.");
+      return;
+    }
+    if (collecting) {
+      setErr("수집이 진행 중입니다. 완료된 뒤 카드를 이동해 주세요.");
+      return;
+    }
+    const videoId = video.videoId;
+    const prev = snap;
+    const target = defs.find((d) => d.key === toKey);
+    // 낙관적 업데이트: 모든 카테고리에서 제거 후 대상 맨 앞에 삽입.
+    setSnap((s) => {
+      if (!s) return s;
+      const moved = { ...video, movedByUser: true };
+      let placed = false;
+      const categories = s.categories.map((c) => {
+        const items = c.items.filter((v) => v.videoId !== videoId);
+        if (c.key === toKey) {
+          placed = true;
+          return { ...c, items: [moved, ...items] };
+        }
+        return { ...c, items };
+      });
+      // 대상 카테고리가 아직 스냅샷에 없으면(수집 이후 추가된 경우) 새 섹션으로 추가.
+      if (!placed && target) {
+        categories.push({
+          key: target.key,
+          label: target.label,
+          emoji: target.emoji,
+          color: target.color,
+          items: [moved],
+        });
+      }
+      return { ...s, categories };
+    });
+    try {
+      const updated = await api.moveYoutubeVideo({ videoId, fromKey, toKey });
+      setSnap(updated); // 서버 권위 스냅샷으로 확정
+      setErr(null);
+    } catch (e) {
+      setSnap(prev ?? null); // 실패 시 롤백
+      setErr((e as Error).message);
+      checkStatus(); // 409(수집 중)일 수 있으니 상태 재동기화 → 폴링 재개
+    }
+  }
+
   async function move(def: YoutubeCategoryDef, dir: "up" | "down") {
     const idx = defs.findIndex((d) => d.key === def.key);
     const j = dir === "up" ? idx - 1 : idx + 1;
@@ -403,13 +538,16 @@ export function YoutubeBoard() {
             key={def.key}
             def={def}
             items={itemsByKey.get(def.key) ?? []}
+            allDefs={defs}
             canDelete={defs.length > 1}
             canUp={i > 0}
             canDown={i < defs.length - 1}
+            moveDisabled={collecting}
             onMove={move}
             onEdit={(d) => setDialog({ mode: "edit", cat: d })}
             onDelete={deleteCategory}
             onBlock={blockChannel}
+            onMoveVideo={moveVideo}
           />
         ))
       )}
