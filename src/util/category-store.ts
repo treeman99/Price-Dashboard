@@ -70,6 +70,7 @@ export interface AddCategoryInput {
   description?: string;
   region?: "kr" | "global";
   excludeKeywords?: string[];
+  recommendedChannels?: string[];
 }
 
 export interface UpdateCategoryInput {
@@ -79,6 +80,7 @@ export interface UpdateCategoryInput {
   description?: string;
   region?: "kr" | "global";
   excludeKeywords?: string[];
+  recommendedChannels?: string[];
 }
 
 /** region 입력 정규화: 'global'만 global, 그 외는 'kr'. */
@@ -86,8 +88,8 @@ function normRegion(v: unknown): "kr" | "global" {
   return v === "global" ? "global" : "kr";
 }
 
-/** 제외 키워드 정규화: 배열의 문자열만, trim, 빈 값 제거, 중복 제거. */
-function normExclude(v: unknown): string[] {
+/** 문자열 목록 정규화: 배열의 문자열만, trim, 빈 값 제거, 중복 제거. (제외 키워드·추천 채널 공용) */
+function normStrList(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   const out: string[] = [];
   for (const x of v) {
@@ -168,7 +170,10 @@ export function createCategoryStore(
       color: (input.color || "").trim() || nextColor(cats),
       description,
       ...(input.region !== undefined ? { region: normRegion(input.region) } : {}),
-      ...(input.excludeKeywords !== undefined ? { excludeKeywords: normExclude(input.excludeKeywords) } : {}),
+      ...(input.excludeKeywords !== undefined ? { excludeKeywords: normStrList(input.excludeKeywords) } : {}),
+      ...(input.recommendedChannels !== undefined
+        ? { recommendedChannels: normStrList(input.recommendedChannels) }
+        : {}),
     };
     cats.push(cat);
     save(cats);
@@ -202,7 +207,10 @@ export function createCategoryStore(
       cat.region = normRegion(patch.region);
     }
     if (patch.excludeKeywords !== undefined) {
-      cat.excludeKeywords = normExclude(patch.excludeKeywords);
+      cat.excludeKeywords = normStrList(patch.excludeKeywords);
+    }
+    if (patch.recommendedChannels !== undefined) {
+      cat.recommendedChannels = normStrList(patch.recommendedChannels);
     }
 
     save(cats);

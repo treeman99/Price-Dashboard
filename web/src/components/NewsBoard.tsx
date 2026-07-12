@@ -134,7 +134,7 @@ export function NewsBoard() {
   const [snap, setSnap] = useState<NewsSnapshot | null>(null);
   const [defs, setDefs] = useState<NewsCategoryDef[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [collecting, setCollecting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [dialog, setDialog] = useState<CategoryDialogState | null>(null);
 
@@ -150,20 +150,44 @@ export function NewsBoard() {
       setLoading(false);
     }
   }
+  async function checkStatus() {
+    try {
+      setCollecting((await api.newsStatus()).collecting);
+    } catch {
+      /* 상태 폴링 실패는 무시 */
+    }
+  }
   useEffect(() => {
     load();
+    checkStatus(); // 진입 시 (예: 정시 수집이 돌고 있으면) '수집 중'을 즉시 반영
   }, []);
 
+  // 수집 중이면 5초마다 상태 확인 → 완료되면 스냅샷을 자동으로 다시 불러온다.
+  useEffect(() => {
+    if (!collecting) return;
+    const id = setInterval(async () => {
+      let done = false;
+      try {
+        done = !(await api.newsStatus()).collecting;
+      } catch {
+        return; // 일시 오류는 다음 주기에 재시도
+      }
+      if (done) {
+        setCollecting(false);
+        await load(); // 완료 → 새 결과 반영
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [collecting]);
+
   async function refresh() {
-    setRefreshing(true);
+    setErr(null);
     try {
-      const [s] = await Promise.all([api.refreshNews(), api.newsCategories().then(setDefs)]);
-      setSnap(s);
-      setErr(null);
+      await api.refreshNews(); // 백그라운드 시작(202) 또는 이미 수집 중(409) → 둘 다 정상
+      setCollecting(true); // '수집 중' 배너 + 폴링 시작 → 완료되면 자동 반영
+      api.newsCategories().then(setDefs).catch(() => {}); // 새 카테고리 즉시 반영
     } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setRefreshing(false);
+      setErr((e as Error).message); // 5xx 등 진짜 실패만 표시
     }
   }
 
@@ -225,9 +249,9 @@ export function NewsBoard() {
           <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
             <Plus className="h-4 w-4" /> 카테고리 추가
           </Button>
-          <Button variant="outline" onClick={refresh} disabled={refreshing}>
-            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            지금 갱신
+          <Button variant="outline" onClick={refresh} disabled={collecting}>
+            {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {collecting ? "수집 중…" : "지금 갱신"}
           </Button>
         </div>
       </div>
@@ -236,8 +260,11 @@ export function NewsBoard() {
         <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
       )}
 
-      {refreshing && !snap && (
-        <p className="text-sm text-muted-foreground">뉴스를 수집하는 중입니다… (1~3분 소요)</p>
+      {collecting && (
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          뉴스를 수집하는 중입니다… 1~3분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
+        </div>
       )}
 
       {!defs.length ? (

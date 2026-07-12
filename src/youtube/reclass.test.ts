@@ -18,7 +18,7 @@ test("buildReclassSection: 기록이 없으면 빈 문자열", () => {
 test("buildPrompt: reclassSection 인자가 프롬프트에 그대로 삽입된다", () => {
   const section =
     "\n\n📌 사용자 재분류 규칙(반드시 준수):\n  - \"갤럭시 라인업 총정리\" (리펭) 같은 영상 → 'AI 활용 · 도구'가 아니라 '신제품 리뷰'에 넣어라.";
-  const p = buildPrompt(defs, "2026-07-08", "2026-07-01", 7, "2026-07-08 12:00", [], section);
+  const p = buildPrompt(defs, "2026-07-08", "2026-07-01", 7, "2026-07-08 12:00", [], [], section);
   assert.match(p, /사용자 재분류 규칙/);
   assert.match(p, /갤럭시 라인업 총정리/);
   assert.match(p, /'신제품 리뷰'에 넣어라/);

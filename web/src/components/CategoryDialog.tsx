@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { NewsCategoryDef } from "@shared/types";
 
@@ -30,8 +31,8 @@ const KIND_CONFIG = {
     noun: "유튜브",
     add: api.addYoutubeCategory,
     update: api.updateYoutubeCategory,
-    guidePlaceholder: "예: AI 코딩 도구 리뷰·튜토리얼 (추천 채널을 함께 적으면 더 잘 찾습니다)",
-    hasRegion: true, // 유튜브만 검색 범위(한국/해외) 선택 노출
+    guidePlaceholder: "예: AI 코딩 도구 리뷰·튜토리얼 (원하는 세부 주제·갈래를 적으면 더 잘 찾습니다)",
+    hasRegion: true, // 유튜브만 검색 범위(한국/해외)·추천 채널 노출
   },
 } as const;
 
@@ -55,6 +56,7 @@ export function CategoryDialog({
   const [description, setDescription] = useState("");
   const [region, setRegion] = useState<"kr" | "global">("kr");
   const [excludeKw, setExcludeKw] = useState("");
+  const [recChannels, setRecChannels] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -66,6 +68,7 @@ export function CategoryDialog({
     setDescription(state.cat?.description ?? "");
     setRegion(state.cat?.region === "global" ? "global" : "kr"); // 미지정=한국 전용
     setExcludeKw((state.cat?.excludeKeywords ?? []).join(", "));
+    setRecChannels((state.cat?.recommendedChannels ?? []).join(", "));
     setErr(null);
   }, [state]);
 
@@ -81,8 +84,13 @@ export function CategoryDialog({
       const ytFields = cfg.hasRegion
         ? {
             region,
+            // 쉼표 또는 줄바꿈으로 구분(여러 줄 입력 지원)
             excludeKeywords: excludeKw
-              .split(",")
+              .split(/[,\n]/)
+              .map((s) => s.trim())
+              .filter(Boolean),
+            recommendedChannels: recChannels
+              .split(/[,\n]/)
               .map((s) => s.trim())
               .filter(Boolean),
           }
@@ -113,7 +121,7 @@ export function CategoryDialog({
 
   return (
     <Dialog open={!!state} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editing ? "카테고리 수정" : `${cfg.noun} 카테고리 추가`}</DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
@@ -138,7 +146,8 @@ export function CategoryDialog({
                 ? "수집 가이드 (선택) — 무엇을 원하는지"
                 : "수집 가이드 (선택) — 짧게 적어도 AI가 상세 지침으로 확장합니다"}
             </Label>
-            <Input
+            <Textarea
+              className="min-h-[7.5rem]"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder={cfg.guidePlaceholder}
@@ -174,8 +183,21 @@ export function CategoryDialog({
           )}
           {cfg.hasRegion && (
             <div className="space-y-1">
+              <Label>추천 채널 (선택, 쉼표로 구분)</Label>
+              <Textarea
+                value={recChannels}
+                onChange={(e) => setRecChannels(e.target.value)}
+                placeholder="예: 안될과학, @3blue1brown, Two Minute Papers"
+              />
+              <p className="text-xs text-muted-foreground">
+                이 채널들의 최근 업로드를 우선 확인합니다. 채널명 또는 @핸들 (하드 필터가 아니라 우선순위 힌트).
+              </p>
+            </div>
+          )}
+          {cfg.hasRegion && (
+            <div className="space-y-1">
               <Label>제외 키워드 (선택, 쉼표로 구분)</Label>
-              <Input
+              <Textarea
                 value={excludeKw}
                 onChange={(e) => setExcludeKw(e.target.value)}
                 placeholder="예: 자동차, 차량, SUV, 모빌리티, 시승"

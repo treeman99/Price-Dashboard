@@ -24,6 +24,20 @@ function TagBadge({ tag }: { tag: EventTag }) {
   );
 }
 
+/** '신규' 배지 — 약 일주일 만에 새로 등장한 행사 표시. 날짜 기반 태그와 함께 노출된다. */
+function NewBadge({ show }: { show?: boolean }) {
+  if (!show) return null;
+  return (
+    <Badge
+      className="shrink-0 border-transparent text-white"
+      style={{ backgroundColor: TAG_STYLE.신규.bg }}
+      title="약 일주일 만에 새로 등장한 행사"
+    >
+      {TAG_STYLE.신규.label}
+    </Badge>
+  );
+}
+
 function SourceLink({ link }: { link: string | null }) {
   if (!link) return null;
   return (
@@ -71,6 +85,7 @@ function EventTile({
   accent,
   title,
   tag,
+  isNew,
   metaIcon,
   metaPrimary,
   period,
@@ -82,6 +97,7 @@ function EventTile({
   accent: string;
   title: string;
   tag: EventTag;
+  isNew?: boolean;
   metaIcon: React.ReactNode;
   metaPrimary: string;
   period: string;
@@ -96,7 +112,10 @@ function EventTile({
         {/* 제목 영역 — 2줄 고정 */}
         <div className="flex items-start justify-between gap-2">
           <h4 className="line-clamp-2 min-h-[2.6em] font-semibold leading-tight">{title}</h4>
-          <TagBadge tag={tag} />
+          <div className="flex shrink-0 items-center gap-1">
+            <NewBadge show={isNew} />
+            <TagBadge tag={tag} />
+          </div>
         </div>
         {/* 장소 / 일정 / 카테고리 — 각각 별도 줄, 영역 높이 고정 */}
         <div className="mt-1 flex min-h-[3.6em] flex-col content-start gap-0.5 text-xs text-muted-foreground">
@@ -143,6 +162,7 @@ function PopupCard({ p }: { p: PopupItem }) {
       accent="#7C3AED"
       title={p.name}
       tag={p.tag}
+      isNew={p.isNew}
       metaIcon={<MapPin className="h-3 w-3" />}
       metaPrimary={p.region}
       period={p.period}
@@ -166,6 +186,7 @@ function ExhCard({ e }: { e: ExhibitionItem }) {
       accent="#FF8C00"
       title={e.title}
       tag={e.tag}
+      isNew={e.isNew}
       metaIcon={<Building2 className="h-3 w-3" />}
       metaPrimary={e.venue}
       period={e.period}
@@ -188,6 +209,7 @@ function FestivalCard({ f }: { f: FestivalItem }) {
       accent="#E8590C"
       title={f.name}
       tag={f.tag}
+      isNew={f.isNew}
       metaIcon={<MapPin className="h-3 w-3" />}
       metaPrimary={f.region}
       period={f.period}
@@ -216,7 +238,7 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
 export function EventsBoard() {
   const [snap, setSnap] = useState<EventsSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [collecting, setCollecting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function load() {
@@ -229,19 +251,43 @@ export function EventsBoard() {
       setLoading(false);
     }
   }
+  async function checkStatus() {
+    try {
+      setCollecting((await api.eventsStatus()).collecting);
+    } catch {
+      /* 상태 폴링 실패는 무시 */
+    }
+  }
   useEffect(() => {
     load();
+    checkStatus(); // 진입 시 (예: 정시 수집이 돌고 있으면) '수집 중'을 즉시 반영
   }, []);
 
+  // 수집 중이면 5초마다 상태 확인 → 완료되면 스냅샷을 자동으로 다시 불러온다.
+  useEffect(() => {
+    if (!collecting) return;
+    const id = setInterval(async () => {
+      let done = false;
+      try {
+        done = !(await api.eventsStatus()).collecting;
+      } catch {
+        return; // 일시 오류는 다음 주기에 재시도
+      }
+      if (done) {
+        setCollecting(false);
+        await load(); // 완료 → 새 결과 반영
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [collecting]);
+
   async function refresh() {
-    setRefreshing(true);
+    setErr(null);
     try {
-      setSnap(await api.refreshEvents());
-      setErr(null);
+      await api.refreshEvents(); // 백그라운드 시작(202) 또는 이미 수집 중(409) → 둘 다 정상
+      setCollecting(true); // '수집 중' 배너 + 폴링 시작 → 완료되면 자동 반영
     } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setRefreshing(false);
+      setErr((e as Error).message); // 5xx 등 진짜 실패만 표시
     }
   }
 
@@ -274,9 +320,9 @@ export function EventsBoard() {
             {snap?.source === "naver-raw" && " · (검색 원본 — LLM 큐레이션 비활성)"}
           </span>
         </div>
-        <Button variant="outline" onClick={refresh} disabled={refreshing}>
-          {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          지금 갱신
+        <Button variant="outline" onClick={refresh} disabled={collecting}>
+          {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          {collecting ? "수집 중…" : "지금 갱신"}
         </Button>
       </div>
 
@@ -284,13 +330,20 @@ export function EventsBoard() {
         <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
       )}
 
+      {collecting && (
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          팝업·전시 정보를 수집하는 중입니다… 수 분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
+        </div>
+      )}
+
       {!snap ? (
         <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
           <Sparkles className="h-10 w-10" />
           <p>아직 수집된 정보가 없습니다.</p>
-          <Button onClick={refresh} disabled={refreshing}>
-            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            지금 갱신
+          <Button onClick={refresh} disabled={collecting}>
+            {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {collecting ? "수집 중…" : "지금 갱신"}
           </Button>
         </div>
       ) : (

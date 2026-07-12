@@ -11,6 +11,7 @@ import type {
   YoutubeSnapshot,
   YoutubeCategoryDef,
   BlockedChannel,
+  WatchedVideo,
   ProductSource,
   UpsertProductSourceInput,
   ResolveResult,
@@ -86,7 +87,19 @@ export const api = {
       body: JSON.stringify({ ids }),
     }).then((r) => j<ProductSummary[]>(r)),
 
-  collectNow: () => fetch("/api/collect", { method: "POST" }).then((r) => j<CollectResult>(r)),
+  /**
+   * 전체 수집을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
+   * 완료 여부는 collectStatus() 폴링으로 확인한다.
+   */
+  collectNow: async (): Promise<{ started: boolean; busy: boolean }> => {
+    const res = await fetch("/api/collect", { method: "POST" });
+    if (res.status === 409) return { started: false, busy: true };
+    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
+    return { started: true, busy: false };
+  },
+
+  collectStatus: () =>
+    fetch("/api/collect/status").then((r) => j<{ collecting: boolean }>(r)),
 
   // ── 상품 × 소스 ref (pcode 확정) ──
   listSources: (id: number) =>
@@ -121,13 +134,39 @@ export const api = {
 
   events: () => fetch("/api/events").then((r) => j<EventsSnapshot | null>(r)),
 
-  refreshEvents: () =>
-    fetch("/api/events/refresh", { method: "POST" }).then((r) => j<EventsSnapshot>(r)),
+  /**
+   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
+   * 완료 여부는 eventsStatus() 폴링으로 확인한다.
+   */
+  refreshEvents: async (): Promise<{ started: boolean; busy: boolean }> => {
+    const res = await fetch("/api/events/refresh", { method: "POST" });
+    if (res.status === 409) return { started: false, busy: true };
+    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
+    return { started: true, busy: false };
+  },
+
+  eventsStatus: () =>
+    fetch("/api/events/status").then((r) =>
+      j<{ collecting: boolean; updatedAt: string | null }>(r)
+    ),
 
   news: () => fetch("/api/news").then((r) => j<NewsSnapshot | null>(r)),
 
-  refreshNews: () =>
-    fetch("/api/news/refresh", { method: "POST" }).then((r) => j<NewsSnapshot>(r)),
+  /**
+   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
+   * 완료 여부는 newsStatus() 폴링으로 확인한다.
+   */
+  refreshNews: async (): Promise<{ started: boolean; busy: boolean }> => {
+    const res = await fetch("/api/news/refresh", { method: "POST" });
+    if (res.status === 409) return { started: false, busy: true };
+    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
+    return { started: true, busy: false };
+  },
+
+  newsStatus: () =>
+    fetch("/api/news/status").then((r) =>
+      j<{ collecting: boolean; updatedAt: string | null }>(r)
+    ),
 
   newsCategories: () =>
     fetch("/api/news/categories").then((r) => j<NewsCategoryDef[]>(r)),
@@ -212,6 +251,7 @@ export const api = {
     description?: string;
     region?: "kr" | "global";
     excludeKeywords?: string[];
+    recommendedChannels?: string[];
   }) =>
     fetch("/api/youtube/categories", {
       method: "POST",
@@ -228,6 +268,7 @@ export const api = {
       description?: string;
       region?: "kr" | "global";
       excludeKeywords?: string[];
+      recommendedChannels?: string[];
     }
   ) =>
     fetch(`/api/youtube/categories/${encodeURIComponent(key)}`, {
@@ -261,6 +302,23 @@ export const api = {
 
   unblockYoutubeChannel: (id: string) =>
     fetch(`/api/youtube/blocklist/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) =>
+      j<{ ok: boolean }>(r)
+    ),
+
+  // ── 유튜브 '본영상' 체크(수집 제외) ──
+  youtubeWatched: () => fetch("/api/youtube/watched").then((r) => j<WatchedVideo[]>(r)),
+
+  /** 본영상 체크 ON. 이후 일정 기간 수집(검색)에서 제외된다. */
+  markYoutubeWatched: (input: { videoId: string; title?: string; channel?: string }) =>
+    fetch("/api/youtube/watched", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<WatchedVideo>(r)),
+
+  /** 본영상 체크 OFF(해제). 다시 검색에 노출될 수 있다. */
+  unmarkYoutubeWatched: (videoId: string) =>
+    fetch(`/api/youtube/watched/${encodeURIComponent(videoId)}`, { method: "DELETE" }).then((r) =>
       j<{ ok: boolean }>(r)
     ),
 };

@@ -5,6 +5,7 @@ import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
 import { gatherCorpus } from "./gather.ts";
 import { curate } from "./curate.ts";
+import { markNewItems } from "./new-tracker.ts";
 import { sendEventsEmail } from "../notify/events-email.ts";
 import type { EventsSnapshot } from "../../shared/types.ts";
 
@@ -45,6 +46,11 @@ export function hasTodaySnapshot(): boolean {
   return getEventsSnapshot()?.date === localDate();
 }
 
+/** 현재 팝업/전시 수집이 진행 중인지 (API가 '수집 중' 안내에 사용). 수동·정시 수집 모두 반영. */
+export function isEventsCollecting(): boolean {
+  return running;
+}
+
 /**
  * 팝업/전시 수집 실행: 네이버 검색 → 큐레이션 → 캐시 갱신 → (옵션)이메일.
  * 이력은 저장하지 않고 최신 스냅샷만 덮어쓴다.
@@ -59,6 +65,14 @@ export async function refreshEvents(opts: { trigger: string; notify?: boolean } 
     const date = localDate();
     const corpus = await gatherCorpus();
     const snapshot = await curate(corpus, date);
+    // '신규(약 일주일 만에 등장)' 태깅 — 등장 원장 갱신. 폴백 원본은 제목 노이즈로 제외.
+    if (snapshot.source === "llm") {
+      try {
+        markNewItems(snapshot, date);
+      } catch (e) {
+        log.warn(`이벤트 신규 태깅 예외: ${(e as Error).message}`);
+      }
+    }
     memo = snapshot;
     saveToDisk(snapshot);
 

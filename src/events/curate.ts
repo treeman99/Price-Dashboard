@@ -370,7 +370,7 @@ function computeTag(startDate: string | null, endDate: string | null, today: str
 }
 
 /** 제목 정규화: 공백/괄호/특수문자 제거 후 비교용 키 */
-function titleKey(s: string): string {
+export function titleKey(s: string): string {
   return s
     .toLowerCase()
     .replace(/\s+/g, "")

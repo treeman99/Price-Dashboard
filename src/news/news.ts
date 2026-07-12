@@ -45,6 +45,11 @@ export function hasTodayNewsSnapshot(): boolean {
   return getNewsSnapshot()?.date === localDate();
 }
 
+/** 현재 뉴스 수집이 진행 중인지 (API가 '수집 중' 안내에 사용). 수동·정시 수집 모두 반영. */
+export function isNewsCollecting(): boolean {
+  return running;
+}
+
 /**
  * 뉴스 수집 실행: Claude Agent SDK 큐레이션 → 캐시 갱신 → (옵션)이메일.
  * 이력은 저장하지 않고 최신 스냅샷만 덮어쓴다.

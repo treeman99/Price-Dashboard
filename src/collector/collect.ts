@@ -171,12 +171,35 @@ async function collectProduct(
   return point;
 }
 
+let priceCollecting = false;
+
+/**
+ * 현재 가격 '전체 수집'(수동/정시)이 진행 중인지. 프론트 '수집 중' 배너·상태 폴링에 사용.
+ * 단일 상품 즉시수집(onlyProductId)은 대시보드 전역 배너 대상이 아니므로 제외한다.
+ * 수동·정시 수집 모두 runCollection 을 거치므로 두 경우 다 반영된다.
+ */
+export function isPriceCollecting(): boolean {
+  return priceCollecting;
+}
+
 /**
  * 하루치 수집 실행. (product_id,date) upsert 라 같은 날 재실행해도 덮어쓰기(멱등).
  * 상품별 실패는 격리하고 나머지를 계속 진행한다.
  * 상품 간 순차 처리 + 2~5s 랜덤 지터(매너 §8).
+ * 전체 수집일 때만 '수집 중' 플래그를 세운다(예외가 나도 finally 로 반드시 해제).
  */
 export async function runCollection(opts: CollectOptions): Promise<CollectResult> {
+  const isFullRun = !opts.onlyProductId;
+  if (!isFullRun) return runCollectionInner(opts);
+  priceCollecting = true;
+  try {
+    return await runCollectionInner(opts);
+  } finally {
+    priceCollecting = false;
+  }
+}
+
+async function runCollectionInner(opts: CollectOptions): Promise<CollectResult> {
   const { date } = opts;
   const startedAt = new Date().toISOString();
   // 단일 상품 즉시수집(상품 추가/재수집)은 '오늘의 일일 실행'이 아니므로 collect_runs 를 건드리지 않는다.

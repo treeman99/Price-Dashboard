@@ -27,19 +27,44 @@ export function Dashboard() {
     }
   }, []);
 
+  const checkStatus = useCallback(async () => {
+    try {
+      setCollecting((await api.collectStatus()).collecting);
+    } catch {
+      /* 상태 폴링 실패는 무시 */
+    }
+  }, []);
+
   useEffect(() => {
     load();
-  }, [load]);
+    checkStatus(); // 진입 시 (예: 정시 수집이 돌고 있으면) '수집 중'을 즉시 반영
+  }, [load, checkStatus]);
+
+  // 수집 중이면 5초마다 상태 확인 → 완료되면 목록을 자동으로 다시 불러온다.
+  useEffect(() => {
+    if (!collecting) return;
+    const id = setInterval(async () => {
+      let done = false;
+      try {
+        done = !(await api.collectStatus()).collecting;
+      } catch {
+        return; // 일시 오류는 다음 주기에 재시도
+      }
+      if (done) {
+        setCollecting(false);
+        await load(); // 완료 → 새 결과 반영
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [collecting, load]);
 
   async function collectNow() {
-    setCollecting(true);
+    setErr(null);
     try {
-      await api.collectNow();
-      await load();
+      await api.collectNow(); // 백그라운드 시작(202) 또는 이미 수집 중(409) → 둘 다 정상
+      setCollecting(true); // '수집 중' 배너 + 폴링 시작 → 완료되면 자동 반영
     } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setCollecting(false);
+      setErr((e as Error).message); // 5xx 등 진짜 실패만 표시
     }
   }
 
@@ -73,7 +98,7 @@ export function Dashboard() {
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={collectNow} disabled={collecting}>
             {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            지금 수집
+            {collecting ? "수집 중…" : "지금 수집"}
           </Button>
           <AddProductDialog onAdded={load} />
         </div>
@@ -93,6 +118,13 @@ export function Dashboard() {
       {err && (
         <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">
           {err}
+        </div>
+      )}
+
+      {collecting && (
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          가격을 수집하는 중입니다… 상품 수에 따라 수 분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
         </div>
       )}
 

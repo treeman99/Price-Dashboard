@@ -196,6 +196,11 @@ export interface PopupItem {
   link: string | null;
   category: string | null;
   tag: EventTag;
+  /**
+   * 약 일주일 이상 목록에 없다가 다시(또는 처음) 등장한 행사면 true.
+   * 서버가 등장 이력(events-seen.json)으로 계산하며, 프론트는 이 값으로 '신규' 배지를 표시한다.
+   */
+  isNew?: boolean;
 }
 
 export interface ExhibitionItem {
@@ -207,6 +212,8 @@ export interface ExhibitionItem {
   summary: string;
   link: string | null;
   tag: EventTag;
+  /** 약 일주일 이상 없다가 다시(또는 처음) 등장하면 true. 서버가 계산. */
+  isNew?: boolean;
 }
 
 export interface VenueGroup {
@@ -225,6 +232,8 @@ export interface FestivalItem {
   summary: string;
   link: string | null;
   tag: EventTag;
+  /** 약 일주일 이상 없다가 다시(또는 처음) 등장하면 true. 서버가 계산. */
+  isNew?: boolean;
 }
 
 export interface EventsSnapshot {
@@ -269,6 +278,12 @@ export interface CategoryDef {
    * 예) 신제품 리뷰에서 자동차를 빼려면 ["자동차","SUV","모빌리티",...]. 대소문자 무시.
    */
   excludeKeywords?: string[];
+  /**
+   * (유튜브 전용) 추천 채널. 이 카테고리에서 **우선적으로 최근 업로드를 확인**할 채널 목록.
+   * 하드 필터가 아니라 '먼저 살펴볼 채널' 힌트로 큐레이션 프롬프트에 주입된다.
+   * 채널명 또는 @핸들. 예) ["안될과학","@3blue1brown","Two Minute Papers"]
+   */
+  recommendedChannels?: string[];
 }
 
 /** 뉴스 카테고리 정의(=공용 CategoryDef). 하위 호환을 위해 별칭 유지. */
@@ -347,6 +362,26 @@ export interface YoutubeVideo {
    * true면 읽기 시점 지역필터(applyRegionFilter)를 건너뛰어 사용자의 배치를 존중한다.
    */
   movedByUser?: boolean;
+  /**
+   * 사용자가 '본영상'으로 체크했는지(읽기 시점 주석 — 스냅샷에 영속되지 않음).
+   * true면 프론트가 카드를 '본 영상'으로 표시하고, 서버는 이 영상을 일정 기간 수집(검색)에서 제외한다.
+   */
+  watched?: boolean;
+}
+
+/**
+ * 사용자가 '본영상'으로 체크한 영상(수집 제외 원장 1건). videoId 기준.
+ * watchedAt 시점부터 youtubeWatchedExcludeDays 동안 수집·검색에서 제외되고, 이후 만료된다.
+ */
+export interface WatchedVideo {
+  /** YouTube 11자 videoId(안정 식별자). */
+  videoId: string;
+  /** 표시/디버그용 제목(체크 시점). */
+  title: string;
+  /** 표시/디버그용 채널명(체크 시점). */
+  channel: string;
+  /** 체크 시각(ISO). 이 시점부터 N일간 제외. */
+  watchedAt: string;
 }
 
 /**

@@ -13,6 +13,8 @@ import {
   ChevronUp,
   ChevronDown,
   FolderInput,
+  CheckCircle2,
+  Circle,
 } from "lucide-react";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategoryDef } from "@shared/types";
 import { UNKNOWN_CHANNEL } from "@shared/youtube";
@@ -128,6 +130,33 @@ function MoveMenu({
   );
 }
 
+function WatchedToggle({
+  video,
+  onToggleWatched,
+}: {
+  video: YoutubeVideo;
+  onToggleWatched: (video: YoutubeVideo) => void;
+}) {
+  const watched = !!video.watched;
+  return (
+    <button
+      onClick={() => onToggleWatched(video)}
+      disabled={!video.videoId}
+      title={
+        watched
+          ? "본영상 해제 — 다시 검색(수집)에 노출됩니다"
+          : "본영상으로 체크 — 1주일간 검색(수집)에서 제외됩니다"
+      }
+      className={`absolute left-3.5 top-3.5 z-10 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium shadow-sm backdrop-blur transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+        watched ? "bg-emerald-600 text-white" : "bg-black/55 text-white hover:bg-emerald-600"
+      }`}
+    >
+      {watched ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
+      {watched ? "본영상" : "본영상 체크"}
+    </button>
+  );
+}
+
 function VideoCard({
   video,
   color,
@@ -136,6 +165,7 @@ function VideoCard({
   moveDisabled,
   onBlock,
   onMove,
+  onToggleWatched,
 }: {
   video: YoutubeVideo;
   color: string;
@@ -144,14 +174,18 @@ function VideoCard({
   moveDisabled: boolean;
   onBlock: (video: YoutubeVideo) => void;
   onMove: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
+  onToggleWatched: (video: YoutubeVideo) => void;
 }) {
   return (
     <Card
-      className="flex h-[30rem] flex-col overflow-hidden border-l-4 p-0"
+      className={`flex h-[30rem] flex-col overflow-hidden border-l-4 p-0 transition-opacity ${
+        video.watched ? "opacity-75" : ""
+      }`}
       style={{ borderLeftColor: color }}
     >
-      <div className="shrink-0 p-2 pb-0">
+      <div className="relative shrink-0 p-2 pb-0">
         <Thumbnail video={video} />
+        <WatchedToggle video={video} onToggleWatched={onToggleWatched} />
       </div>
       <div className="flex min-h-0 flex-1 flex-col p-3 pt-2">
         {/* 제목 — 2줄 고정 */}
@@ -227,6 +261,7 @@ function Section({
   onDelete,
   onBlock,
   onMoveVideo,
+  onToggleWatched,
 }: {
   def: YoutubeCategoryDef;
   items: YoutubeVideo[];
@@ -240,6 +275,7 @@ function Section({
   onDelete: (def: YoutubeCategoryDef) => void;
   onBlock: (video: YoutubeVideo) => void;
   onMoveVideo: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
+  onToggleWatched: (video: YoutubeVideo) => void;
 }) {
   const ctrl =
     "rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
@@ -284,6 +320,7 @@ function Section({
               moveDisabled={moveDisabled}
               onBlock={onBlock}
               onMove={onMoveVideo}
+              onToggleWatched={onToggleWatched}
             />
           ))}
         </div>
@@ -382,6 +419,36 @@ export function YoutubeBoard() {
       loadBlockCount();
       setErr(null);
     } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
+
+  async function toggleWatched(video: YoutubeVideo) {
+    const videoId = video.videoId;
+    if (!videoId) {
+      setErr("영상 식별자가 없어 본영상 체크를 할 수 없습니다.");
+      return;
+    }
+    const next = !video.watched;
+    const prev = snap;
+    // 낙관적 업데이트: 카드를 제거하지 않고 watched 상태만 토글(되돌리기 가능).
+    setSnap((s) =>
+      s
+        ? {
+            ...s,
+            categories: s.categories.map((c) => ({
+              ...c,
+              items: c.items.map((it) => (it.videoId === videoId ? { ...it, watched: next } : it)),
+            })),
+          }
+        : s
+    );
+    try {
+      if (next) await api.markYoutubeWatched({ videoId, title: video.title, channel: video.channel });
+      else await api.unmarkYoutubeWatched(videoId);
+      setErr(null);
+    } catch (e) {
+      setSnap(prev ?? null); // 실패 시 롤백
       setErr((e as Error).message);
     }
   }
@@ -548,6 +615,7 @@ export function YoutubeBoard() {
             onDelete={deleteCategory}
             onBlock={blockChannel}
             onMoveVideo={moveVideo}
+            onToggleWatched={toggleWatched}
           />
         ))
       )}

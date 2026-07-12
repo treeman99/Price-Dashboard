@@ -22,9 +22,9 @@ import {
 } from "../db/repo.ts";
 import { parseSourceInput } from "./sources.ts";
 import { resolveCandidates } from "./resolve.ts";
-import { runCollection } from "../collector/collect.ts";
-import { getEventsSnapshot, refreshEvents } from "../events/events.ts";
-import { getNewsSnapshot, refreshNews } from "../news/news.ts";
+import { runCollection, isPriceCollecting } from "../collector/collect.ts";
+import { getEventsSnapshot, refreshEvents, isEventsCollecting } from "../events/events.ts";
+import { getNewsSnapshot, refreshNews, isNewsCollecting } from "../news/news.ts";
 import {
   loadCategories,
   addCategory,
@@ -46,6 +46,7 @@ import {
   reorderCategories as ytReorderCategories,
 } from "../youtube/categories.ts";
 import { loadBlocklist, addBlock, removeBlock, applyBlocklist } from "../youtube/blocklist.ts";
+import { markWatched, unmarkWatched, activeWatched, annotateWatched } from "../youtube/watched.ts";
 import { applyRegionFilter } from "../youtube/curate.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
 import { rescheduleAll } from "../scheduler/scheduler.ts";
@@ -355,14 +356,24 @@ api.post("/service/uninstall", (_req, res) => {
   }, 600);
 });
 
-/** 지금 수집 (수동 트리거, 전체) */
-api.post("/collect", async (_req, res) => {
-  try {
-    const result = await runCollection({ date: today(), trigger: "manual" });
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
+/**
+ * 지금 수집 (수동 트리거, 전체). 수집은 수 분 걸릴 수 있어 **백그라운드로 시작**하고 즉시 202를 반환한다.
+ * 프론트는 /collect/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /products 를 다시 불러온다.
+ * 이미 수집 중이면(수동/정시 무관) 새로 시작하지 않고 409로 안내(중복 수집 방지).
+ */
+api.post("/collect", (_req, res) => {
+  if (isPriceCollecting()) {
+    return res.status(409).json({ error: "이미 가격 수집이 진행 중입니다.", collecting: true });
   }
+  void runCollection({ date: today(), trigger: "manual" }).catch((e) =>
+    log.warn(`가격 수동 수집 예외: ${(e as Error).message}`)
+  );
+  res.status(202).json({ started: true, collecting: true });
+});
+
+/** 가격 수집 진행 상태(프론트 폴링용). */
+api.get("/collect/status", (_req, res) => {
+  res.json({ collecting: isPriceCollecting() });
 });
 
 // ── 팝업 · 전시 게시판 ──
@@ -372,14 +383,25 @@ api.get("/events", (_req, res) => {
   res.json(getEventsSnapshot());
 });
 
-/** 지금 갱신 (수동). 이메일은 보내지 않음(중복 방지) */
-api.post("/events/refresh", async (_req, res) => {
-  try {
-    const snapshot = await refreshEvents({ trigger: "manual", notify: false });
-    res.json(snapshot);
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
+/**
+ * 지금 갱신 (수동). 수집은 수 분 걸릴 수 있어 **백그라운드로 시작**하고 즉시 202를 반환한다.
+ * 프론트는 /events/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /events 를 다시 불러온다.
+ * 이미 수집 중이면(수동/정시 무관) 409로 안내. 수동 갱신은 이메일을 보내지 않음(중복 방지).
+ */
+api.post("/events/refresh", (_req, res) => {
+  if (isEventsCollecting()) {
+    return res.status(409).json({ error: "이미 팝업/전시 수집이 진행 중입니다.", collecting: true });
   }
+  void refreshEvents({ trigger: "manual", notify: false }).catch((e) =>
+    log.warn(`팝업/전시 수동 수집 예외: ${(e as Error).message}`)
+  );
+  res.status(202).json({ started: true, collecting: true });
+});
+
+/** 팝업/전시 수집 진행 상태(프론트 폴링용). */
+api.get("/events/status", (_req, res) => {
+  const snap = getEventsSnapshot();
+  res.json({ collecting: isEventsCollecting(), updatedAt: snap?.updatedAt ?? null });
 });
 
 // ── 데일리 뉴스 다이제스트 ──
@@ -389,14 +411,25 @@ api.get("/news", (_req, res) => {
   res.json(getNewsSnapshot());
 });
 
-/** 지금 갱신 (수동). 수집한 내용을 이메일로도 발송(0건이면 생략). */
-api.post("/news/refresh", async (_req, res) => {
-  try {
-    const snapshot = await refreshNews({ trigger: "manual", notify: true });
-    res.json(snapshot);
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
+/**
+ * 지금 갱신 (수동). 수집은 1~3분 걸릴 수 있어 **백그라운드로 시작**하고 즉시 202를 반환한다.
+ * 프론트는 /news/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /news 를 다시 불러온다.
+ * 이미 수집 중이면(수동/정시 무관) 409로 안내. 수집한 내용은 이메일로도 발송(0건이면 생략).
+ */
+api.post("/news/refresh", (_req, res) => {
+  if (isNewsCollecting()) {
+    return res.status(409).json({ error: "이미 뉴스 수집이 진행 중입니다.", collecting: true });
   }
+  void refreshNews({ trigger: "manual", notify: true }).catch((e) =>
+    log.warn(`뉴스 수동 수집 예외: ${(e as Error).message}`)
+  );
+  res.status(202).json({ started: true, collecting: true });
+});
+
+/** 뉴스 수집 진행 상태(프론트 폴링용). */
+api.get("/news/status", (_req, res) => {
+  const snap = getNewsSnapshot();
+  res.json({ collecting: isNewsCollecting(), updatedAt: snap?.updatedAt ?? null });
 });
 
 /** 뉴스 카테고리 목록 */
@@ -464,7 +497,7 @@ api.delete("/news/categories/:key", (req, res) => {
  */
 api.get("/youtube", (_req, res) => {
   const snap = applyBlocklist(getYoutubeSnapshot());
-  res.json(applyRegionFilter(snap, ytLoadCategories()));
+  res.json(annotateWatched(applyRegionFilter(snap, ytLoadCategories())));
 });
 
 /**
@@ -506,7 +539,7 @@ api.post("/youtube/move", (req, res) => {
         .json({ error: "수집이 진행 중입니다. 완료된 뒤 카드를 이동해 주세요.", collecting: true });
     }
     const snap = moveYoutubeVideo(String(videoId), String(fromKey), String(toKey));
-    res.json(applyRegionFilter(applyBlocklist(snap), ytLoadCategories()));
+    res.json(annotateWatched(applyRegionFilter(applyBlocklist(snap), ytLoadCategories())));
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
@@ -520,8 +553,17 @@ api.get("/youtube/categories", (_req, res) => {
 /** 카테고리 추가 — 설명이 없거나 짧으면 LLM이 수집 지침을 대신 작성(실패 시 입력값 유지) */
 api.post("/youtube/categories", async (req, res) => {
   try {
-    const { label, emoji, color, description, region, excludeKeywords } = req.body ?? {};
-    let cat = ytAddCategory({ label, emoji, color, description, region, excludeKeywords });
+    const { label, emoji, color, description, region, excludeKeywords, recommendedChannels } =
+      req.body ?? {};
+    let cat = ytAddCategory({
+      label,
+      emoji,
+      color,
+      description,
+      region,
+      excludeKeywords,
+      recommendedChannels,
+    });
     if (shouldAutoDescribe(description)) {
       const generated = await generateCategoryDescription({
         kind: "youtube",
@@ -529,6 +571,7 @@ api.post("/youtube/categories", async (req, res) => {
         hint: typeof description === "string" ? description : undefined,
         region: cat.region,
         excludeKeywords: cat.excludeKeywords,
+        recommendedChannels: cat.recommendedChannels,
       });
       if (generated) cat = ytUpdateCategory(cat.key, { description: generated });
     }
@@ -552,8 +595,17 @@ api.put("/youtube/categories/order", (req, res) => {
 /** 카테고리 수정 */
 api.patch("/youtube/categories/:key", (req, res) => {
   try {
-    const { label, emoji, color, description, region, excludeKeywords } = req.body ?? {};
-    const cat = ytUpdateCategory(req.params.key, { label, emoji, color, description, region, excludeKeywords });
+    const { label, emoji, color, description, region, excludeKeywords, recommendedChannels } =
+      req.body ?? {};
+    const cat = ytUpdateCategory(req.params.key, {
+      label,
+      emoji,
+      color,
+      description,
+      region,
+      excludeKeywords,
+      recommendedChannels,
+    });
     res.json(cat);
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
@@ -594,5 +646,35 @@ api.post("/youtube/blocklist", (req, res) => {
 api.delete("/youtube/blocklist/:id", (req, res) => {
   const ok = removeBlock(req.params.id);
   if (!ok) return res.status(404).json({ error: "차단 목록에 없습니다." });
+  res.json({ ok: true });
+});
+
+// ── 유튜브 '본영상' 목록(수집 제외, 일정 기간 후 만료) ──
+
+/** 현재 제외 활성인 본영상 목록(만료 제외, 최근 체크 먼저). */
+api.get("/youtube/watched", (_req, res) => {
+  const list = [...activeWatched()].sort((a, b) => b.watchedAt.localeCompare(a.watchedAt));
+  res.json(list);
+});
+
+/** 본영상 체크(카드의 '본영상' 토글 ON). videoId 기준 멱등 — 재체크 시 제외 기간 연장. */
+api.post("/youtube/watched", (req, res) => {
+  try {
+    const { videoId, title, channel } = req.body ?? {};
+    const entry = markWatched({
+      videoId: String(videoId ?? ""),
+      title: title != null ? String(title) : null,
+      channel: channel != null ? String(channel) : null,
+    });
+    res.json(entry);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/** 본영상 해제(토글 OFF). 다시 검색에 노출될 수 있다. */
+api.delete("/youtube/watched/:videoId", (req, res) => {
+  const ok = unmarkWatched(req.params.videoId);
+  if (!ok) return res.status(404).json({ error: "본영상 목록에 없습니다." });
   res.json({ ok: true });
 });

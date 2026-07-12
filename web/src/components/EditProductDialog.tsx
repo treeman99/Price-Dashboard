@@ -10,14 +10,15 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { Product, UpdateProductInput } from "@shared/types";
 
-// ── 파서 (AddProductDialog 와 동일 규칙) ──
+// ── 파서 (AddProductDialog 와 동일 규칙: 쉼표·줄바꿈 구분) ──
 /** "루나|Luna, 울트라|Ultra" → [["루나","Luna"],["울트라","Ultra"]] */
 function parseIncludeGroups(s: string): string[][] {
   return s
-    .split(",")
+    .split(/[,\n]/)
     .map((g) => g.trim())
     .filter(Boolean)
     .map((g) => g.split("|").map((t) => t.trim()).filter(Boolean));
@@ -25,7 +26,7 @@ function parseIncludeGroups(s: string): string[][] {
 
 /** "Slim, 슬림" → ["Slim","슬림"] */
 function parseTokens(s: string): string[] {
-  return s.split(",").map((t) => t.trim()).filter(Boolean);
+  return s.split(/[,\n]/).map((t) => t.trim()).filter(Boolean);
 }
 
 // ── 역직렬화 (기존 값 → 입력창 표시용 문자열) ──
@@ -125,7 +126,7 @@ export function EditProductDialog({
           <Pencil className="h-4 w-4" />
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>상품 정보 수정</DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
@@ -145,16 +146,16 @@ export function EditProductDialog({
             )}
           </div>
           <div className="space-y-1">
-            <Label>포함 조건 (쉼표=필수 그룹, | =동의어)</Label>
-            <Input
+            <Label>포함 조건 (쉼표·줄바꿈=필수 그룹, | =동의어)</Label>
+            <Textarea
               value={include}
               onChange={(e) => setInclude(e.target.value)}
-              placeholder="예: X60, 울트라|Ultra"
+              placeholder={"예: X60, 울트라|Ultra\n(그룹마다 줄바꿈으로 나눠도 됩니다)"}
             />
           </div>
           <div className="space-y-1">
-            <Label>제외 키워드 (쉼표 구분)</Label>
-            <Input
+            <Label>제외 키워드 (쉼표·줄바꿈 구분)</Label>
+            <Textarea
               value={exclude}
               onChange={(e) => setExclude(e.target.value)}
               placeholder="예: X50, X40, Pro"

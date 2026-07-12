@@ -4,6 +4,7 @@ import { runAgentQueryText } from "../util/agent-query.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import { loadCategories } from "./categories.ts";
 import { loadBlocklist, buildBlockMatcher, UNKNOWN_CHANNEL } from "./blocklist.ts";
+import { activeWatched, buildWatchedMatcher } from "./watched.ts";
 import { buildReclassSection } from "./reclass.ts";
 import { enrichVideos } from "./oembed.ts";
 import type {
@@ -107,6 +108,7 @@ export function buildPrompt(
   freshDays: number,
   now: string,
   blocked: string[],
+  watchedTitles: string[] = [],
   reclassSection = ""
 ): string {
   const cats = defs
@@ -115,7 +117,11 @@ export function buildPrompt(
         c.excludeKeywords && c.excludeKeywords.length
           ? ` [제외(절대 넣지 마라): ${c.excludeKeywords.join(", ")}]`
           : "";
-      return `${c.emoji} ${c.label} (key: "${c.key}") [검색범위: ${scopeLabel(c.region)}]${exclude}${
+      const recommend =
+        c.recommendedChannels && c.recommendedChannels.length
+          ? ` [추천 채널(먼저 확인): ${c.recommendedChannels.join(", ")}]`
+          : "";
+      return `${c.emoji} ${c.label} (key: "${c.key}") [검색범위: ${scopeLabel(c.region)}]${exclude}${recommend}${
         c.description ? ` — ${c.description}` : ""
       }`;
     })
@@ -125,12 +131,17 @@ export function buildPrompt(
         "\n  - "
       )}\n  이 채널들의 영상은 어떤 카테고리에도 넣지 마라.`
     : "";
+  const watchedSection = watchedTitles.length
+    ? `\n\n👁 이미 본 영상(사용자가 '본영상'으로 체크 — 다시 넣지 마라):\n  - ${watchedTitles.join(
+        "\n  - "
+      )}\n  위와 동일한 영상은 어떤 카테고리에도 넣지 마라(제목이 조금 달라도 같은 영상이면 제외).`
+    : "";
   return `너는 한국어 유튜브 소식 큐레이터다. 지금 시각은 ${now}. **조회 시점 기준 최근 ${freshDays}일 이내(${cutoff} 이후 ~ ${today})**에
 업로드된 YouTube 영상만 모아 아래 ${defs.length}개 카테고리로 정리한다. 이 신선도 기준은 **모든 카테고리에 예외 없이 동일하게** 적용된다.
 모든 제목·요약은 **반드시 한국어**로 작성한다(영어 영상도 한국어로 번역·요약). 원제는 originalTitle에 보존한다.
 
 카테고리:
-  - ${cats}${blockSection}${reclassSection}
+  - ${cats}${blockSection}${watchedSection}${reclassSection}
 
 🌐 검색 범위(각 카테고리의 [검색범위]를 반드시 준수):
 - "한국 채널·한국어 영상만": **한국 유튜버가 만든 한국어(음성/자막) 영상만** 채택한다.
@@ -144,7 +155,7 @@ export function buildPrompt(
 1. 각 카테고리마다 WebSearch를 **서로 다른 각도로 최소 4회 이상** 수행한다. YouTube 영상을 노린 쿼리를 쓴다:
    - 주제 키워드: "site:youtube.com <주제> <이번주/최신>", "<주제> 강의/튜토리얼/활용법 youtube".
    - 도구·제품명: "<도구명> tutorial youtube", "<제품명> review youtube".
-   - 채널 확인: description에 적힌 추천 채널들의 **최근 업로드**를 직접 확인한다(채널명 + 핵심 키워드로 검색).
+   - 채널 확인: 각 카테고리의 **[추천 채널(먼저 확인)]** 에 적힌 채널과 description에 언급된 채널들의 **최근 업로드**를 우선 직접 확인한다(채널명/핸들 + 핵심 키워드로 검색). 단, 추천 채널이라도 신선도·관련성 기준은 동일하게 적용한다(오래된 영상은 제외).
    - description에 여러 갈래(번호 목록)가 있으면 **갈래마다 별도로 검색**한다. 한 갈래·한 도구가 결과를 독식하면 안 된다.
    - description이 짧은 카테고리도 주제의 인접 영역(신제품 소식·비교·활용법·업계 이슈 등)까지 폭넓게 검색한다.
 2. 후보 영상은 WebFetch로 watch 페이지나 검색결과를 열어 **업로드 날짜·채널명·조회수·핵심 내용**을 확인한다.
@@ -250,9 +261,16 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
   const blockList = loadBlocklist();
   const blockedLabels = blockList.map((b) => (b.handle ? `${b.channel} (${b.handle})` : b.channel));
   const isBlocked = buildBlockMatcher();
+  // '본영상'으로 체크된 영상은 수집에서 제외한다: 프롬프트로 미리 알리고(중복 조사 방지),
+  // 최종적으로 videoId 기준 하드 후필터로 확실히 제거한다.
+  const isWatched = buildWatchedMatcher();
+  const watchedTitles = activeWatched()
+    .map((w) => w.title)
+    .filter((t): t is string => !!t)
+    .slice(0, 40);
   try {
     const finalText = await runAgentQueryText(
-      buildPrompt(defs, today, cutoff, freshDays, nowLabel(), blockedLabels, buildReclassSection(defs)),
+      buildPrompt(defs, today, cutoff, freshDays, nowLabel(), blockedLabels, watchedTitles, buildReclassSection(defs)),
       {
         // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
         // allowedTools = 그 도구들을 무프롬프트 허용.
@@ -298,6 +316,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
         // + 한국 전용(kr) 카테고리는 해외(원제가 비한국어) 영상 하드 제외.
         const items = enriched
           .filter((x) => !isBlocked(x.channel, x.channelHandle))
+          .filter((x) => !isWatched(x.videoId)) // '본영상' 체크된 영상은 수집 제외
           .filter((x) => !matchesExclude(x, meta.excludeKeywords))
           .filter((x) => !isForeignForKr(x, meta.region));
         return toCategory(meta, items);

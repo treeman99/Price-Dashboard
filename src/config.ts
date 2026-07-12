@@ -22,6 +22,12 @@ export interface AppConfig {
   newsCollectTimes: string[]; // HH:mm[] (뉴스 다이제스트 수집, 복수 시간 지원)
   youtubeCollectTimes: string[]; // HH:mm[] (유튜브 소식 수집, 복수 시간 지원)
   youtubeFreshDays: number; // 최근 N일 이내 게시 영상만 채택
+  /** '본영상' 체크된 유튜브 영상을 이만큼(일) 동안 수집·검색에서 제외 */
+  youtubeWatchedExcludeDays: number;
+  /** 팝업/전시 '신규' 판정: 이만큼(일) 이상 목록에 없다가 다시 나오면 신규 */
+  eventsNewGapDays: number;
+  /** 팝업/전시 '신규' 배지 유지 일수(재등장일로부터) */
+  eventsNewShowDays: number;
   /** Agent SDK 큐레이션 1회 최대 대기(ms). 초과 시 중단(hang 방지). */
   agentQueryTimeoutMs: number;
   dbPath: string;
@@ -51,6 +57,9 @@ export const config: AppConfig = {
   newsCollectTimes: parseCollectTimes(process.env.NEWS_COLLECT_TIMES?.trim() || "08:00,17:00"),
   youtubeCollectTimes: parseCollectTimes(process.env.YOUTUBE_COLLECT_TIMES?.trim() || "08:30"),
   youtubeFreshDays: Math.max(1, int(process.env.YOUTUBE_FRESH_DAYS, 7)),
+  youtubeWatchedExcludeDays: Math.max(1, int(process.env.YOUTUBE_WATCHED_EXCLUDE_DAYS, 7)),
+  eventsNewGapDays: Math.max(1, int(process.env.EVENTS_NEW_GAP_DAYS, 7)),
+  eventsNewShowDays: Math.max(1, int(process.env.EVENTS_NEW_SHOW_DAYS, 3)),
   // 기본 30분: 카테고리가 많으면 정상 수집도 20분 넘게 걸릴 수 있어 넉넉히 두되, 무한 hang 은 차단
   agentQueryTimeoutMs: Math.max(60_000, int(process.env.AGENT_QUERY_TIMEOUT_MS, 1_800_000)),
   dbPath: process.env.DB_PATH?.trim() || path.join(repoRoot, "data", "price.db"),
