@@ -12,6 +12,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import type { NewsSnapshot, NewsItem, NewsCategoryDef } from "@shared/types";
+import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 
 function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
+  const href = safeHref(item.link);
   return (
     <Card className="flex h-[20rem] flex-col border-l-4 p-4" style={{ borderLeftColor: color }}>
       {/* 제목 — 2줄 고정 */}
@@ -36,9 +38,9 @@ function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
       </p>
       {/* 액션 — 항상 카드 하단 같은 위치 */}
       <div className="mt-3 flex flex-wrap items-center gap-3 border-t pt-2 text-xs">
-        {item.link && (
+        {href && (
           <a
-            href={item.link}
+            href={href}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-[#4361ee] hover:underline"
@@ -46,17 +48,24 @@ function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
             <LinkIcon className="h-3 w-3" /> 원문 보기
           </a>
         )}
-        {item.related.map((r, i) => (
-          <a
-            key={i}
-            href={r.link}
-            target="_blank"
-            rel="noreferrer"
-            className="text-muted-foreground hover:underline"
-          >
-            {r.label}
-          </a>
-        ))}
+        {item.related.map((r, i) => {
+          const rHref = safeHref(r.link);
+          return rHref ? (
+            <a
+              key={i}
+              href={rHref}
+              target="_blank"
+              rel="noreferrer"
+              className="text-muted-foreground hover:underline"
+            >
+              {r.label}
+            </a>
+          ) : (
+            <span key={i} className="text-muted-foreground">
+              {r.label}
+            </span>
+          );
+        })}
       </div>
     </Card>
   );

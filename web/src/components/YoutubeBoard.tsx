@@ -18,6 +18,7 @@ import {
   Star,
 } from "lucide-react";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategoryDef } from "@shared/types";
+import { safeHref } from "@shared/url";
 import {
   UNKNOWN_CHANNEL,
   isRecommendedChannel,
@@ -49,17 +50,13 @@ function canBlockChannel(v: YoutubeVideo): boolean {
 
 function Thumbnail({ video }: { video: YoutubeVideo }) {
   const [errored, setErrored] = useState(false);
-  return (
-    <a
-      href={video.url}
-      target="_blank"
-      rel="noreferrer"
-      className="group relative block aspect-video w-full overflow-hidden rounded-md bg-muted"
-      title="유튜브에서 보기"
-    >
-      {video.thumbnail && !errored ? (
+  const href = safeHref(video.url);
+  const thumbSrc = safeHref(video.thumbnail);
+  const inner = (
+    <>
+      {thumbSrc && !errored ? (
         <img
-          src={video.thumbnail}
+          src={thumbSrc}
           alt=""
           loading="lazy"
           onError={() => setErrored(true)}
@@ -79,6 +76,24 @@ function Thumbnail({ video }: { video: YoutubeVideo }) {
           {video.duration}
         </span>
       )}
+    </>
+  );
+  if (!href) {
+    return (
+      <div className="group relative block aspect-video w-full overflow-hidden rounded-md bg-muted">
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="group relative block aspect-video w-full overflow-hidden rounded-md bg-muted"
+      title="유튜브에서 보기"
+    >
+      {inner}
     </a>
   );
 }
@@ -189,6 +204,7 @@ function VideoCard({
   onToggleWatched: (video: YoutubeVideo) => void;
 }) {
   const canRecommend = !!recommendedChannelValue(video.channel, video.channelHandle);
+  const videoHref = safeHref(video.url);
   return (
     <Card
       className={`flex h-[30rem] flex-col overflow-hidden border-l-4 p-0 transition-opacity ${
@@ -228,14 +244,20 @@ function VideoCard({
         </p>
         {/* 액션 */}
         <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2 text-xs">
-          <a
-            href={video.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 font-medium text-[#ff0000] hover:underline"
-          >
-            <PlayCircle className="h-3.5 w-3.5" /> 영상 보기
-          </a>
+          {videoHref ? (
+            <a
+              href={videoHref}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 font-medium text-[#ff0000] hover:underline"
+            >
+              <PlayCircle className="h-3.5 w-3.5" /> 영상 보기
+            </a>
+          ) : (
+            <span className="inline-flex items-center gap-1 font-medium text-muted-foreground">
+              <PlayCircle className="h-3.5 w-3.5" /> 영상 보기
+            </span>
+          )}
           <div className="flex items-center gap-3">
             <button
               onClick={() => onToggleRecommend(video)}

@@ -3,6 +3,7 @@ import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { googleCalendarUrl } from "../../shared/calendar.ts";
 import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
+import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem } from "../../shared/types.ts";
 
 /** 팝업/전시/축제 iMessage 텍스트: 카운트 + '신규' 강조 + 팝업 이름 일부. */
@@ -41,17 +42,6 @@ export async function sendEventsIMessage(s: EventsSnapshot): Promise<boolean> {
   }
 }
 
-function escapeHtml(s: string): string {
-  return (s || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-function escapeAttr(s: string): string {
-  return escapeHtml(s).replace(/'/g, "&#39;");
-}
-
 function tagBadge(tag: PopupItem["tag"]): string {
   if (!tag) return "";
   const map = { 신규: "#03C75A", 종료임박: "#FF5A5A", 예정: "#2E86DE" } as const;
@@ -59,8 +49,12 @@ function tagBadge(tag: PopupItem["tag"]): string {
   return ` <span style="background:${map[tag]};color:#fff;border-radius:4px;padding:1px 6px;font-size:11px">${label}</span>`;
 }
 
-function linkAnchor(href: string, label: string): string {
-  return `<a href="${escapeAttr(href)}" style="color:#4361ee;text-decoration:none;font-size:13px">${label}</a>`;
+/** http(s) 링크만 앵커로 렌더. LLM 이 만든 javascript:/data: 스킴은 통째로 버린다. */
+function linkAnchor(link: string | null, label: string): string {
+  const href = safeHref(link);
+  return href
+    ? `<a href="${escapeAttr(href)}" style="color:#4361ee;text-decoration:none;font-size:13px">${label}</a>`
+    : "";
 }
 
 function calAnchor(title: string, startDate: string | null, endDate: string | null, location: string, summary: string, srcLink: string | null): string {
@@ -71,8 +65,9 @@ function calAnchor(title: string, startDate: string | null, endDate: string | nu
     location,
     details: [summary, srcLink].filter(Boolean).join("\n"),
   });
-  return url
-    ? `<a href="${escapeAttr(url)}" style="color:#1a7f37;text-decoration:none;font-size:13px">📅 캘린더 추가</a>`
+  const href = safeHref(url);
+  return href
+    ? `<a href="${escapeAttr(href)}" style="color:#1a7f37;text-decoration:none;font-size:13px">📅 캘린더 추가</a>`
     : "";
 }
 
@@ -82,7 +77,7 @@ function actions(parts: string[]): string {
 }
 
 function popupCard(p: PopupItem): string {
-  const link = p.link ? linkAnchor(p.link, "🔗 보기") : "";
+  const link = linkAnchor(p.link, "🔗 보기");
   const cal = calAnchor(p.name, p.startDate, p.endDate, p.region, p.summary, p.link);
   return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid #7C3AED">
     <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(p.name)}${tagBadge(p.tag)}</h3>
@@ -93,7 +88,7 @@ function popupCard(p: PopupItem): string {
 }
 
 function exhCard(e: ExhibitionItem, color: string): string {
-  const link = e.link ? linkAnchor(e.link, "🔗 보기") : "";
+  const link = linkAnchor(e.link, "🔗 보기");
   const cal = calAnchor(e.title, e.startDate, e.endDate, e.venue, e.summary, e.link);
   return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid ${color}">
     <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(e.title)}${tagBadge(e.tag)}</h3>
@@ -104,7 +99,7 @@ function exhCard(e: ExhibitionItem, color: string): string {
 }
 
 function festivalCard(f: FestivalItem, color: string): string {
-  const link = f.link ? linkAnchor(f.link, "🔗 보기") : "";
+  const link = linkAnchor(f.link, "🔗 보기");
   const cal = calAnchor(f.name, f.startDate, f.endDate, f.region, f.summary, f.link);
   return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid ${color}">
     <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(f.name)}${tagBadge(f.tag)}</h3>
@@ -114,14 +109,8 @@ function festivalCard(f: FestivalItem, color: string): string {
   </div>`;
 }
 
-/** 팝업/전시 일일 요약 이메일. NOTIFY_EMAIL + Gmail 자격증명 필요. */
-export async function sendEventsEmail(s: EventsSnapshot): Promise<boolean> {
-  if (!config.notify.email) return false;
-  if (!config.notify.gmailAddress || !config.notify.gmailAppPassword) {
-    log.warn("이메일 자격증명 미설정 → 이벤트 이메일 건너뜀");
-    return false;
-  }
-
+/** 팝업/전시/축제 이메일 HTML. 순수 함수 — 발송하지 않는다. */
+export function buildEventsEmailHtml(s: EventsSnapshot): string {
   const popupHtml = s.popups.length
     ? s.popups.map(popupCard).join("")
     : `<p style="color:#999">확인된 팝업이 없습니다.</p>`;
@@ -141,7 +130,7 @@ export async function sendEventsEmail(s: EventsSnapshot): Promise<boolean> {
     ? festivals.map((f) => festivalCard(f, "#E8590C")).join("")
     : `<p style="color:#999">확인된 축제가 없습니다.</p>`;
 
-  const html = `<div style="font-family:'Apple SD Gothic Neo',sans-serif;max-width:680px;margin:0 auto;padding:16px">
+  return `<div style="font-family:'Apple SD Gothic Neo',sans-serif;max-width:680px;margin:0 auto;padding:16px">
     <h1 style="color:#7C3AED;border-bottom:3px solid #7C3AED;padding-bottom:8px">🎈 오늘의 팝업 · 전시 · 축제</h1>
     <p style="color:#666">${s.date} · 대시보드: <a href="http://localhost:${config.port}">localhost:${config.port}</a></p>
 
@@ -159,6 +148,17 @@ export async function sendEventsEmail(s: EventsSnapshot): Promise<boolean> {
       s.source === "naver-raw" ? " (검색 원본)" : ""
     }</p>
   </div>`;
+}
+
+/** 팝업/전시 일일 요약 이메일. NOTIFY_EMAIL + Gmail 자격증명 필요. */
+export async function sendEventsEmail(s: EventsSnapshot): Promise<boolean> {
+  if (!config.notify.email) return false;
+  if (!config.notify.gmailAddress || !config.notify.gmailAppPassword) {
+    log.warn("이메일 자격증명 미설정 → 이벤트 이메일 건너뜀");
+    return false;
+  }
+
+  const html = buildEventsEmailHtml(s);
 
   const transport = nodemailer.createTransport({
     host: "smtp.gmail.com",

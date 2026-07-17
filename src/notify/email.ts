@@ -5,6 +5,7 @@ import { getHistory } from "../db/repo.ts";
 import { localDateDaysAgo } from "../util/date.ts";
 import { renderPriceChartPng } from "./chart.ts";
 import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
+import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { ProductSummary } from "../../shared/types.ts";
 
 const GREEN = "#2ecc71"; // 하락
@@ -24,14 +25,16 @@ function changeBadge(c: ProductSummary["change"]): string {
 }
 
 function priceCell(price: number, link: string | null): string {
-  return link
-    ? `<a href="${escapeAttr(link)}" style="color:#1a73e8;text-decoration:none">${won(price)}</a>`
+  const href = safeHref(link);
+  return href
+    ? `<a href="${escapeAttr(href)}" style="color:#1a73e8;text-decoration:none">${won(price)}</a>`
     : won(price);
 }
 
-function renderProduct(s: ProductSummary, chartCid: string): string {
+/** 상품 카드 HTML. 순수 함수 — 링크는 모두 수집기(LLM)가 만든 값이라 safeHref 로 거른다. */
+export function renderProduct(s: ProductSummary, chartCid: string): string {
   // 종합 최저가는 가능하면 1위 리스팅 링크로 연결
-  const cheapestLink = s.topListings[0]?.link ?? null;
+  const cheapestLink = safeHref(s.topListings[0]?.link ?? null);
   const overall = s.latest?.overallLowest ?? null;
   const overallHtml =
     overall != null && cheapestLink
@@ -39,25 +42,25 @@ function renderProduct(s: ProductSummary, chartCid: string): string {
       : `<b>${won(overall)}</b>`;
 
   const top3 = s.topListings
-    .map(
-      (l) =>
-        `<li>${l.rank}. ${
-          l.link ? `<a href="${escapeAttr(l.link)}" style="color:#1a73e8;text-decoration:none">${escapeHtml(l.mall)}</a>` : escapeHtml(l.mall)
-        } — ${priceCell(l.price, l.link)}</li>`
-    )
+    .map((l) => {
+      const href = safeHref(l.link);
+      const mall = href
+        ? `<a href="${escapeAttr(href)}" style="color:#1a73e8;text-decoration:none">${escapeHtml(l.mall)}</a>`
+        : escapeHtml(l.mall);
+      return `<li>${l.rank}. ${mall} — ${priceCell(l.price, l.link)}</li>`;
+    })
     .join("");
   const reviews = s.reviews
     .slice(0, 3)
-    .map(
-      (r) =>
-        `<li><b>${escapeHtml(r.source)}</b>${r.rating != null ? ` ⭐${r.rating}` : ""}${
-          r.date ? ` (${escapeHtml(r.date)})` : ""
-        }<br>${
-          r.link
-            ? `<a href="${escapeAttr(r.link)}" style="color:#1a73e8;text-decoration:none">${escapeHtml(r.summary)}</a>`
-            : escapeHtml(r.summary)
-        }</li>`
-    )
+    .map((r) => {
+      const href = safeHref(r.link);
+      const summary = href
+        ? `<a href="${escapeAttr(href)}" style="color:#1a73e8;text-decoration:none">${escapeHtml(r.summary)}</a>`
+        : escapeHtml(r.summary);
+      return `<li><b>${escapeHtml(r.source)}</b>${r.rating != null ? ` ⭐${r.rating}` : ""}${
+        r.date ? ` (${escapeHtml(r.date)})` : ""
+      }<br>${summary}</li>`;
+    })
     .join("");
 
   return `
@@ -75,18 +78,6 @@ function renderProduct(s: ProductSummary, chartCid: string): string {
     ${top3 ? `<div style="margin-top:8px"><b style="font-size:13px">Top3 최저가</b><ul style="margin:4px 0">${top3}</ul></div>` : ""}
     ${reviews ? `<div style="margin-top:8px"><b style="font-size:13px">리뷰</b><ul style="margin:4px 0;color:#444">${reviews}</ul></div>` : ""}
   </div>`;
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function escapeAttr(s: string): string {
-  return escapeHtml(s).replace(/'/g, "&#39;");
 }
 
 /**

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus, Tag, PartyPopper } from "lucide-react";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem, EventTag } from "@shared/types";
 import { googleCalendarUrl } from "@shared/calendar";
+import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -39,10 +40,11 @@ function NewBadge({ show }: { show?: boolean }) {
 }
 
 function SourceLink({ link }: { link: string | null }) {
-  if (!link) return null;
+  const href = safeHref(link);
+  if (!href) return null;
   return (
     <a
-      href={link}
+      href={href}
       target="_blank"
       rel="noreferrer"
       className="inline-flex items-center gap-1 text-xs text-[#4361ee] hover:underline"
@@ -147,7 +149,7 @@ function EventTile({
             location={cal.location}
             details={cal.details}
           />
-          {!link && !googleCalendarUrl({ title: cal.title, startDate: cal.startDate, endDate: cal.endDate }) && (
+          {!safeHref(link) && !googleCalendarUrl({ title: cal.title, startDate: cal.startDate, endDate: cal.endDate }) && (
             <span className="text-xs text-muted-foreground/60">링크 없음</span>
           )}
         </div>

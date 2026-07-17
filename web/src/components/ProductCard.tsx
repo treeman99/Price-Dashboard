@@ -10,6 +10,7 @@ import { EditProductDialog } from "./EditProductDialog";
 import { api } from "@/lib/api";
 import { cn, formatWon } from "@/lib/utils";
 import { sourceLabel, isDegradedSource } from "@/lib/sources";
+import { safeHref } from "@shared/url";
 
 const PERIODS: PeriodDays[] = [7, 30, 90];
 
@@ -94,6 +95,8 @@ export function ProductCard({
   // 종합 최저가 표시용: 판매처(lowestMall)가 더 구체적이면 우선, 없으면 기존 lowestSource.
   const mallText = latest?.lowestMall ?? latest?.lowestSource ?? null;
 
+  const lowestHref = safeHref(topListings[0]?.link);
+
   useEffect(() => {
     let alive = true;
     api.history(product.id, days).then((h) => {
@@ -159,9 +162,9 @@ export function ProductCard({
           <div>
             <div className="text-xs text-muted-foreground">종합 최저가</div>
             <div className="text-2xl font-bold">
-              {latest?.overallLowest != null && topListings[0]?.link ? (
+              {latest?.overallLowest != null && lowestHref ? (
                 <a
-                  href={topListings[0].link}
+                  href={lowestHref}
                   target="_blank"
                   rel="noreferrer"
                   className="hover:underline"
@@ -221,22 +224,25 @@ export function ProductCard({
           <div>
             <div className="mb-1 text-xs font-semibold text-muted-foreground">Top 3 최저가</div>
             <ul className="space-y-1 text-sm">
-              {topListings.map((l) => (
-                <li key={l.rank} className="flex items-center justify-between">
-                  <span className="truncate text-muted-foreground">
-                    {l.rank}. {l.mall}
-                  </span>
-                  <span className="font-medium">
-                    {l.link ? (
-                      <a href={l.link} target="_blank" rel="noreferrer" className="hover:underline">
-                        {formatWon(l.price)}
-                      </a>
-                    ) : (
-                      formatWon(l.price)
-                    )}
-                  </span>
-                </li>
-              ))}
+              {topListings.map((l) => {
+                const href = safeHref(l.link);
+                return (
+                  <li key={l.rank} className="flex items-center justify-between">
+                    <span className="truncate text-muted-foreground">
+                      {l.rank}. {l.mall}
+                    </span>
+                    <span className="font-medium">
+                      {href ? (
+                        <a href={href} target="_blank" rel="noreferrer" className="hover:underline">
+                          {formatWon(l.price)}
+                        </a>
+                      ) : (
+                        formatWon(l.price)
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}
@@ -246,29 +252,32 @@ export function ProductCard({
           <div>
             <div className="mb-1 text-xs font-semibold text-muted-foreground">리뷰</div>
             <ul className="space-y-2">
-              {reviews.slice(0, 3).map((r, i) => (
-                <li key={i} className="rounded-md border px-3 py-2 text-sm">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">{r.source}</span>
-                    {r.rating != null && (
-                      <span className="inline-flex items-center gap-0.5">
-                        <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                        {r.rating}
-                      </span>
-                    )}
-                    {r.date && <span>· {r.date}</span>}
-                  </div>
-                  <p className="mt-1 line-clamp-3">
-                    {r.link ? (
-                      <a href={r.link} target="_blank" rel="noreferrer" className="hover:underline">
-                        {r.summary}
-                      </a>
-                    ) : (
-                      r.summary
-                    )}
-                  </p>
-                </li>
-              ))}
+              {reviews.slice(0, 3).map((r, i) => {
+                const href = safeHref(r.link);
+                return (
+                  <li key={i} className="rounded-md border px-3 py-2 text-sm">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">{r.source}</span>
+                      {r.rating != null && (
+                        <span className="inline-flex items-center gap-0.5">
+                          <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                          {r.rating}
+                        </span>
+                      )}
+                      {r.date && <span>· {r.date}</span>}
+                    </div>
+                    <p className="mt-1 line-clamp-3">
+                      {href ? (
+                        <a href={href} target="_blank" rel="noreferrer" className="hover:underline">
+                          {r.summary}
+                        </a>
+                      ) : (
+                        r.summary
+                      )}
+                    </p>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

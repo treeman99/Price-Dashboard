@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { sourceLabel } from "@/lib/sources";
+import { safeHref } from "@shared/url";
 import type { ProductSource, ResolveCandidate } from "@shared/types";
 
 /**
@@ -153,54 +154,59 @@ export function SourceLinkDialog({
             </p>
           ) : (
             <ul className="max-h-40 space-y-1.5 overflow-y-auto">
-              {sources.map((s) => (
-                <li
-                  key={s.source}
-                  className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-medium">{sourceLabel(s.source) ?? s.source}</span>
-                      {s.confirmed ? (
-                        <Badge
-                          className="border-transparent gap-1 text-white"
-                          style={{ backgroundColor: "#2ecc71" }}
-                        >
-                          <CheckCircle2 className="h-3 w-3" /> 확정
-                        </Badge>
-                      ) : (
-                        <Badge className="border-transparent bg-muted text-muted-foreground">
-                          미확정
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                      {s.refId && <span>pcode {s.refId}</span>}
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-0.5 hover:underline"
-                      >
-                        링크 <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title="연결 해제"
-                    disabled={deleting === s.source}
-                    onClick={() => removeSource(s.source)}
+              {sources.map((s) => {
+                const href = safeHref(s.url);
+                return (
+                  <li
+                    key={s.source}
+                    className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
                   >
-                    {deleting === s.source ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-4 w-4" />
-                    )}
-                  </Button>
-                </li>
-              ))}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{sourceLabel(s.source) ?? s.source}</span>
+                        {s.confirmed ? (
+                          <Badge
+                            className="border-transparent gap-1 text-white"
+                            style={{ backgroundColor: "#2ecc71" }}
+                          >
+                            <CheckCircle2 className="h-3 w-3" /> 확정
+                          </Badge>
+                        ) : (
+                          <Badge className="border-transparent bg-muted text-muted-foreground">
+                            미확정
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+                        {s.refId && <span>pcode {s.refId}</span>}
+                        {href && (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-0.5 hover:underline"
+                          >
+                            링크 <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="연결 해제"
+                      disabled={deleting === s.source}
+                      onClick={() => removeSource(s.source)}
+                    >
+                      {deleting === s.source ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>
@@ -237,6 +243,7 @@ export function SourceLinkDialog({
             <ul className="max-h-60 space-y-1.5 overflow-y-auto">
               {candidates.map((c) => {
                 const key = c.refId ?? c.url;
+                const href = safeHref(c.url);
                 return (
                   <li
                     key={key}
@@ -248,14 +255,16 @@ export function SourceLinkDialog({
                       </div>
                       <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
                         {c.refId && <span>pcode {c.refId}</span>}
-                        <a
-                          href={c.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-0.5 hover:underline"
-                        >
-                          다나와 <ExternalLink className="h-3 w-3" />
-                        </a>
+                        {href && (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-0.5 hover:underline"
+                          >
+                            다나와 <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
                       </div>
                     </div>
                     <Button
