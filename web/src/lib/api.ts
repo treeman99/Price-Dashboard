@@ -289,6 +289,25 @@ export const api = {
       body: JSON.stringify({ keys }),
     }).then((r) => j<YoutubeCategoryDef[]>(r)),
 
+  // ── 카테고리 추천 채널(카드 ⭐ 버튼) ──
+  /** 카드의 채널을 카테고리 추천 채널에 추가. 갱신된 카테고리 반환. */
+  addYoutubeRecommendedChannel: (key: string, input: { channel: string; handle?: string | null }) =>
+    fetch(`/api/youtube/categories/${encodeURIComponent(key)}/recommended-channels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<YoutubeCategoryDef>(r)),
+
+  /** 카드의 채널을 카테고리 추천 채널에서 해제. 갱신된 카테고리 반환. */
+  removeYoutubeRecommendedChannel: (key: string, input: { channel: string; handle?: string | null }) => {
+    const q = new URLSearchParams({ channel: input.channel });
+    if (input.handle) q.set("handle", input.handle);
+    return fetch(
+      `/api/youtube/categories/${encodeURIComponent(key)}/recommended-channels?${q.toString()}`,
+      { method: "DELETE" }
+    ).then((r) => j<YoutubeCategoryDef>(r));
+  },
+
   // ── 유튜브 채널 차단(조사 제외) ──
   youtubeBlocklist: () =>
     fetch("/api/youtube/blocklist").then((r) => j<BlockedChannel[]>(r)),

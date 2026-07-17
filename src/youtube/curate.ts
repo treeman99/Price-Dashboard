@@ -4,9 +4,10 @@ import { runAgentQueryText } from "../util/agent-query.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import { loadCategories } from "./categories.ts";
 import { loadBlocklist, buildBlockMatcher, UNKNOWN_CHANNEL } from "./blocklist.ts";
+import { isRecommendedChannel } from "../../shared/youtube.ts";
 import { activeWatched, buildWatchedMatcher } from "./watched.ts";
 import { buildReclassSection } from "./reclass.ts";
-import { enrichVideos } from "./oembed.ts";
+import { enrichVideos, fetchUploadDate } from "./oembed.ts";
 import type {
   YoutubeSnapshot,
   YoutubeVideo,
@@ -101,6 +102,27 @@ export function matchesExclude(
   });
 }
 
+/**
+ * 프롬프트 주입 전에 각 카테고리 추천 채널에서 **차단 채널을 걸러낸다**.
+ * ⭐ 등록 후 같은 채널을 차단해도 추천 목록에서 자동 제거되지 않아, 그대로 두면
+ * '절대 조사 금지'(차단)와 '신규 업로드 우선 채택'(추천)이 같은 채널에 동시에 주입되고
+ * 취향 학습·유사 채널 발굴이 차단 채널을 긍정 표본으로 삼는 모순이 생긴다.
+ */
+export function stripBlockedRecommended(
+  defs: YoutubeCategoryDef[],
+  blocked: { channel: string; handle: string | null }[]
+): YoutubeCategoryDef[] {
+  if (!blocked.length) return defs;
+  return defs.map((d) => {
+    const list = d.recommendedChannels;
+    if (!list?.length) return d;
+    const kept = list.filter(
+      (e) => !blocked.some((b) => isRecommendedChannel([e], b.channel, b.handle))
+    );
+    return kept.length === list.length ? d : { ...d, recommendedChannels: kept };
+  });
+}
+
 export function buildPrompt(
   defs: YoutubeCategoryDef[],
   today: string,
@@ -136,12 +158,33 @@ export function buildPrompt(
         "\n  - "
       )}\n  위와 동일한 영상은 어떤 카테고리에도 넣지 마라(제목이 조금 달라도 같은 영상이면 제외).`
     : "";
+  // ⭐ 취향 프로필: 사용자가 카드에서 직접 별표한 추천 채널이 하나라도 있으면,
+  // '먼저 확인할 목록'을 넘어 취향 신호로 적극 활용하도록 별도 섹션을 주입한다.
+  const hasRecommended = defs.some((c) => c.recommendedChannels?.length);
+  const tasteSection = hasRecommended
+    ? `
+
+⭐ 취향 프로필(추천 채널 — 사용자가 영상 카드에서 직접 별표한 채널, 각 카테고리의 [추천 채널] 표기):
+- 추천 채널은 사용자가 "이 채널 영상을 다음에도 보고 싶다"고 고른 **명시적 취향 신호**다. 최대한 활용하라.
+- (1) 신규 업로드 최우선: 추천 채널 **각각의** 최근 업로드를 개별 확인하라. 확인은 **WebSearch가 확실하다**
+  (예: "site:youtube.com <채널명 또는 @핸들>", "<채널명> 최신 영상 <핵심 키워드>").
+  채널 페이지를 WebFetch로 열면 영상 목록이 **안 보일 수 있다**(스크립트 렌더링) — 빈 결과를 "새 영상 없음"으로
+  단정하지 말고 반드시 검색으로 다시 확인하라. 신선도 창 안의 새 영상이 있으면 관련성이 맞는 한 **빠뜨리지 말고 우선 채택**한다.
+- (2) 취향 학습(**카테고리별**): 각 카테고리에서는 **그 카테고리에 표기된** 추천 채널들의 공통점
+  (다루는 주제·형식(튜토리얼/리뷰/해설)·깊이·톤)을 파악하고, 그 카테고리에서 추천 채널 밖 후보를 고를 때
+  **그 취향과 닮은 영상을 우선**하라. 다른 카테고리의 추천 채널 취향을 끌어오지 마라.
+- (3) 유사 채널 발굴: 추천 채널과 성격이 비슷한 다른 채널의 좋은 영상도 적극 후보에 올려,
+  사용자가 취향에 맞는 새 채널을 발견하게 하라.
+- 단, 취향 신호는 **어떤 절대 규칙도 이기지 못한다**: 신선도·다양성·검색범위·🚫제외 채널·👁본영상 규칙이
+  항상 우선한다(추천 채널이라도 오래된 영상 금지, 같은 채널 최대 2개 유지, 추천 채널만으로 카테고리를 채우지 마라.
+  제외 채널이나 그와 비슷한 성향의 채널을 '유사 채널'로 발굴하지 마라).`
+    : "";
   return `너는 한국어 유튜브 소식 큐레이터다. 지금 시각은 ${now}. **조회 시점 기준 최근 ${freshDays}일 이내(${cutoff} 이후 ~ ${today})**에
 업로드된 YouTube 영상만 모아 아래 ${defs.length}개 카테고리로 정리한다. 이 신선도 기준은 **모든 카테고리에 예외 없이 동일하게** 적용된다.
 모든 제목·요약은 **반드시 한국어**로 작성한다(영어 영상도 한국어로 번역·요약). 원제는 originalTitle에 보존한다.
 
 카테고리:
-  - ${cats}${blockSection}${watchedSection}${reclassSection}
+  - ${cats}${blockSection}${watchedSection}${tasteSection}${reclassSection}
 
 🌐 검색 범위(각 카테고리의 [검색범위]를 반드시 준수):
 - "한국 채널·한국어 영상만": **한국 유튜버가 만든 한국어(음성/자막) 영상만** 채택한다.
@@ -155,7 +198,7 @@ export function buildPrompt(
 1. 각 카테고리마다 WebSearch를 **서로 다른 각도로 최소 4회 이상** 수행한다. YouTube 영상을 노린 쿼리를 쓴다:
    - 주제 키워드: "site:youtube.com <주제> <이번주/최신>", "<주제> 강의/튜토리얼/활용법 youtube".
    - 도구·제품명: "<도구명> tutorial youtube", "<제품명> review youtube".
-   - 채널 확인: 각 카테고리의 **[추천 채널(먼저 확인)]** 에 적힌 채널과 description에 언급된 채널들의 **최근 업로드**를 우선 직접 확인한다(채널명/핸들 + 핵심 키워드로 검색). 단, 추천 채널이라도 신선도·관련성 기준은 동일하게 적용한다(오래된 영상은 제외).
+   - 채널 확인: 각 카테고리의 **[추천 채널(먼저 확인)]** 에 적힌 채널과 description에 언급된 채널들의 **최근 업로드**를 우선 확인한다. 채널명/@핸들 + 핵심 키워드의 WebSearch가 확실하다("site:youtube.com <채널명 또는 @핸들>" 등). 채널 페이지 WebFetch는 영상 목록이 안 보일 수 있으니 빈 결과면 검색으로 재확인한다. 단, 추천 채널이라도 신선도·관련성 기준은 동일하게 적용한다(오래된 영상은 제외).
    - description에 여러 갈래(번호 목록)가 있으면 **갈래마다 별도로 검색**한다. 한 갈래·한 도구가 결과를 독식하면 안 된다.
    - description이 짧은 카테고리도 주제의 인접 영역(신제품 소식·비교·활용법·업계 이슈 등)까지 폭넓게 검색한다.
 2. 후보 영상은 WebFetch로 watch 페이지나 검색결과를 열어 **업로드 날짜·채널명·조회수·핵심 내용**을 확인한다.
@@ -163,9 +206,13 @@ export function buildPrompt(
 3. 요약(summary)은 제목을 바꿔 쓴 게 아니라 **영상이 실제로 무엇을 다루는지**(주요 포인트 2~4개)를 한국어로 적는다.
 
 ⚠️ 신선도 규칙(${freshDays}일, 최우선 — 영상 수보다 중요):
-- 업로드일이 **${cutoff} 이후**인 영상만 채택. 그보다 오래됐거나 날짜가 불명확하면 **제외**.
+- 업로드일이 **${cutoff} 이후 ~ ${today}** 인 영상만 채택. 그보다 오래됐거나 날짜가 불명확하면 **제외**.
 - "N일 전/N주 전" 같은 상대표현이 ${freshDays}일을 넘으면 제외. 날짜 미상도 제외.
 - 각 영상 date는 업로드일을 "YYYY-MM-DD"로. (정확한 일자를 모르면 그 영상은 버린다.)
+- **날짜 위조 금지·검증됨**: 서버가 각 영상의 실제 업로드일을 유튜브에서 **직접 재검증**한다.
+  확실치 않아서 ${cutoff}(경계일)로 대충 맞추거나 추정해서 넣은 영상은 **자동 폐기**되어 아무 의미가 없다.
+  watch 페이지에서 실제 업로드일을 **눈으로 확인한** 영상만 넣어라(며칠 전 표시가 아니라 정확한 날짜).
+- **최신 우선**: 가능하면 오늘·어제 등 **가장 최근** 영상을 앞세우고, 경계(${cutoff}) 근처 오래된 것에 몰리지 마라.
 - 쿼터를 채우려고 오래된 영상을 넣지 마라. 카테고리가 0건이어도 괜찮다.
 
 🎯 다양성 규칙(신선도 다음으로 중요):
@@ -205,6 +252,32 @@ function normDate(v: unknown): string | null {
 /** 최근 freshDays 이내(cutoff~today)면 통과 */
 function isFresh(date: string | null, today: string, cutoff: string): boolean {
   return !!date && date >= cutoff && date <= today;
+}
+
+/**
+ * 실제 업로드일 재검증. LLM 이 준 date 는 검증 불가라 필터 통과를 위해 cutoff(경계일)로
+ * 위조되기 쉽다(실측: 07-06 표기 영상 다수가 실제 06-26~07-04). 그래서 watch 페이지에서
+ * 진짜 게시일을 가져와 date 를 교체하고, 신선도 창(cutoff~today) 밖이면 드롭한다.
+ * 실제 날짜를 못 구하면(마크업 변경·네트워크) 원래 판정을 유지해 탭이 통째로 비는 것을 막는다.
+ */
+async function verifyRealDates(
+  items: YoutubeVideo[],
+  today: string,
+  cutoff: string
+): Promise<YoutubeVideo[]> {
+  const checked = await Promise.all(
+    items.map(async (v): Promise<YoutubeVideo | null> => {
+      if (!v.videoId) return v;
+      const real = await fetchUploadDate(v.videoId);
+      if (!real) return v; // 검증 불가 → 기존(LLM date) 유지: 우아한 저하
+      if (!isFresh(real, today, cutoff)) {
+        log.info(`유튜브 신선도 재검증 드롭 — ${v.videoId} 실제 ${real} (창 ${cutoff}~${today} 밖, LLM표기 ${v.date})`);
+        return null;
+      }
+      return v.date === real ? v : { ...v, date: real }; // 실제 게시일로 교체(표시도 정확해짐)
+    })
+  );
+  return checked.filter((v): v is YoutubeVideo => v != null);
 }
 
 function nonEmpty(v: unknown, max: number): string | null {
@@ -268,9 +341,14 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
     .map((w) => w.title)
     .filter((t): t is string => !!t)
     .slice(0, 40);
+  // 차단 채널이 추천 목록에 남아 있으면 모순된 지시가 함께 주입되므로 프롬프트용 defs에서 제거.
+  const promptDefs = stripBlockedRecommended(
+    defs,
+    blockList.map((b) => ({ channel: b.channel, handle: b.handle ?? null }))
+  );
   try {
     const finalText = await runAgentQueryText(
-      buildPrompt(defs, today, cutoff, freshDays, nowLabel(), blockedLabels, watchedTitles, buildReclassSection(defs)),
+      buildPrompt(promptDefs, today, cutoff, freshDays, nowLabel(), blockedLabels, watchedTitles, buildReclassSection(defs)),
       {
         // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
         // allowedTools = 그 도구들을 무프롬프트 허용.
@@ -319,7 +397,12 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
           .filter((x) => !isWatched(x.videoId)) // '본영상' 체크된 영상은 수집 제외
           .filter((x) => !matchesExclude(x, meta.excludeKeywords))
           .filter((x) => !isForeignForKr(x, meta.region));
-        return toCategory(meta, items);
+
+        // 마지막 관문: watch 페이지의 실제 업로드일로 신선도 재검증(LLM 의 날짜 위조 차단).
+        const fresh = await verifyRealDates(items, today, cutoff);
+        // 최신(업로드일 내림차순) 우선 정렬 — 저장·API·이메일 모두 일관되게 최신순.
+        fresh.sort((a, b) => b.date.localeCompare(a.date));
+        return toCategory(meta, fresh);
       })
     );
 

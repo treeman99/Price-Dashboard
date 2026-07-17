@@ -46,6 +46,7 @@ import {
   reorderCategories as ytReorderCategories,
 } from "../youtube/categories.ts";
 import { loadBlocklist, addBlock, removeBlock, applyBlocklist } from "../youtube/blocklist.ts";
+import { addRecommendedChannel, removeRecommendedChannel } from "../../shared/youtube.ts";
 import { markWatched, unmarkWatched, activeWatched, annotateWatched } from "../youtube/watched.ts";
 import { applyRegionFilter } from "../youtube/curate.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
@@ -618,6 +619,45 @@ api.delete("/youtube/categories/:key", (req, res) => {
     const ok = ytDeleteCategory(req.params.key);
     if (!ok) return res.status(404).json({ error: "카테고리를 찾을 수 없습니다." });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+// ── 카테고리 추천 채널(카드 ⭐ 버튼) ──
+// 다음 수집부터 큐레이션 프롬프트의 '[추천 채널(먼저 확인)]'에 주입되어 우선 조사된다.
+
+/** 추천 채널 추가 — 이미 있으면 그대로(멱등, 저장 생략). 갱신된 카테고리 반환. */
+api.post("/youtube/categories/:key/recommended-channels", (req, res) => {
+  try {
+    const { channel, handle } = req.body ?? {};
+    const cat = ytLoadCategories().find((c) => c.key === req.params.key);
+    if (!cat) return res.status(404).json({ error: "카테고리를 찾을 수 없습니다." });
+    const next = addRecommendedChannel(
+      cat.recommendedChannels,
+      typeof channel === "string" ? channel : null,
+      typeof handle === "string" ? handle : null
+    );
+    if (!next) return res.status(400).json({ error: "채널 정보가 없어 추천 채널로 추가할 수 없습니다." });
+    if (next.length === (cat.recommendedChannels ?? []).length) return res.json(cat); // 이미 있음 → 저장 생략
+    res.json(ytUpdateCategory(cat.key, { recommendedChannels: next }));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/** 추천 채널 해제 — 쿼리 channel/handle 과 매칭되는 항목 제거(멱등, 변화 없으면 저장 생략). */
+api.delete("/youtube/categories/:key/recommended-channels", (req, res) => {
+  try {
+    const channel = typeof req.query.channel === "string" ? req.query.channel : null;
+    const handle = typeof req.query.handle === "string" ? req.query.handle : null;
+    if (!channel?.trim() && !handle?.trim())
+      return res.status(400).json({ error: "해제할 채널 정보(channel 또는 handle)를 지정하세요." });
+    const cat = ytLoadCategories().find((c) => c.key === req.params.key);
+    if (!cat) return res.status(404).json({ error: "카테고리를 찾을 수 없습니다." });
+    const next = removeRecommendedChannel(cat.recommendedChannels, channel, handle);
+    if (next.length === (cat.recommendedChannels ?? []).length) return res.json(cat); // 변화 없음 → 저장 생략
+    res.json(ytUpdateCategory(cat.key, { recommendedChannels: next }));
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }

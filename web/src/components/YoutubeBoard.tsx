@@ -15,9 +15,16 @@ import {
   FolderInput,
   CheckCircle2,
   Circle,
+  Star,
 } from "lucide-react";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategoryDef } from "@shared/types";
-import { UNKNOWN_CHANNEL } from "@shared/youtube";
+import {
+  UNKNOWN_CHANNEL,
+  isRecommendedChannel,
+  recommendedChannelValue,
+  addRecommendedChannel,
+  removeRecommendedChannel,
+} from "@shared/youtube";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -163,6 +170,8 @@ function VideoCard({
   currentKey,
   allDefs,
   moveDisabled,
+  recommended,
+  onToggleRecommend,
   onBlock,
   onMove,
   onToggleWatched,
@@ -172,10 +181,14 @@ function VideoCard({
   currentKey: string;
   allDefs: YoutubeCategoryDef[];
   moveDisabled: boolean;
+  /** 이 카드의 채널이 현재 카테고리 추천 채널에 등록되어 있는지 */
+  recommended: boolean;
+  onToggleRecommend: (video: YoutubeVideo) => void;
   onBlock: (video: YoutubeVideo) => void;
   onMove: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
   onToggleWatched: (video: YoutubeVideo) => void;
 }) {
+  const canRecommend = !!recommendedChannelValue(video.channel, video.channelHandle);
   return (
     <Card
       className={`flex h-[30rem] flex-col overflow-hidden border-l-4 p-0 transition-opacity ${
@@ -183,7 +196,9 @@ function VideoCard({
       }`}
       style={{ borderLeftColor: color }}
     >
-      <div className="relative shrink-0 p-2 pb-0">
+      {/* isolate: '본영상' 버튼(z-10)이 카드 밖으로 튀어나와 sticky 탭 헤더(z-10) 위에 겹치지
+          않도록 독립 스태킹 컨텍스트를 만든다 → 버튼도 카드처럼 헤더 아래로 스크롤된다. */}
+      <div className="relative isolate shrink-0 p-2 pb-0">
         <Thumbnail video={video} />
         <WatchedToggle video={video} onToggleWatched={onToggleWatched} />
       </div>
@@ -222,6 +237,25 @@ function VideoCard({
             <PlayCircle className="h-3.5 w-3.5" /> 영상 보기
           </a>
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => onToggleRecommend(video)}
+              disabled={!canRecommend}
+              title={
+                !canRecommend
+                  ? "채널 정보가 없어 추천 채널로 추가할 수 없습니다"
+                  : recommended
+                    ? `'${video.channel}' 채널을 추천 채널에서 해제`
+                    : `'${video.channel}' 채널을 이 카테고리의 추천 채널로 추가 — 다음 수집부터 우선 확인합니다`
+              }
+              className={`inline-flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                recommended
+                  ? "font-medium text-amber-500 hover:text-amber-600"
+                  : "text-muted-foreground/70 hover:text-amber-500"
+              }`}
+            >
+              <Star className="h-3.5 w-3.5" fill={recommended ? "currentColor" : "none"} />
+              {recommended ? "추천됨" : "추천"}
+            </button>
             <MoveMenu
               video={video}
               currentKey={currentKey}
@@ -262,6 +296,7 @@ function Section({
   onBlock,
   onMoveVideo,
   onToggleWatched,
+  onToggleRecommend,
 }: {
   def: YoutubeCategoryDef;
   items: YoutubeVideo[];
@@ -276,9 +311,12 @@ function Section({
   onBlock: (video: YoutubeVideo) => void;
   onMoveVideo: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
   onToggleWatched: (video: YoutubeVideo) => void;
+  onToggleRecommend: (video: YoutubeVideo, categoryKey: string) => void;
 }) {
   const ctrl =
     "rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
+  // 카드는 항상 최신(업로드일 내림차순) 우선으로 표시한다. date 는 "YYYY-MM-DD"라 문자열 비교로 정렬 가능.
+  const ordered = [...items].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   return (
     <section className="mt-8">
       <div className="mb-3 flex items-center gap-2 border-b pb-2" style={{ borderColor: def.color }}>
@@ -310,7 +348,7 @@ function Section({
       </div>
       {items.length ? (
         <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
-          {items.map((it, i) => (
+          {ordered.map((it, i) => (
             <VideoCard
               key={it.videoId ?? i}
               video={it}
@@ -318,6 +356,8 @@ function Section({
               currentKey={def.key}
               allDefs={allDefs}
               moveDisabled={moveDisabled}
+              recommended={isRecommendedChannel(def.recommendedChannels, it.channel, it.channelHandle)}
+              onToggleRecommend={(v) => onToggleRecommend(v, def.key)}
               onBlock={onBlock}
               onMove={onMoveVideo}
               onToggleWatched={onToggleWatched}
@@ -419,6 +459,33 @@ export function YoutubeBoard() {
       loadBlockCount();
       setErr(null);
     } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
+
+  /** 카드 ⭐: 이 채널을 해당 카테고리의 추천 채널에 추가/해제. 낙관적 토글 후 서버 응답으로 확정. */
+  async function toggleRecommend(video: YoutubeVideo, categoryKey: string) {
+    const def = defs.find((d) => d.key === categoryKey);
+    if (!def) return;
+    const input = { channel: video.channel, handle: video.channelHandle ?? null };
+    const wasOn = isRecommendedChannel(def.recommendedChannels, video.channel, video.channelHandle);
+    const prev = defs;
+    // 낙관적 토글: 공유 헬퍼로 다음 목록을 즉시 반영 — 연타해도 두 번째 클릭이 반대 방향(해제/재추가)으로 간다.
+    const optimistic = wasOn
+      ? removeRecommendedChannel(def.recommendedChannels, video.channel, video.channelHandle)
+      : addRecommendedChannel(def.recommendedChannels, video.channel, video.channelHandle);
+    if (optimistic)
+      setDefs((p) =>
+        p.map((d) => (d.key === categoryKey ? { ...d, recommendedChannels: optimistic } : d))
+      );
+    try {
+      const updated = wasOn
+        ? await api.removeYoutubeRecommendedChannel(categoryKey, input)
+        : await api.addYoutubeRecommendedChannel(categoryKey, input);
+      setDefs((p) => p.map((d) => (d.key === categoryKey ? updated : d))); // 서버 권위로 확정
+      setErr(null);
+    } catch (e) {
+      setDefs(prev); // 실패 시 롤백
       setErr((e as Error).message);
     }
   }
@@ -616,6 +683,7 @@ export function YoutubeBoard() {
             onBlock={blockChannel}
             onMoveVideo={moveVideo}
             onToggleWatched={toggleWatched}
+            onToggleRecommend={toggleRecommend}
           />
         ))
       )}

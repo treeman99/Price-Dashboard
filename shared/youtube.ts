@@ -3,6 +3,97 @@ import type { YoutubeCategoryDef } from "./types";
 /** 채널명을 알 수 없을 때 쓰는 플레이스홀더(큐레이션·UI·차단 가드 공용). 차단 키로는 부적합. */
 export const UNKNOWN_CHANNEL = "(채널 미상)";
 
+// ── 추천 채널(recommendedChannels) 헬퍼 ──
+// 목록에는 "채널명", "@핸들", "채널명 (@핸들)" 문자열이 섞여 저장된다(수동 편집 + 카드 ⭐ 버튼 공용).
+// 서버(추가/해제 API)와 프론트(버튼 상태)가 같은 매칭 규칙을 쓰도록 여기서 공유한다.
+// ⭐ 버튼은 "채널명 (@핸들)" 형식으로 저장한다 — 채널명 표기가 흔들려도(oEmbed 실패·개명)
+// 핸들로 매칭이 유지되고, 큐레이션 프롬프트에도 이름+핸들이 함께 전달돼 조사 정확도가 높다.
+
+/** 추천 채널 매칭용 정규화: trim + 소문자 + 콤마→공백 + 연속 공백 1칸 + 앞쪽 @ 제거. */
+function normChannelToken(s: string | null | undefined): string {
+  return (s ?? "")
+    .replace(/,/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/^@+/, "");
+}
+
+/** 저장용 채널명 소독: 콤마 제거(콤마 구분 편집 UI·프롬프트 주입과의 충돌 방지) + 공백 정리. */
+function sanitizeChannelName(channel: string | null | undefined): string {
+  const name = (channel ?? "").replace(/,/g, " ").replace(/\s+/g, " ").trim();
+  return name === UNKNOWN_CHANNEL ? "" : name;
+}
+
+/** 목록 항목 파싱: "채널명 (@핸들)" / "@핸들" / "채널명" → 정규화된 {name, handle}. */
+function parseRecommendedEntry(entry: string): { name: string; handle: string } {
+  const m = /^(.*?)\s*\(@([^\s()]+)\)\s*$/.exec(entry ?? "");
+  if (m) return { name: normChannelToken(m[1]), handle: normChannelToken(m[2]) };
+  const t = (entry ?? "").trim();
+  if (t.startsWith("@")) return { name: "", handle: normChannelToken(t) };
+  return { name: normChannelToken(t), handle: "" };
+}
+
+/**
+ * 카드에서 추천 목록에 저장할 값. 이름과 핸들이 모두 있으면 "채널명 (@핸들)",
+ * 한쪽만 있으면 그 값. 둘 다 식별 불가면 null(버튼 비활성 조건과 동일).
+ */
+export function recommendedChannelValue(
+  channel: string | null | undefined,
+  handle: string | null | undefined
+): string | null {
+  const name = sanitizeChannelName(channel);
+  const h = normChannelToken(handle);
+  if (name && h) return `${name} (@${h})`;
+  if (h) return `@${h}`;
+  return name || null;
+}
+
+/** 항목 1개가 카드의 채널과 같은지: 핸들 일치 우선, 이름 항목은 이름/핸들 어느 쪽과도 매칭(수기 항목 호환). */
+function entryMatches(entry: string, name: string, h: string): boolean {
+  const e = parseRecommendedEntry(entry);
+  if (e.handle && h && e.handle === h) return true;
+  return !!e.name && ((!!name && e.name === name) || (!!h && e.name === h));
+}
+
+/** 목록에 이 채널(이름 또는 핸들 중 하나라도 일치)이 이미 있는지. */
+export function isRecommendedChannel(
+  list: string[] | undefined,
+  channel: string | null | undefined,
+  handle: string | null | undefined
+): boolean {
+  if (!list?.length) return false;
+  const name = normChannelToken(sanitizeChannelName(channel));
+  const h = normChannelToken(handle);
+  if (!name && !h) return false;
+  return list.some((e) => entryMatches(e, name, h));
+}
+
+/** 채널을 추가한 새 목록(이미 있으면 그대로). 추가 불가(식별 불가)면 null. */
+export function addRecommendedChannel(
+  list: string[] | undefined,
+  channel: string | null | undefined,
+  handle: string | null | undefined
+): string[] | null {
+  const value = recommendedChannelValue(channel, handle);
+  if (!value) return null;
+  const cur = list ?? [];
+  if (isRecommendedChannel(cur, channel, handle)) return [...cur];
+  return [...cur, value];
+}
+
+/** 이 채널(이름/핸들 매칭 항목)을 제거한 새 목록. */
+export function removeRecommendedChannel(
+  list: string[] | undefined,
+  channel: string | null | undefined,
+  handle: string | null | undefined
+): string[] {
+  const name = normChannelToken(sanitizeChannelName(channel));
+  const h = normChannelToken(handle);
+  if (!name && !h) return [...(list ?? [])];
+  return (list ?? []).filter((e) => !entryMatches(e, name, h));
+}
+
 /**
  * 유튜브 소식 기본 카테고리 시드(최초 1회 저장, 이후 사용자가 추가/삭제 가능).
  * AI/LLM·신제품 리뷰를 중심으로 전문 조사하도록 description에 추천 채널/키워드를 담는다.
