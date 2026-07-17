@@ -125,7 +125,12 @@ function loadLedger(p: string): SeenLedger {
     if (fs.existsSync(p)) {
       const raw = JSON.parse(fs.readFileSync(p, "utf8"));
       if (raw && typeof raw === "object" && raw.items && typeof raw.items === "object") {
-        return { since: typeof raw.since === "string" ? raw.since : "", items: raw.items };
+        return {
+          since: typeof raw.since === "string" ? raw.since : "",
+          // lastRun 을 반드시 복원해야 '수집공백 재개' 오탐 방지 가드(resumedAfterGap)가 동작한다.
+          lastRun: typeof raw.lastRun === "string" ? raw.lastRun : undefined,
+          items: raw.items,
+        };
       }
     }
   } catch (e) {
