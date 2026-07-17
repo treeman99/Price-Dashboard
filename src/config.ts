@@ -44,12 +44,6 @@ export interface AppConfig {
   legacyHistoryJson: string;
   historyRetentionDays: number;
   naver: { clientId: string; clientSecret: string };
-  /**
-   * 공공데이터포털 「특일 정보」 서비스키 (KRX 휴장일 판정).
-   * 미설정이면 휴장일 판정이 주말 컷 + 실증 폴백으로만 동작한다(공휴일을 못 거름).
-   * https://www.data.go.kr/data/15012690/openapi.do
-   */
-  holidayApiKey: string;
   /** insane-engine (vendored): 차단 사이트 fetch. 팝업/전시 날짜 검증에 사용 */
   insaneEngine: {
     engineDir: string;
@@ -106,7 +100,6 @@ export const config: AppConfig = {
     clientId: process.env.NAVER_CLIENT_ID?.trim() || "",
     clientSecret: process.env.NAVER_CLIENT_SECRET?.trim() || "",
   },
-  holidayApiKey: process.env.HOLIDAY_API_KEY?.trim() || "",
   insaneEngine: {
     engineDir: process.env.INSANE_ENGINE_DIR?.trim() || path.join(repoRoot, "tools", "insane-engine"),
     python:
@@ -164,13 +157,6 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
   config.youtubeCollectTimes.forEach((t) => parseCollectTime(t));
   config.stockKrCollectTimes.forEach((t) => parseCollectTime(t));
   config.stockUsCollectTimes.forEach((t) => parseCollectTime(t));
-
-  if (!config.holidayApiKey) {
-    warnings.push(
-      "HOLIDAY_API_KEY 미설정 → 증시 휴장일을 주말 컷 + 실증 폴백으로만 판정합니다(공휴일 브리핑이 나갈 수 있음). " +
-        "https://www.data.go.kr/data/15012690/openapi.do 에서 발급 후 .env 에 추가하세요."
-    );
-  }
 
   if (opts.forCollect) {
     if (!config.naver.clientId || !config.naver.clientSecret) {

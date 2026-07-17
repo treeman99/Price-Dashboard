@@ -7,9 +7,19 @@ import type { StockMarket } from "../../shared/types.ts";
 /**
  * 증시 휴장일 판정.
  *
- * 미국(NYSE)은 휴장일이 전부 규칙이라 100% 알고리즘으로 유도한다(데이터 불필요).
- * 한국(KRX)은 설·추석이 음력이고 대체공휴일이 정부 고시라 계산이 불가능해서 3계층으로 판정한다:
- *   1) 주말 컷 → 2) 공공데이터포털 「특일 정보」 원장(연 단위 캐시) → 3) 실증 폴백(markClosedIfNoSession)
+ * 미국(NYSE)·한국(KRX) 모두 휴장일을 **계산**으로 유도한다(네트워크·API 키 불필요).
+ * 음력 공휴일(설·추석·부처님오신날)은 Node 내장 ICU 의 한국 음력(dangi) 달력으로 환산한다.
+ *
+ * 3계층으로 판정한다:
+ *   1) 주말 컷 → 2) 계산된 공휴일 + 원장 오버라이드 → 3) 실증 폴백(markClosedIfNoSession)
+ *
+ * 원장은 **계산이 원리적으로 불가능한 것**만 담는다 — 임시공휴일(정부 고시)과 선거일.
+ * 사람이 넣은 원장 값이 계산 결과를 이긴다.
+ *
+ * ⚠️ **3계층이 다 걸리는 건 미국장뿐이다.** 한국장 08:00 브리핑은 개장 전이라 "오늘 세션 데이터가
+ *    없는 것"이 정상이고, 여기에 실증 폴백을 걸면 매일 휴장으로 오판한다(stock.ts 의 2-b 참고).
+ *    즉 한국장은 1)+2) 만으로 막으며, **계산 불가한 임시공휴일·선거일에는 브리핑이 나간다.**
+ *    실측 기준 연 1~2회이고, 막으려면 그날을 원장(setHolidays)에 미리 넣는 수밖에 없다.
  */
 
 const DAY_MS = 86_400_000;
@@ -158,8 +168,9 @@ export function isNyseHoliday(date: string): string | null {
 
 interface HolidayYear {
   dates: string[];
-  /** 날짜 → 사유. 특일정보의 dateName 또는 수동 등록 표기. */
+  /** 날짜 → 사유. 수동 등록 표기. */
   names: Record<string, string>;
+  /** 항상 "manual" 로 쓴다. "api" 는 특일정보 API 를 쓰던 시절 원장을 읽기 위한 하위호환. */
   source: "api" | "manual";
   savedAt: string;
 }
@@ -196,85 +207,197 @@ function saveLedger(l: Ledger): void {
   }
 }
 
-function putYear(market: StockMarket, year: number, map: Map<string, string>, source: "api" | "manual"): void {
+function putYear(market: StockMarket, year: number, map: Map<string, string>): void {
   const ledger = loadLedger();
   const dates = [...map.keys()].sort();
   const names: Record<string, string> = {};
   for (const d of dates) names[d] = map.get(d) ?? "휴장일";
-  ledger[market] = { ...(ledger[market] ?? {}), [String(year)]: { dates, names, source, savedAt: new Date().toISOString() } };
+  ledger[market] = {
+    ...(ledger[market] ?? {}),
+    [String(year)]: { dates, names, source: "manual", savedAt: new Date().toISOString() },
+  };
   ledgerMemo = ledger;
   saveLedger(ledger);
 }
 
+// ── KRX 공휴일 계산 ───────────────────────────────────────
+
 /**
- * 공공데이터포털 「특일 정보」에서 해당 연도 공휴일을 긁는다(월 단위 12회).
- *
- * [검증필요] 서비스키가 없어 실제 응답을 확인하지 못했다. 아래는 공식 문서 기재 형태
- * (response.body.items.item[] / locdate=20260101 숫자 / isHoliday="Y")에 맞춰 구현했고,
- * XML→JSON 변환 API 의 통상 관례(item 이 1건이면 배열이 아닌 객체, 0건이면 items 가 빈 문자열)를
- * 방어적으로 처리했다. 키를 넣고 첫 실행 시 응답을 반드시 눈으로 확인할 것.
- *
- * 한 달이라도 실패하면 null 을 돌려준다 — 구멍 뚫린 원장을 저장하면 그 해 내내
- * 특정 공휴일을 못 걸러서 잘못된 브리핑이 나간다.
+ * 한국 음력(dangi) 달력. Node 내장 ICU 에 포함돼 있어 의존성이 필요 없다.
+ * timeZone:"UTC" 고정 — 우리 날짜 헬퍼가 전부 UTC 자정 기준이라 맞춰야 하루가 밀리지 않는다.
  */
-async function fetchKrHolidays(year: number): Promise<Map<string, string> | null> {
-  if (!config.holidayApiKey) return null;
+const dangiFormat = new Intl.DateTimeFormat("en-u-ca-dangi", {
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  timeZone: "UTC",
+});
 
-  const map = new Map<string, string>();
-  for (let month = 1; month <= 12; month++) {
-    const url = new URL("https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo");
-    // serviceKey 는 '디코딩된' 키를 .env 에 넣는다는 전제 — URLSearchParams 가 인코딩한다.
-    // 포털에서 복사한 'Encoding' 키를 그대로 넣으면 이중 인코딩으로 401 이 난다.
-    url.searchParams.set("serviceKey", config.holidayApiKey);
-    url.searchParams.set("solYear", String(year));
-    url.searchParams.set("solMonth", pad(month));
-    url.searchParams.set("_type", "json");
-    url.searchParams.set("numOfRows", "50");
+interface LunarDate {
+  /** 음력 연도(relatedYear). dangi 의 'year' 는 60갑자 순번이라 쓰지 않는다. */
+  year: number;
+  /** 평달은 "1"…"12", **윤달은 "4bis" 처럼 bis 접미사가 붙는다**(라이브 확인: 2020/4bis, 2023/2bis, 2025/6bis). */
+  month: string;
+  day: number;
+}
 
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.text();
-      // 키 오류 시 JSON 이 아니라 XML 에러가 오는 경우가 있어 파싱 실패를 명시적으로 잡는다.
-      let json: unknown;
-      try {
-        json = JSON.parse(body);
-      } catch {
-        throw new Error(`JSON 이 아닌 응답(키 오류 의심): ${body.slice(0, 120)}`);
-      }
-      for (const item of extractItems(json)) {
-        if (item.isHoliday && item.isHoliday !== "Y") continue;
-        const date = normalizeLocdate(item.locdate);
-        if (date) map.set(date, item.dateName?.trim() || "공휴일");
-      }
-    } catch (e) {
-      log.warn(`특일정보 조회 실패(${year}-${pad(month)}) → KRX 휴장일 원장을 만들지 않습니다: ${(e as Error).message}`);
-      return null;
-    }
+/** 양력 YYYY-MM-DD → 음력. */
+function toLunar(date: string): LunarDate {
+  const parts = Object.fromEntries(
+    dangiFormat.formatToParts(parseYmd(date)).map((p) => [p.type, p.value])
+  );
+  return { year: Number(parts.relatedYear), month: String(parts.month), day: Number(parts.day) };
+}
+
+/**
+ * 음력 (year, month **평달**, day) → 양력. [from, to] 구간을 훑어 찾는다.
+ *
+ * month 를 String(n) 과 정확히 비교하므로 윤달("4bis")은 자동으로 걸러진다 —
+ * 부처님오신날은 윤4월 8일이 아니라 평4월 8일이라 이게 맞다(2020 년 윤4월로 확인).
+ * 못 찾으면 null(호출부가 그 공휴일을 건너뛴다).
+ */
+function fromLunar(year: number, month: number, day: number, from: string, to: string): string | null {
+  const target = String(month);
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const l = toLunar(d);
+    if (l.year === year && l.month === target && l.day === day) return d;
   }
+  return null;
+}
+
+/** 대체공휴일 규칙. */
+type SubstituteRule =
+  /** 대체 없음 — 신정·현충일·제헌절. */
+  | "none"
+  /** 토·일과 겹치면 대체 — 삼일절·광복절·개천절·한글날·부처님오신날·성탄절. */
+  | "weekend"
+  /** 토·일 **또는 다른 공휴일**과 겹치면 대체 — 어린이날 전용(아래 주석 참고). */
+  | "weekendOrOverlap";
+
+interface KrBaseHoliday {
+  date: string;
+  name: string;
+  rule: SubstituteRule;
+}
+
+const krCache = new Map<number, Map<string, string>>();
+
+/**
+ * 해당 연도의 KRX **공휴일** → 사유. 순수 함수(네트워크 없음).
+ * 근로자의날·연말 폐장일 같은 '공휴일이 아닌 휴장일'은 krExchangeExtras 가 따로 더한다.
+ *
+ * 아래 규칙은 전부 네이버 시세(삼성전자 005930 일별 차트) **2021-01-01~2026-07-16** 실거래일로
+ * 백테스트했다 — 대상 평일 1445일 중 1437일 일치, 위양성 0, 위음성 8(전부 임시공휴일/선거일 → 원장 관할).
+ *
+ * ⚠️ 백테스트 구간을 줄이지 말 것. 처음엔 2023-01-01 부터만 검증해 "위양성 0"이라 결론냈는데,
+ *    성탄절·부처님오신날 대체공휴일 시행연도 가드 누락 버그가 **2023년 이전에만 발현**하는 탓에
+ *    그 구간에서는 구조적으로 보이지 않았다. 구간을 2021 로 넓히자 위양성 3건이 드러났다.
+ *    규칙에 시행연도가 걸린 항목이 있는 한, 시행 이전 연도를 포함해야 검증이 성립한다.
+ *
+ *  · 설날 연휴 3일: 2023-01-21~23 ✓, 2024-02-09~11 ✓, 2025-01-28~30 ✓, 2026-02-16~18 ✓
+ *  · 추석 연휴 3일: 2023-09-28~30 ✓, 2024-09-16~18 ✓, 2025-10-05~07 ✓
+ *  · 부처님오신날: 2024-05-15 ✓, 2025-05-05 ✓ / 토요일 대체 2023-05-29 ✓, 일요일 대체 2026-05-25 ✓
+ *  · 연휴가 일요일과 겹쳐 생긴 대체: 2023-01-24 ✓, 2024-02-12 ✓, 2025-10-08 ✓
+ *  · 토·일 대체: 2024-05-06(어린이날 일) ✓, 2025-03-03(삼일절 토) ✓, 2026-03-02(삼일절 일) ✓
+ *  · **어린이날 '다른 공휴일과 겹침' 대체**: 2025-05-05 는 어린이날이자 부처님오신날인데
+ *    둘 다 월요일이라 주말 규칙으로는 대체가 안 나온다. 그런데 2025-05-06(화)은 실제로 휴장이었다 ✓
+ *    → 어린이날에만 있는 '토요일 또는 다른 공휴일과 겹치는 경우' 조항이 실재함을 실측으로 확인.
+ */
+export function krHolidays(year: number): Map<string, string> {
+  const hit = krCache.get(year);
+  if (hit) return hit;
+
+  const base: KrBaseHoliday[] = [];
+  /** 연휴(설·추석) — 연휴 전체가 일요일과 겹치는지로 대체를 판정하므로 런 단위로 따로 든다. */
+  const runs: { name: string; days: string[] }[] = [];
+
+  // ── 양력 고정 공휴일 ──
+  base.push({ date: `${year}-01-01`, name: "신정", rule: "none" });
+  base.push({ date: `${year}-03-01`, name: "삼일절", rule: "weekend" });
+  base.push({ date: `${year}-05-05`, name: "어린이날", rule: "weekendOrOverlap" });
+  base.push({ date: `${year}-06-06`, name: "현충일", rule: "none" });
+  base.push({ date: `${year}-08-15`, name: "광복절", rule: "weekend" });
+  base.push({ date: `${year}-10-03`, name: "개천절", rule: "weekend" });
+  base.push({ date: `${year}-10-09`, name: "한글날", rule: "weekend" });
+  // 성탄절·부처님오신날의 대체공휴일은 2023년 시행령 개정으로 **신설**됐다. 그 전엔 없었다.
+  // 실측으로 경계를 확정: 2021-12-27·2022-12-26(성탄절 대체 자리)과 2022-05-09(부처님오신날 대체 자리)은
+  // 전부 정상 거래일이었고, 2023-05-29 부터 휴장이다. 가드 없이 전 연도에 적용하면 과거 조회에서
+  // 멀쩡한 거래일을 휴장으로 만든다.
+  const subst2023: SubstituteRule = year >= 2023 ? "weekend" : "none";
+  base.push({ date: `${year}-12-25`, name: "성탄절", rule: subst2023 });
+
+  // 제헌절은 2008년 공휴일에서 빠졌다가 2026년 재지정됐다.
+  // 실측: 2023·2024·2025-07-17 은 전부 거래일 ✓ / 2026-07-17(금)은 거래 없음 ✓
+  // [검증필요] 대체공휴일 적용 여부가 불명확하다. 2026-07-17 은 금요일이라 실측으로 판별할 수 없어
+  // 일단 '대체 없음'으로 둔다. 7/17 이 주말인 첫 해는 2027(토)이라 그때 실측으로 확정해야 한다.
+  if (year >= 2026) base.push({ date: `${year}-07-17`, name: "제헌절", rule: "none" });
+
+  // ── 음력 공휴일 ──
+  // 설날은 양력 1/21~2/21 에만 온다. 스캔 구간을 넉넉히 잡아 경계에서 놓치지 않게 한다.
+  // (연휴 전날이 전년 12월로 넘어가는 일은 구조적으로 없다 — 가장 이른 설날이 1/21 이라 전날도 1/20.)
+  const seollal = fromLunar(year, 1, 1, `${year}-01-01`, `${year}-03-15`);
+  if (seollal) runs.push({ name: "설날", days: [addDays(seollal, -1), seollal, addDays(seollal, 1)] });
+
+  // 추석은 양력 9/8~10/8 에만 온다.
+  const chuseok = fromLunar(year, 8, 15, `${year}-08-15`, `${year}-10-31`);
+  if (chuseok) runs.push({ name: "추석", days: [addDays(chuseok, -1), chuseok, addDays(chuseok, 1)] });
+
+  // 부처님오신날은 양력 4/28~5/27 에만 온다. 윤4월이 있어도 평4월만 잡는다(fromLunar 주석 참고).
+  const buddha = fromLunar(year, 4, 8, `${year}-04-01`, `${year}-06-15`);
+  if (buddha) base.push({ date: buddha, name: "부처님오신날", rule: subst2023 });
+
+  for (const run of runs) {
+    const label = [`${run.name} 전날`, run.name, `${run.name} 다음날`];
+    run.days.forEach((d, i) => base.push({ date: d, name: label[i], rule: "none" }));
+  }
+
+  // ── 1단계: 법정공휴일을 원장에 채운다 ──
+  const map = new Map<string, string>();
+  for (const h of base) if (!map.has(h.date)) map.set(h.date, h.name);
+
+  /** 같은 날에 다른 공휴일이 하나 더 있는가(어린이날 대체 판정용). */
+  const overlapsOther = (date: string): boolean => base.filter((h) => h.date === date).length > 1;
+
+  /** anchor 다음날부터 '주말도 공휴일도 아닌 첫 날'. 대체가 또 겹치면 연쇄로 밀린다. */
+  const nextFreeWeekday = (anchor: string): string => {
+    let d = addDays(anchor, 1);
+    for (let i = 0; i < SESSION_SCAN_LIMIT; i++) {
+      if (!isWeekend(d) && !map.has(d)) return d;
+      d = addDays(d, 1);
+    }
+    throw new Error(`${anchor} 이후 ${SESSION_SCAN_LIMIT}일 내에 대체공휴일 자리를 찾지 못했습니다.`);
+  };
+
+  // ── 2단계: 대체공휴일 ──
+  // anchor 오름차순으로 처리해야 연쇄가 결정적으로 풀린다(앞 대체가 뒤 대체의 자리를 막을 수 있다).
+  const candidates: { anchor: string; name: string; triggered: boolean }[] = [];
+
+  for (const run of runs) {
+    // 연휴가 **일요일**과 겹치면 대체(토요일은 대체 사유가 아니다). anchor 는 연휴 마지막 날.
+    const last = run.days[run.days.length - 1];
+    candidates.push({
+      anchor: last,
+      name: `${run.name} 연휴 대체공휴일`,
+      triggered: run.days.some((d) => dayOfWeek(d) === 0),
+    });
+  }
+
+  for (const h of base) {
+    if (h.rule === "none") continue;
+    const weekend = isWeekend(h.date);
+    const triggered = h.rule === "weekendOrOverlap" ? weekend || overlapsOther(h.date) : weekend;
+    candidates.push({ anchor: h.date, name: `${h.name} 대체공휴일`, triggered });
+  }
+
+  for (const c of candidates.filter((c) => c.triggered).sort((a, b) => a.anchor.localeCompare(b.anchor))) {
+    map.set(nextFreeWeekday(c.anchor), c.name);
+  }
+
+  // 해당 연도 밖으로 새어나간 날짜는 버린다(krHolidays(year) 계약은 그 해 양력 날짜만).
+  for (const d of [...map.keys()]) if (!d.startsWith(`${year}-`)) map.delete(d);
+
+  krCache.set(year, map);
   return map;
-}
-
-interface SpcdeItem {
-  locdate?: unknown;
-  dateName?: string;
-  isHoliday?: string;
-}
-
-/** response.body.items.item 을 배열로 정규화. 0건(빈 문자열)·1건(객체)·N건(배열) 모두 처리. */
-function extractItems(json: unknown): SpcdeItem[] {
-  const items = (json as { response?: { body?: { items?: unknown } } })?.response?.body?.items;
-  if (!items || typeof items !== "object") return [];
-  const item = (items as { item?: unknown }).item;
-  if (!item) return [];
-  return (Array.isArray(item) ? item : [item]) as SpcdeItem[];
-}
-
-/** locdate(20260101 숫자 또는 문자열) → "2026-01-01". 형식이 다르면 null. */
-function normalizeLocdate(v: unknown): string | null {
-  const s = String(v ?? "").trim();
-  if (!/^\d{8}$/.test(s)) return null;
-  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
 }
 
 /**
@@ -295,23 +418,30 @@ function krExchangeExtras(year: number): { date: string; name: string }[] {
   return out;
 }
 
-/** 해당 연도 휴장일 → 사유. 원장(수동/캐시)이 있으면 그걸 우선한다. */
+/**
+ * 해당 연도 휴장일 → 사유. **계산 결과 위에 원장을 덮어쓴다**(사람이 넣은 값이 이긴다).
+ *
+ * 원장은 계산으로 유도할 수 없는 것만 담는다 — 임시공휴일(정부가 갑자기 고시)과 선거일.
+ * 실측으로 확인된 사례: 2023-10-02, 2024-04-10(총선), 2024-10-01(국군의날), 2025-01-27, 2025-06-03(대선).
+ *
+ * 전체 교체가 아니라 병합인 이유: 원장이 임시공휴일 1건만 담고 있어도 그 해 법정공휴일이
+ * 통째로 사라지면 안 된다. setHolidays 로 넣은 해도 계산된 공휴일은 그대로 살아 있어야 한다.
+ */
 async function holidayMap(market: StockMarket, year: number): Promise<Map<string, string>> {
+  const map = market === "us" ? new Map(nyseHolidays(year)) : new Map(krHolidays(year));
+
+  if (market === "kr") {
+    // extras 는 계산된 공휴일을 덮지 않는다(같은 날짜면 공휴일 사유명을 남긴다).
+    for (const e of krExchangeExtras(year)) if (!map.has(e.date)) map.set(e.date, e.name);
+  }
+
+  // 원장 오버라이드 — 계산 결과를 덮어쓴다.
   const cached = loadLedger()[market]?.[String(year)];
-  if (cached) return new Map(cached.dates.map((d) => [d, cached.names?.[d] ?? "휴장일"]));
+  if (cached) for (const d of cached.dates) map.set(d, cached.names?.[d] ?? "휴장일");
 
-  if (market === "us") return nyseHolidays(year);
-
-  const fetched = await fetchKrHolidays(year);
-  const map = new Map<string, string>(fetched ?? []);
-  // extras 는 API 결과를 덮지 않는다(같은 날짜면 공식 사유명을 남긴다).
-  for (const e of krExchangeExtras(year)) if (!map.has(e.date)) map.set(e.date, e.name);
   // 주말은 원장에 남기지 않는다 — 주말 컷이 먼저 걸러서 중복이다.
   for (const d of [...map.keys()]) if (isWeekend(d)) map.delete(d);
 
-  // 조회 실패/키 없음이면 저장하지 않는다. 저장해버리면 나중에 키를 넣어도
-  // 공휴일이 빠진 원장이 캐시로 굳어버린다.
-  if (fetched) putYear("kr", year, map, "api");
   return map;
 }
 
@@ -336,7 +466,13 @@ export async function getHolidays(market: StockMarket, year: number): Promise<st
   return [...(await holidayMap(market, year)).keys()].sort();
 }
 
-/** UI 수동 편집용. 원장을 통째로 교체한다(이후 조회는 API 대신 이 값을 쓴다). */
+/**
+ * UI 수동 편집용 — 계산으로 못 잡는 임시공휴일/선거일을 등록한다.
+ *
+ * 원장은 계산 결과 **위에 덮어쓰는 레이어**다. 즉 여기 넣은 날짜는 휴장으로 **추가**되지만,
+ * 계산된 법정공휴일을 이 목록에서 빼는 방식으로 **되돌릴 수는 없다**(병합이라 계산분이 남는다).
+ * 계산이 틀려서 휴장일을 빼야 하는 상황이면 그건 규칙 버그이니 krHolidays 를 고쳐야 한다.
+ */
 export function setHolidays(market: StockMarket, year: number, dates: string[]): void {
   const prev = loadLedger()[market]?.[String(year)];
   const map = new Map<string, string>();
@@ -344,7 +480,7 @@ export function setHolidays(market: StockMarket, year: number, dates: string[]):
     parseYmd(d);
     map.set(d, prev?.names?.[d] ?? "휴장일(수동 등록)");
   }
-  putYear(market, year, map, "manual");
+  putYear(market, year, map);
   log.info(`${market.toUpperCase()} ${year}년 휴장일 ${map.size}건 수동 등록`);
 }
 
