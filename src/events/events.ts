@@ -6,7 +6,7 @@ import { localDate } from "../util/date.ts";
 import { gatherCorpus } from "./gather.ts";
 import { curate } from "./curate.ts";
 import { markNewItems } from "./new-tracker.ts";
-import { sendEventsEmail } from "../notify/events-email.ts";
+import { sendEventsEmail, sendEventsIMessage } from "../notify/events-email.ts";
 import type { EventsSnapshot } from "../../shared/types.ts";
 
 // 이력 저장 없음: 최신 스냅샷 1개만 캐시(JSON 파일 + 메모리)
@@ -80,6 +80,7 @@ export async function refreshEvents(opts: { trigger: string; notify?: boolean } 
       await sendEventsEmail(snapshot).catch((e) =>
         log.warn(`이벤트 이메일 발송 예외: ${(e as Error).message}`)
       );
+      await sendEventsIMessage(snapshot); // 자체 게이트·자체 catch(throw 안 함)
     }
     log.info(`이벤트 수집 완료 [${opts.trigger}] ${date} (source=${snapshot.source})`);
     return snapshot;

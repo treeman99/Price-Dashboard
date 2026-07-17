@@ -52,6 +52,7 @@ import { applyRegionFilter } from "../youtube/curate.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
 import { rescheduleAll } from "../scheduler/scheduler.ts";
 import { generateCategoryDescription, shouldAutoDescribe } from "../util/category-describe.ts";
+import { sendIMessage, isIMessageConfigured } from "../notify/imessage.ts";
 import { log } from "../util/log.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import type {
@@ -101,9 +102,32 @@ api.get("/config", (_req, res) => {
   res.json({
     port: config.port,
     collectTime: config.collectTime,
-    notify: { email: config.notify.email },
+    notify: { email: config.notify.email, imessage: isIMessageConfigured() },
     warnings,
   });
+});
+
+/**
+ * [PoC] iMessage 테스트 발송 — 실행 중인 launchd 서비스가 osascript 로 본인에게 1건 보낸다.
+ * 이 경로의 목적은 '백그라운드 서비스의 TCC(자동화) 권한이 실제로 뚫리는지' 확인이다.
+ * (내 셸에서 보내면 책임 프로세스가 달라 위양성 — 반드시 서비스 프로세스가 보내야 유효한 검증)
+ * 최초 호출 시 macOS '…이(가) Messages를 제어하려고 합니다' 승인 프롬프트가 뜰 수 있다.
+ */
+api.post("/notify/imessage/test", async (_req, res) => {
+  if (!config.notify.imessage)
+    return res.status(400).json({ error: "NOTIFY_IMESSAGE 가 꺼져 있습니다 (.env 에서 켜고 서비스 재시작)." });
+  if (!config.notify.imessageTo)
+    return res.status(400).json({ error: "IMESSAGE_TO(수신자) 미설정 (.env)." });
+  const now = new Date().toLocaleString("ko-KR");
+  try {
+    await sendIMessage(`[Daily Dashboard] iMessage 연동 테스트 — ${now}\n이 메시지가 보이면 자동 알림 연동이 가능합니다. 📈`);
+    log.info("iMessage 테스트 발송 성공");
+    res.json({ ok: true, sentTo: config.notify.imessageTo });
+  } catch (e) {
+    log.warn(`iMessage 테스트 발송 실패: ${(e as Error).message}`);
+    // stderr(-1743 미승인 등)를 그대로 내려 진단 가능하게.
+    res.status(500).json({ error: (e as Error).message });
+  }
 });
 
 /** 오늘 수집 상태 (catch-up/배지 표시용) */

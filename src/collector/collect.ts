@@ -22,7 +22,7 @@ import {
   getSourceFetchCache,
   putSourceFetchCache,
 } from "../db/repo.ts";
-import { sendEmailReport } from "../notify/email.ts";
+import { sendEmailReport, sendPriceIMessage } from "../notify/email.ts";
 import type { CollectResult, PricePoint, Product, Review } from "../../shared/types.ts";
 
 export interface CollectOptions {
@@ -255,19 +255,23 @@ async function runCollectionInner(opts: CollectOptions): Promise<CollectResult> 
 
   const anyOk = perProduct.some((r) => r.ok);
 
-  // ── 알림 (수집 성공 시 1회, 멱등) ──
+  // ── 알림 (수집 성공 시 1회, 멱등) — 이메일·iMessage 각각 독립 추적 ──
   const prior = getRunResult(date);
   let emailed = prior?.notified.email ?? false;
+  let imessaged = prior?.notified.imessage ?? false;
 
   // onlyProductId(단일 상품 즉시수집)일 때는 일일 리포트 알림을 보내지 않는다.
-  if (anyOk && !opts.onlyProductId && !emailed) {
+  if (anyOk && !opts.onlyProductId && (!emailed || !imessaged)) {
     const summaries = listProducts(true)
       .map((p) => getProductSummary(p.id))
       .filter((s): s is NonNullable<typeof s> => s != null);
-    emailed = await sendEmailReport(summaries, date).catch((e) => {
-      log.warn(`이메일 발송 예외: ${(e as Error).message}`);
-      return false;
-    });
+    if (!emailed) {
+      emailed = await sendEmailReport(summaries, date).catch((e) => {
+        log.warn(`이메일 발송 예외: ${(e as Error).message}`);
+        return false;
+      });
+    }
+    if (!imessaged) imessaged = await sendPriceIMessage(summaries, date); // 자체 catch(throw 안 함)
   }
 
   const result: CollectResult = {
@@ -276,7 +280,7 @@ async function runCollectionInner(opts: CollectOptions): Promise<CollectResult> 
     finishedAt: new Date().toISOString(),
     ok: anyOk,
     perProduct,
-    notified: { email: emailed },
+    notified: { email: emailed, imessage: imessaged },
     error: anyOk ? null : "모든 상품 수집 실패",
   };
   if (isDailyRun) recordRunFinish(result);

@@ -47,6 +47,10 @@ export interface AppConfig {
     email: boolean;
     gmailAddress: string;
     gmailAppPassword: string;
+    /** iMessage 알림 사용 여부(macOS Messages.app osascript 발송). 기본 off. */
+    imessage: boolean;
+    /** iMessage 수신자(본인 전화번호 E.164 예: +8210… 또는 Apple ID 이메일). */
+    imessageTo: string;
   };
 }
 
@@ -85,6 +89,8 @@ export const config: AppConfig = {
     email: bool(process.env.NOTIFY_EMAIL, false),
     gmailAddress: process.env.GMAIL_ADDRESS?.trim() || "",
     gmailAppPassword: (process.env.GMAIL_APP_PASSWORD || "").replace(/\s+/g, ""),
+    imessage: bool(process.env.NOTIFY_IMESSAGE, false),
+    imessageTo: process.env.IMESSAGE_TO?.trim() || "",
   },
 };
 

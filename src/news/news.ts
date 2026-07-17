@@ -4,7 +4,7 @@ import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
 import { curateNews } from "./curate.ts";
-import { sendNewsEmail } from "../notify/news-email.ts";
+import { sendNewsEmail, sendNewsIMessage } from "../notify/news-email.ts";
 import { loadCategories } from "./categories.ts";
 import type { NewsSnapshot } from "../../shared/types.ts";
 
@@ -74,6 +74,7 @@ export async function refreshNews(
       await sendNewsEmail(snapshot).catch((e) =>
         log.warn(`뉴스 이메일 발송 예외: ${(e as Error).message}`)
       );
+      await sendNewsIMessage(snapshot); // 자체 게이트·자체 catch(throw 안 함)
     } else if (opts.notify) {
       log.info("뉴스 0건 → 이메일 발송 생략");
     }

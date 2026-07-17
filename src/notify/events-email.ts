@@ -2,7 +2,44 @@ import nodemailer from "nodemailer";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { googleCalendarUrl } from "../../shared/calendar.ts";
+import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem } from "../../shared/types.ts";
+
+/** 팝업/전시/축제 iMessage 텍스트: 카운트 + '신규' 강조 + 팝업 이름 일부. */
+export function eventsIMessageText(s: EventsSnapshot): string {
+  const exhCount = s.exhibitions.venues.reduce((a, v) => a + v.items.length, 0);
+  const festivals = s.festivals ?? [];
+  const newItems = [
+    ...s.popups.filter((p) => p.isNew).map((p) => p.name),
+    ...s.exhibitions.venues.flatMap((v) => v.items.filter((e) => e.isNew).map((e) => e.title)),
+    ...festivals.filter((f) => f.isNew).map((f) => f.name),
+  ];
+  const lines = [
+    `🎈 오늘의 팝업·전시·축제 — ${s.date}`,
+    `🛍 팝업 ${s.popups.length} · 🏛 전시 ${exhCount} · 🎉 축제 ${festivals.length}`,
+  ];
+  if (newItems.length) lines.push(`🆕 신규: ${newItems.slice(0, 6).join(", ")}`);
+  if (s.popups.length) lines.push(`팝업: ${s.popups.slice(0, 6).map((p) => p.name).join(", ")}`);
+  return lines.join("\n");
+}
+
+/** 팝업/전시/축제를 본인 iMessage 로 발송. off/미설정/전부 0건이면 false. 절대 throw 안 함. */
+export async function sendEventsIMessage(s: EventsSnapshot): Promise<boolean> {
+  if (!isIMessageConfigured()) return false;
+  // 전부 0건이면 무의미한 '팝업 0·전시 0·축제 0' 푸시를 보내지 않는다(유튜브/뉴스와 일관).
+  const total =
+    s.popups.length +
+    s.exhibitions.venues.reduce((a, v) => a + v.items.length, 0) +
+    (s.festivals ?? []).length;
+  if (total === 0) return false;
+  try {
+    await sendIMessage(eventsIMessageText(s));
+    return true;
+  } catch (e) {
+    log.warn(`이벤트 iMessage 발송 예외: ${(e as Error).message}`);
+    return false;
+  }
+}
 
 function escapeHtml(s: string): string {
   return (s || "")

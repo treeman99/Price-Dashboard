@@ -1,7 +1,33 @@
 import nodemailer from "nodemailer";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
+import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import type { NewsSnapshot, NewsItem, NewsCategory } from "../../shared/types.ts";
+
+/** 뉴스 다이제스트 iMessage 텍스트: 총건수 + 카테고리별 상위 2개 제목. */
+export function newsIMessageText(s: NewsSnapshot): string {
+  const total = s.categories.reduce((a, c) => a + c.items.length, 0);
+  const lines = [`📰 뉴스 다이제스트 — ${s.date} (총 ${total}건)`];
+  for (const c of s.categories) {
+    if (!c.items.length) continue;
+    const titles = c.items.slice(0, 2).map((it) => it.title).join(" / ");
+    lines.push(`${c.emoji} ${c.label}(${c.items.length}): ${titles}`);
+  }
+  return lines.join("\n");
+}
+
+/** 뉴스 다이제스트를 본인 iMessage 로 발송. off/미설정/0건이면 false. 절대 throw 안 함. */
+export async function sendNewsIMessage(s: NewsSnapshot): Promise<boolean> {
+  if (!isIMessageConfigured()) return false;
+  if (!s.categories.some((c) => c.items.length)) return false;
+  try {
+    await sendIMessage(newsIMessageText(s));
+    return true;
+  } catch (e) {
+    log.warn(`뉴스 iMessage 발송 예외: ${(e as Error).message}`);
+    return false;
+  }
+}
 
 function escapeHtml(s: string): string {
   return (s || "")

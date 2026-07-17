@@ -4,7 +4,7 @@ import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
 import { curateYoutube } from "./curate.ts";
-import { sendYoutubeEmail } from "../notify/youtube-email.ts";
+import { sendYoutubeEmail, sendYoutubeIMessage } from "../notify/youtube-email.ts";
 import { loadCategories } from "./categories.ts";
 import { addReclass } from "./reclass.ts";
 import type { YoutubeSnapshot, YoutubeCategory, YoutubeVideo } from "../../shared/types.ts";
@@ -83,6 +83,7 @@ export async function refreshYoutube(
       await sendYoutubeEmail(snapshot).catch((e) =>
         log.warn(`유튜브 이메일 발송 예외: ${(e as Error).message}`)
       );
+      await sendYoutubeIMessage(snapshot); // 자체 게이트·자체 catch(throw 안 함)
     } else if (opts.notify) {
       log.info("유튜브 0건 → 이메일 발송 생략");
     }

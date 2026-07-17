@@ -143,7 +143,7 @@ export interface CollectResult {
     overallLowest: number | null;
     error: string | null;
   }>;
-  notified: { email: boolean };
+  notified: { email: boolean; imessage: boolean };
   error: string | null;
 }
 

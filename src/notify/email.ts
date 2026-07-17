@@ -4,6 +4,7 @@ import { log } from "../util/log.ts";
 import { getHistory } from "../db/repo.ts";
 import { localDateDaysAgo } from "../util/date.ts";
 import { renderPriceChartPng } from "./chart.ts";
+import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import type { ProductSummary } from "../../shared/types.ts";
 
 const GREEN = "#2ecc71"; // 하락
@@ -86,6 +87,43 @@ function escapeHtml(s: string): string {
 
 function escapeAttr(s: string): string {
   return escapeHtml(s).replace(/'/g, "&#39;");
+}
+
+/**
+ * 가격 리포트 iMessage 텍스트(플레인). 상품별 종합최저가 + 전일 대비 변동만 간결히.
+ * (iMessage 는 리치 HTML/차트 인라인이 안 되므로 이메일과 별개의 텍스트 요약을 만든다)
+ */
+export function priceIMessageText(summaries: ProductSummary[], today: string): string {
+  const lines = summaries.map((s) => {
+    const price = s.latest?.overallLowest ?? null;
+    const c = s.change;
+    let chg = "";
+    if (c.amount != null && c.direction !== "flat") {
+      const arrow = c.direction === "down" ? "▼" : "▲";
+      const pct = c.percent != null ? ` ${Math.abs(c.percent).toFixed(1)}%` : "";
+      chg = ` ${arrow}${Math.abs(c.amount).toLocaleString()}원${pct}`;
+    }
+    return `• ${s.product.name}: ${won(price)}${chg}`;
+  });
+  return `📷 관심 물건 최저가 — ${today}\n${lines.join("\n")}`;
+}
+
+/**
+ * 가격 리포트를 본인 iMessage 로 발송. 설정 off/미설정이거나 상품이 없으면 false.
+ * 절대 throw 하지 않는다(수집 흐름을 막지 않음) — 실패는 로깅 후 false.
+ */
+export async function sendPriceIMessage(
+  summaries: ProductSummary[],
+  today: string
+): Promise<boolean> {
+  if (!isIMessageConfigured() || !summaries.length) return false;
+  try {
+    await sendIMessage(priceIMessageText(summaries, today));
+    return true;
+  } catch (e) {
+    log.warn(`가격 iMessage 발송 예외: ${(e as Error).message}`);
+    return false;
+  }
 }
 
 /**
