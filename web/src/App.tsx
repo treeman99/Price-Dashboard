@@ -7,6 +7,7 @@ import { Dashboard } from "@/components/Dashboard";
 import { EventsBoard } from "@/components/EventsBoard";
 import { NewsBoard } from "@/components/NewsBoard";
 import { YoutubeBoard } from "@/components/YoutubeBoard";
+import { StockBoard } from "@/components/StockBoard";
 
 interface TabDef {
   id: string;
@@ -22,6 +23,7 @@ const TABS: TabDef[] = [
   { id: "events", label: "팝업·전시", color: "#db2777", content: <EventsBoard /> },
   { id: "news", label: "뉴스", color: "#d97706", content: <NewsBoard /> },
   { id: "youtube", label: "유튜브 소식", color: "#dc2626", content: <YoutubeBoard /> },
+  { id: "stock", label: "증시", color: "#059669", content: <StockBoard /> },
 ];
 
 export default function App() {

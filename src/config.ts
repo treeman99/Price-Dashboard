@@ -21,6 +21,16 @@ export interface AppConfig {
   eventsCollectTime: string; // HH:mm (팝업/전시 수집)
   newsCollectTimes: string[]; // HH:mm[] (뉴스 다이제스트 수집, 복수 시간 지원)
   youtubeCollectTimes: string[]; // HH:mm[] (유튜브 소식 수집, 복수 시간 지원)
+  /** 한국장 브리핑 시각. 09:00 개장 전 프리뷰이므로 기본 08:00. */
+  stockKrCollectTimes: string[];
+  /**
+   * 미국장 브리핑 시각. 기본 18:00 — 17시는 뉴욕 종가(당일 06시 확정)와
+   * 야간 개장(22:30) 사이 死구간이라 새 재료가 없다. 18시는 뉴욕 프리마켓
+   * 개장(04~05시 ET)과 겹쳐 선물·프리마켓 재료가 실제로 존재한다.
+   */
+  stockUsCollectTimes: string[];
+  /** 종목 시세 조회 간 간격(ms). 네이버에 대한 매너 — 연타 금지. */
+  stockFetchDelayMs: number;
   youtubeFreshDays: number; // 최근 N일 이내 게시 영상만 채택
   /** '본영상' 체크된 유튜브 영상을 이만큼(일) 동안 수집·검색에서 제외 */
   youtubeWatchedExcludeDays: number;
@@ -34,6 +44,12 @@ export interface AppConfig {
   legacyHistoryJson: string;
   historyRetentionDays: number;
   naver: { clientId: string; clientSecret: string };
+  /**
+   * 공공데이터포털 「특일 정보」 서비스키 (KRX 휴장일 판정).
+   * 미설정이면 휴장일 판정이 주말 컷 + 실증 폴백으로만 동작한다(공휴일을 못 거름).
+   * https://www.data.go.kr/data/15012690/openapi.do
+   */
+  holidayApiKey: string;
   /** insane-engine (vendored): 차단 사이트 fetch. 팝업/전시 날짜 검증에 사용 */
   insaneEngine: {
     engineDir: string;
@@ -58,8 +74,23 @@ export const config: AppConfig = {
   port: int(process.env.PORT, 7777),
   collectTime: process.env.COLLECT_TIME?.trim() || "09:00",
   eventsCollectTime: process.env.EVENTS_COLLECT_TIME?.trim() || "10:00",
-  newsCollectTimes: parseCollectTimes(process.env.NEWS_COLLECT_TIMES?.trim() || "08:00,17:00"),
-  youtubeCollectTimes: parseCollectTimes(process.env.YOUTUBE_COLLECT_TIMES?.trim() || "08:30"),
+  newsCollectTimes: parseCollectTimes(
+    process.env.NEWS_COLLECT_TIMES?.trim() || "08:00,17:00",
+    "NEWS_COLLECT_TIMES"
+  ),
+  youtubeCollectTimes: parseCollectTimes(
+    process.env.YOUTUBE_COLLECT_TIMES?.trim() || "08:30",
+    "YOUTUBE_COLLECT_TIMES"
+  ),
+  stockKrCollectTimes: parseCollectTimes(
+    process.env.STOCK_KR_COLLECT_TIMES?.trim() || "08:00",
+    "STOCK_KR_COLLECT_TIMES"
+  ),
+  stockUsCollectTimes: parseCollectTimes(
+    process.env.STOCK_US_COLLECT_TIMES?.trim() || "18:00",
+    "STOCK_US_COLLECT_TIMES"
+  ),
+  stockFetchDelayMs: Math.max(0, int(process.env.STOCK_FETCH_DELAY_MS, 300)),
   youtubeFreshDays: Math.max(1, int(process.env.YOUTUBE_FRESH_DAYS, 7)),
   youtubeWatchedExcludeDays: Math.max(1, int(process.env.YOUTUBE_WATCHED_EXCLUDE_DAYS, 7)),
   eventsNewGapDays: Math.max(1, int(process.env.EVENTS_NEW_GAP_DAYS, 7)),
@@ -75,6 +106,7 @@ export const config: AppConfig = {
     clientId: process.env.NAVER_CLIENT_ID?.trim() || "",
     clientSecret: process.env.NAVER_CLIENT_SECRET?.trim() || "",
   },
+  holidayApiKey: process.env.HOLIDAY_API_KEY?.trim() || "",
   insaneEngine: {
     engineDir: process.env.INSANE_ENGINE_DIR?.trim() || path.join(repoRoot, "tools", "insane-engine"),
     python:
@@ -107,10 +139,10 @@ export function parseCollectTime(t: string): { hour: number; minute: number } {
   return { hour, minute };
 }
 
-/** 쉼표로 구분된 시간 목록 파싱 (예: "08:00,17:00") */
-function parseCollectTimes(s: string): string[] {
+/** 쉼표로 구분된 시간 목록 파싱 (예: "08:00,17:00"). label 은 오류 메시지에 쓸 env 키 이름. */
+function parseCollectTimes(s: string, label: string): string[] {
   const times = s.split(",").map((t) => t.trim()).filter(Boolean);
-  if (times.length === 0) throw new Error("NEWS_COLLECT_TIMES: 최소 1개 시간 필요");
+  if (times.length === 0) throw new Error(`${label}: 최소 1개 시간 필요`);
   times.forEach((t) => parseCollectTime(t));
   return times;
 }
@@ -130,6 +162,15 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
   parseCollectTime(config.eventsCollectTime);
   config.newsCollectTimes.forEach((t) => parseCollectTime(t));
   config.youtubeCollectTimes.forEach((t) => parseCollectTime(t));
+  config.stockKrCollectTimes.forEach((t) => parseCollectTime(t));
+  config.stockUsCollectTimes.forEach((t) => parseCollectTime(t));
+
+  if (!config.holidayApiKey) {
+    warnings.push(
+      "HOLIDAY_API_KEY 미설정 → 증시 휴장일을 주말 컷 + 실증 폴백으로만 판정합니다(공휴일 브리핑이 나갈 수 있음). " +
+        "https://www.data.go.kr/data/15012690/openapi.do 에서 발급 후 .env 에 추가하세요."
+    );
+  }
 
   if (opts.forCollect) {
     if (!config.naver.clientId || !config.naver.clientSecret) {

@@ -177,6 +177,10 @@ export interface ScheduleSettings {
   events: string[];
   news: string[];
   youtube: string[];
+  /** 한국장 브리핑(개장 전 프리뷰). 기본 08:00. */
+  stockKr: string[];
+  /** 미국장 브리핑(전일 종가 결산 + 당일 밤 개장 프리뷰). 기본 18:00. */
+  stockUs: string[];
 }
 
 // ── 팝업스토어 · 전시회 보드 (이력 저장 없음, 최신 스냅샷만) ──
@@ -436,4 +440,166 @@ export interface BlockedChannel {
   handle: string | null;
   /** 차단 시각(ISO). */
   blockedAt: string;
+}
+
+// ── 증시 브리핑 (한국장 08:00 개장 전 / 미국장 18:00 결산+프리뷰) ──
+//
+// ⚠️ 이 섹션에는 서로 다른 '날짜' 개념이 두 개 공존한다. 헷갈리면 차트 x축이 하루씩 밀린다.
+//   · StockPoint.date / StockSnapshot.sessionDate → **거래소 로컬 거래일**
+//   · StockSnapshot.date                          → **서버 로컬 수집일**(KST)
+// 미국장은 이 둘이 거의 항상 다르다(18:00 KST 수집 = 전날 뉴욕 거래일).
+
+/** 거래소 구분. 'kr'=KRX(코스피·코스닥), 'us'=NYSE·NASDAQ. */
+export type StockMarket = "kr" | "us";
+
+/**
+ * 사용자가 등록한 관심 종목 1건(원장).
+ * 자연키는 name 이 아니라 (market, symbol) — 같은 이름의 한/미 종목이 공존할 수 있다.
+ */
+export interface StockTicker {
+  id: number;
+  market: StockMarket;
+  /** 정규화된 심볼. KR=6자리 코드("005930"), US=대문자 티커("AAPL"). */
+  symbol: string;
+  /** 표시명(한국어 우선). 네이버 자동완성이 채운다. 예: "삼성전자", "애플" */
+  name: string;
+  /**
+   * 네이버 시세 조회용 내부 코드. KR="005930", US="AAPL.O"(로이터 코드).
+   * 자동완성 응답의 reutersCode 를 그대로 보관 — 이게 없으면 시세 조회 경로를 못 만든다.
+   */
+  quoteCode: string;
+  /** 소속 시장 표시용. 예: "코스피", "코스닥", "나스닥 증권거래소" */
+  exchange: string;
+  /** true면 브리핑에 20일 차트 + 상세 분석이 첨부되는 고정 종목. */
+  pinned: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+/** 종목 추가 요청. symbol 만 오면 서버가 네이버 자동완성으로 나머지를 채운다. */
+export interface CreateStockTickerInput {
+  market: StockMarket;
+  /** 종목코드·티커·종목명 아무거나. 서버가 자동완성으로 해석한다. */
+  query: string;
+  pinned?: boolean;
+}
+
+/** 종목 검색 후보 1건 (사람이 보고 확정하는 표시 단위). */
+export interface StockSearchCandidate {
+  market: StockMarket;
+  symbol: string;
+  name: string;
+  quoteCode: string;
+  exchange: string;
+}
+
+/** 일별 종가 1점. date 는 **거래소 로컬 거래일**(수집일 아님). */
+export interface StockPoint {
+  /** YYYY-MM-DD, 거래소 로컬 거래일. */
+  date: string;
+  close: number | null;
+  prevClose: number | null;
+  changePct: number | null;
+  volume: number | null;
+  /** "KRW" | "USD" */
+  currency: string;
+}
+
+/** 지수 1건 (코스피/코스닥/S&P500/나스닥/다우). */
+export interface StockIndex {
+  /** 표시명. 예: "코스피", "S&P 500" */
+  name: string;
+  value: number | null;
+  changePct: number | null;
+  /** 최근 20거래일 종가(스파크라인용). */
+  history: StockPoint[];
+  /** LLM 서술 — 관측된 사실 요약. 투자 권유 금지. */
+  comment: string | null;
+  /** 오늘/오늘 밤 장에 대한 전망 서술. 근거는 rationale. */
+  outlook: string | null;
+  /** 전망 사유(뉴스·수급·데이터 근거). 없으면 outlook 을 표시하지 않는다. */
+  rationale: string | null;
+}
+
+/** 브리핑에 인용된 뉴스 1건. */
+export interface StockNewsItem {
+  title: string;
+  source: string;
+  /** 발행일 YYYY-MM-DD. */
+  date: string;
+  summary: string;
+  link: string | null;
+  /** 분류. 예: "해외 시장", "환율·금리", "산업·기업", "수급" */
+  bucket: string;
+}
+
+/**
+ * 종목 분석 1건.
+ * ⚠️ 숫자 필드(close/changePct/history)는 **서버가 네이버 시세로 채운 값**이다.
+ * LLM 이 되돌려준 숫자는 폐기한다 — LLM 은 서술(summary/rationale/risks)만 만든다.
+ */
+export interface StockAnalysis {
+  symbol: string;
+  name: string;
+  quoteCode: string;
+  close: number | null;
+  changePct: number | null;
+  /** 5거래일 등락률. */
+  weekChangePct: number | null;
+  currency: string;
+  /** 최근 20거래일 종가(차트용). 조회 실패 시 빈 배열. */
+  history: StockPoint[];
+  ma5: number | null;
+  ma20: number | null;
+  /** 관찰된 사실 요약(뉴스·공시·수급). */
+  summary: string;
+  /** 전망 서술. */
+  outlook: string;
+  /** 전망 사유 — 필수. 비면 항목을 버린다. */
+  rationale: string;
+  /** 리스크 요인 — 필수. 비면 항목을 버린다. */
+  risks: string;
+  /** 한줄 판단 이모지: 📈 / 📉 / ➡️ */
+  verdict: string;
+  /** 시세를 결정론적 소스로 검증했는지. false면 화면에 '시세 미검증' 표시. */
+  verified: boolean;
+}
+
+/**
+ * 오늘의 관심 종목 1건 — **매수 추천이 아니다.**
+ * 시장에서 왜 거론되는지를 관측 가능한 사실로만 정리한다.
+ */
+export interface StockWatchItem extends StockAnalysis {
+  /** 주목 강도: "🔥강" | "⚡중" | "💧약" */
+  attention: string;
+  /** 단기 지지/저항 등 주목 가격대 서술. */
+  levels: string | null;
+}
+
+export interface StockSnapshot {
+  market: StockMarket;
+  /** 서버 로컬 수집일 YYYY-MM-DD (KST). */
+  date: string;
+  /** 브리핑이 다루는 **거래소 로컬 거래일**. 미국장 18:00 런이면 전날 뉴욕 거래일. */
+  sessionDate: string | null;
+  updatedAt: string;
+  /**
+   * 'llm'=정상 큐레이션, 'empty'=수집 실패, 'holiday'=휴장(정상 결과).
+   * ⚠️ 'holiday'를 'empty'와 구분하는 이유: 후퇴 방지 가드(empty면 이전 스냅샷 유지)가
+   *    휴장을 실패로 오인해 지난 브리핑을 계속 보여주면 안 되기 때문.
+   */
+  source: "llm" | "empty" | "holiday";
+  /** 휴장일이면 true. */
+  closed: boolean;
+  /** 휴장 사유. 예: "설날", "주말" */
+  closedReason: string | null;
+  indices: StockIndex[];
+  news: StockNewsItem[];
+  /** 사용자 등록 종목 분석. */
+  analyses: StockAnalysis[];
+  /** 오늘의 관심 종목(사실 요약). 등록 종목과 겹치지 않는다. */
+  watchlist: StockWatchItem[];
+  /** 전 채널(화면·메일·iMessage)에 노출되는 면책 문구. */
+  disclaimer: string;
+  notes: string | null;
 }

@@ -18,6 +18,8 @@ function defaults(): ScheduleSettings {
     events: normalizeList([config.eventsCollectTime]),
     news: normalizeList(config.newsCollectTimes),
     youtube: normalizeList(config.youtubeCollectTimes),
+    stockKr: normalizeList(config.stockKrCollectTimes),
+    stockUs: normalizeList(config.stockUsCollectTimes),
   };
 }
 
@@ -88,6 +90,8 @@ export function getSchedule(): ScheduleSettings {
     events: lenientMulti(raw.events, def.events),
     news: lenientMulti(raw.news, def.news),
     youtube: lenientMulti(raw.youtube, def.youtube),
+    stockKr: lenientMulti(raw.stockKr, def.stockKr),
+    stockUs: lenientMulti(raw.stockUs, def.stockUs),
   };
 }
 
@@ -103,6 +107,8 @@ export function saveSchedule(patch: Partial<ScheduleSettings>): ScheduleSettings
   if (patch.events !== undefined) stored.events = strictMulti(patch.events, "events");
   if (patch.news !== undefined) stored.news = strictMulti(patch.news, "news");
   if (patch.youtube !== undefined) stored.youtube = strictMulti(patch.youtube, "youtube");
+  if (patch.stockKr !== undefined) stored.stockKr = strictMulti(patch.stockKr, "stockKr");
+  if (patch.stockUs !== undefined) stored.stockUs = strictMulti(patch.stockUs, "stockUs");
 
   fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
   fs.writeFileSync(STORE_PATH, JSON.stringify(stored, null, 2), "utf8");

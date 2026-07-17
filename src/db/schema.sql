@@ -82,3 +82,52 @@ CREATE TABLE IF NOT EXISTS collect_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_price_points_date ON price_points(date);
+
+-- ── 증시 브리핑 ──
+
+-- 관심 종목 (products 의 active/sort_order 관례 그대로)
+-- 자연키가 name 이 아니라 (market, symbol) 인 점에 주의: 같은 이름의 한/미 종목이 공존 가능.
+CREATE TABLE IF NOT EXISTS stocks (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  market     TEXT NOT NULL,              -- 'kr' | 'us'
+  symbol     TEXT NOT NULL,              -- '005930' | 'AAPL' (정규화 후 저장)
+  name       TEXT NOT NULL,              -- 표시명(한국어 우선): '삼성전자' | '애플'
+  quote_code TEXT NOT NULL,              -- 네이버 조회용: '005930' | 'AAPL.O'
+  exchange   TEXT NOT NULL DEFAULT '',   -- '코스피' | '나스닥 증권거래소'
+  pinned     INTEGER NOT NULL DEFAULT 0, -- 1이면 20일 차트 + 상세 분석 첨부
+  active     INTEGER NOT NULL DEFAULT 1, -- 0/1 (soft delete)
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE (market, symbol)
+);
+
+-- 일별 종가 시계열.
+-- ⚠️ date = **거래소 로컬 거래일**이지 수집일이 아니다. 미국장을 KST 수집일로 키잉하면
+--    뉴욕 전일 종가가 KST 오늘로 들어가 20일 차트 x축이 하루씩 밀린다.
+-- 하루 2회 수집해도 거래일이 키라 충돌하지 않는다. 같은 거래일 재수집 = 정정 종가 반영(upsert).
+CREATE TABLE IF NOT EXISTS stock_points (
+  stock_id     INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+  date         TEXT NOT NULL,            -- YYYY-MM-DD (거래소 로컬 거래일)
+  close        REAL,
+  prev_close   REAL,
+  change_pct   REAL,
+  volume       INTEGER,
+  currency     TEXT NOT NULL DEFAULT 'KRW',
+  source       TEXT NOT NULL DEFAULT '', -- 'naver'
+  collected_at TEXT,                     -- ISO datetime
+  PRIMARY KEY (stock_id, date)
+);
+
+-- 시장 × 수집일 1행. 알림 멱등(중복 발송 차단) — collect_runs 와 동형.
+-- ⚠️ 여기의 date 는 **서버 로컬 수집일**(KST). stock_points.date 와 의미가 다르다.
+CREATE TABLE IF NOT EXISTS stock_runs (
+  date        TEXT NOT NULL,             -- YYYY-MM-DD (로컬 수집일)
+  market      TEXT NOT NULL,             -- 'kr' | 'us'
+  started_at  TEXT NOT NULL,
+  finished_at TEXT,
+  ok          INTEGER NOT NULL DEFAULT 0,
+  detail      TEXT,                      -- JSON: { notified: { email, imessage }, ... }
+  PRIMARY KEY (date, market)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_points_date ON stock_points(date);

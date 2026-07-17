@@ -7,7 +7,9 @@ import { hasSuccessfulRun } from "../db/repo.ts";
 import { refreshEvents, hasTodaySnapshot } from "../events/events.ts";
 import { refreshNews, getNewsSnapshot } from "../news/news.ts";
 import { refreshYoutube, getYoutubeSnapshot } from "../youtube/youtube.ts";
+import { refreshStock, getStockSnapshot } from "../stock/stock.ts";
 import { localDate } from "../util/date.ts";
+import type { StockMarket } from "../../shared/types.ts";
 
 function today(): string {
   return localDate();
@@ -177,6 +179,61 @@ async function checkYoutubeCatchup() {
   }
 }
 
+// ── 증시 브리핑 스케줄 (한국장 08:00 / 미국장 18:00) ──
+// 시장별 독립 플래그. 한쪽이 도는 중에도 다른 쪽은 돌 수 있다(수집 시각이 10시간 떨어져 있어
+// 실제로 겹치진 않지만, 수동 갱신이 겹칠 수 있으므로 시장별로 잠근다).
+const stockRunning: Record<StockMarket, boolean> = { kr: false, us: false };
+
+async function safeRefreshStock(market: StockMarket, trigger: string, notify: boolean) {
+  if (stockRunning[market]) {
+    log.warn(`증시(${market}) 수집 진행 중 → ${trigger} 건너뜀`);
+    return;
+  }
+  stockRunning[market] = true;
+  try {
+    await refreshStock({ market, trigger, notify });
+  } catch (e) {
+    log.error(`증시(${market}) 수집 오류 [${trigger}]: ${(e as Error).message}`);
+  } finally {
+    stockRunning[market] = false;
+  }
+}
+
+/**
+ * 증시 catch-up. 뉴스/유튜브와 동일 패턴.
+ *
+ * 휴장일에도 안전하다: refreshStock 이 휴장 스냅샷을 오늘 날짜로 저장하므로
+ * snapshotDate === today() 가 되어 30분마다 반복 호출되지 않는다.
+ */
+async function checkStockCatchup(market: StockMarket) {
+  if (stockRunning[market]) return;
+  const snapshot = getStockSnapshot(market);
+  const snapshotDate = snapshot?.date;
+  const snapshotTime = snapshot?.updatedAt ? new Date(snapshot.updatedAt) : null;
+  const times = market === "kr" ? getSchedule().stockKr : getSchedule().stockUs;
+
+  for (const t of times) {
+    if (!pastTime(t)) continue;
+
+    if (snapshotDate !== today()) {
+      log.info(`오늘(${today()}) 증시(${market}) 브리핑 누락 감지 → catch-up 실행 (${t})`);
+      await safeRefreshStock(market, "catchup", true);
+      return;
+    }
+
+    if (snapshotTime) {
+      const { hour, minute } = parseCollectTime(t);
+      const scheduled = new Date();
+      scheduled.setHours(hour, minute, 0, 0);
+      if (snapshotTime < scheduled) {
+        log.info(`오늘(${today()}) ${t} 증시(${market}) 갱신 누락 감지 → catch-up 실행`);
+        await safeRefreshStock(market, "catchup", true);
+        return;
+      }
+    }
+  }
+}
+
 /** HH:mm → 매일 실행 cron 식. */
 function cronExpr(hhmm: string): string {
   const { hour, minute } = parseCollectTime(hhmm);
@@ -213,6 +270,8 @@ function registerCrons() {
   scheduleGroup("events", s.events, "팝업/전시", () => void safeRefreshEvents("schedule", true));
   scheduleGroup("news", s.news, "뉴스 다이제스트", () => void safeRefreshNews("schedule", true));
   scheduleGroup("youtube", s.youtube, "유튜브 소식", () => void safeRefreshYoutube("schedule", true));
+  scheduleGroup("stock-kr", s.stockKr, "증시(한국장)", () => void safeRefreshStock("kr", "schedule", true));
+  scheduleGroup("stock-us", s.stockUs, "증시(미국장)", () => void safeRefreshStock("us", "schedule", true));
 }
 
 /**
@@ -240,10 +299,14 @@ export function startScheduler() {
   void checkEventsCatchup();
   void checkNewsCatchup();
   void checkYoutubeCatchup();
+  void checkStockCatchup("kr");
+  void checkStockCatchup("us");
   setInterval(() => {
     void checkCatchup();
     void checkEventsCatchup();
     void checkNewsCatchup();
     void checkYoutubeCatchup();
+    void checkStockCatchup("kr");
+    void checkStockCatchup("us");
   }, 30 * 60 * 1000);
 }

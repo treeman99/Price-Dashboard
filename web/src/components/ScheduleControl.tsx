@@ -13,13 +13,15 @@ import { Input, Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import type { ScheduleSettings } from "@shared/types";
 
-export type ScheduleKind = "price" | "events" | "news" | "youtube";
+export type ScheduleKind = "price" | "events" | "news" | "youtube" | "stockKr" | "stockUs";
 
 const KIND_LABEL: Record<ScheduleKind, string> = {
   price: "가격",
   events: "팝업·전시",
   news: "뉴스",
   youtube: "유튜브",
+  stockKr: "증시(한국)",
+  stockUs: "증시(미국)",
 };
 
 // <input type="time"> 는 항상 zero-pad "HH:mm" 을 준다.
@@ -36,6 +38,10 @@ function patchFor(kind: ScheduleKind, times: string[]): Partial<ScheduleSettings
       return { news: times };
     case "youtube":
       return { youtube: times };
+    case "stockKr":
+      return { stockKr: times };
+    case "stockUs":
+      return { stockUs: times };
   }
 }
 

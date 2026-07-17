@@ -1,5 +1,6 @@
 import { db } from "./index.ts";
 import { localDateDaysAgo } from "../util/date.ts";
+import { normalizeSymbol } from "../../shared/stock.ts";
 import type {
   Product,
   PricePoint,
@@ -13,6 +14,10 @@ import type {
   CollectResult,
   ProductSource,
   UpsertProductSourceInput,
+  StockMarket,
+  StockTicker,
+  StockSearchCandidate,
+  StockPoint,
 } from "../../shared/types.ts";
 import type { SourcePriceResult } from "../collector/sources/types.ts";
 
@@ -581,6 +586,337 @@ export function putSourceFetchCache(
     .run(productId, source, date, result.status, JSON.stringify(result), result.fetchedAt);
 }
 
+// ── 관심 종목 원장 ──────────────────────────────────────
+
+interface StockRow {
+  id: number;
+  market: string;
+  symbol: string;
+  name: string;
+  quote_code: string;
+  exchange: string;
+  pinned: number;
+  active: number;
+  sort_order: number;
+  created_at: string;
+}
+
+/** StockTicker 에 active 가 없는 건 의도적이다 — 삭제된 종목은 조회 자체가 안 되므로 노출할 게 없다. */
+function rowToStock(r: StockRow): StockTicker {
+  return {
+    id: r.id,
+    market: r.market as StockMarket,
+    symbol: r.symbol,
+    name: r.name,
+    quoteCode: r.quote_code,
+    exchange: r.exchange,
+    pinned: r.pinned === 1,
+    sortOrder: r.sort_order,
+    createdAt: r.created_at,
+  };
+}
+
+/** 자연키 조회 — 삭제된 행(active=0)도 본다. 재등록 시 UNIQUE(market,symbol) 충돌을 미리 잡기 위함. */
+function findStockRowEver(market: StockMarket, symbol: string): StockRow | null {
+  const r = db()
+    .prepare("SELECT * FROM stocks WHERE market = ? AND symbol = ?")
+    .get(market, symbol) as StockRow | undefined;
+  return r ?? null;
+}
+
+/** 삭제 흔적(active=0) 포함 전체 행 수. ensureSeedTickers 의 '한 번이라도 등록한 적 있나' 판정용. */
+export function countStocksEver(market: StockMarket): number {
+  const r = db()
+    .prepare("SELECT COUNT(*) AS n FROM stocks WHERE market = ?")
+    .get(market) as { n: number };
+  return Number(r.n);
+}
+
+/** 신규 종목은 해당 시장 목록의 맨 뒤로. sort_order 는 reorderStocks 와 마찬가지로 시장별로 독립이다. */
+function nextStockOrder(market: StockMarket): number {
+  const r = db()
+    .prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM stocks WHERE market = ?")
+    .get(market) as { m: number };
+  return Number(r.m) + 1;
+}
+
+export function listStocks(market?: StockMarket): StockTicker[] {
+  // products 와 같은 관례: sort_order 우선, 동률은 id 로 tie-break(안정 정렬).
+  const rows = market
+    ? (db()
+        .prepare(
+          "SELECT * FROM stocks WHERE active = 1 AND market = ? ORDER BY sort_order, id"
+        )
+        .all(market) as unknown as StockRow[])
+    : (db()
+        .prepare("SELECT * FROM stocks WHERE active = 1 ORDER BY sort_order, id")
+        .all() as unknown as StockRow[]);
+  return rows.map(rowToStock);
+}
+
+/** 삭제된 종목은 null. API 가 404 로 응답해 수정/삭제를 막을 수 있게 하려는 것. */
+export function getStock(id: number): StockTicker | null {
+  const r = db()
+    .prepare("SELECT * FROM stocks WHERE id = ? AND active = 1")
+    .get(id) as StockRow | undefined;
+  return r ? rowToStock(r) : null;
+}
+
+export function getStockBySymbol(market: StockMarket, symbol: string): StockTicker | null {
+  const r = db()
+    .prepare("SELECT * FROM stocks WHERE market = ? AND symbol = ? AND active = 1")
+    .get(market, normalizeSymbol(symbol, market)) as StockRow | undefined;
+  return r ? rowToStock(r) : null;
+}
+
+/** 종목 추가 입력. 네이버 자동완성이 돌려준 후보(StockSearchCandidate)를 그대로 흘려보내는 형태다. */
+export interface CreateStockInput extends StockSearchCandidate {
+  pinned?: boolean;
+}
+
+export function createStock(input: CreateStockInput): StockTicker {
+  const symbol = normalizeSymbol(input.symbol, input.market);
+  if (!symbol) throw new Error("종목 코드를 인식할 수 없습니다.");
+  const pinned = input.pinned ? 1 : 0;
+  const existing = findStockRowEver(input.market, symbol);
+
+  if (existing?.active === 1)
+    throw new Error(`이미 등록된 종목입니다: ${existing.name} (${symbol})`);
+
+  if (existing) {
+    // 삭제 흔적이 남은 종목의 재등록. UNIQUE(market,symbol) 때문에 INSERT 가 막히므로 되살린다.
+    // stock_points 가 그대로 남아 있어 과거 차트가 즉시 복구되는 건 덤이 아니라 soft delete 의 목적이다.
+    db()
+      .prepare(
+        `UPDATE stocks SET name = ?, quote_code = ?, exchange = ?, pinned = ?, active = 1, sort_order = ?
+         WHERE id = ?`
+      )
+      .run(
+        input.name,
+        input.quoteCode,
+        input.exchange,
+        pinned,
+        nextStockOrder(input.market),
+        existing.id
+      );
+    return getStock(existing.id)!;
+  }
+
+  const info = db()
+    .prepare(
+      `INSERT INTO stocks (market, symbol, name, quote_code, exchange, pinned, active, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
+    )
+    .run(
+      input.market,
+      symbol,
+      input.name,
+      input.quoteCode,
+      input.exchange,
+      pinned,
+      nextStockOrder(input.market),
+      nowIso()
+    );
+  return getStock(Number(info.lastInsertRowid))!;
+}
+
+export interface UpdateStockInput {
+  name?: string;
+  pinned?: boolean;
+}
+
+/**
+ * 부분 수정. symbol/quoteCode 는 바꿀 수 없다 — 그건 다른 종목이라는 뜻이고,
+ * 바꿔버리면 기존 stock_points 시계열에 엉뚱한 종목의 종가가 이어 붙는다.
+ */
+export function updateStock(id: number, patch: UpdateStockInput): StockTicker | null {
+  const existing = getStock(id);
+  if (!existing) return null;
+  const name = patch.name != null ? patch.name : existing.name;
+  const pinned = patch.pinned != null ? patch.pinned : existing.pinned;
+  db()
+    .prepare("UPDATE stocks SET name = ?, pinned = ? WHERE id = ?")
+    .run(name, pinned ? 1 : 0, id);
+  return getStock(id)!;
+}
+
+/**
+ * soft delete. hard delete 를 쓰지 않는 이유 두 가지:
+ *  1) 시계열 보존 — 되돌리면(createStock) 20일 차트가 그대로 복구된다.
+ *  2) 시드 재주입 방지 — 남은 tombstone 이 "한 번도 등록 안 함"과 "다 지웠음"을 구분해 준다.
+ *     hard delete 면 시드 종목을 전부 지운 뒤 재시작할 때마다 되살아난다(ensureSeedTickers 주석 참고).
+ * 이미 삭제됐거나 없는 id 면 false.
+ */
+export function deleteStock(id: number): boolean {
+  const info = db()
+    .prepare("UPDATE stocks SET active = 0 WHERE id = ? AND active = 1")
+    .run(id);
+  return Number(info.changes) > 0;
+}
+
+/**
+ * 시장 내 표시 순서 변경. 해당 시장의 활성 종목 id 전부를 원하는 순서로 받아 sort_order 를 0..n-1 로 재할당.
+ * 누락/미지/중복 id 는 throw → 부분 적용 방지(단일 트랜잭션). reorderProducts 와 동일한 검증 규칙.
+ */
+export function reorderStocks(market: StockMarket, ids: number[]): StockTicker[] {
+  const current = listStocks(market);
+  if (!Array.isArray(ids) || ids.length !== current.length)
+    throw new Error("순서 목록이 현재 종목 수와 일치하지 않습니다.");
+  const remaining = new Set(current.map((s) => s.id));
+  for (const id of ids) {
+    if (!remaining.has(id)) throw new Error(`알 수 없거나 중복된 종목 id: ${id}`);
+    remaining.delete(id);
+  }
+  if (remaining.size) throw new Error("일부 종목이 순서 목록에서 누락되었습니다.");
+
+  const conn = db();
+  const update = conn.prepare("UPDATE stocks SET sort_order = ? WHERE id = ?");
+  conn.exec("BEGIN");
+  try {
+    ids.forEach((id, i) => update.run(i, id));
+    conn.exec("COMMIT");
+  } catch (e) {
+    conn.exec("ROLLBACK");
+    throw e;
+  }
+  return listStocks(market);
+}
+
+// ── 주식 시계열 (거래일 기준 멱등 upsert) ───────────────
+
+interface StockPointRow {
+  date: string;
+  close: number | null;
+  prev_close: number | null;
+  change_pct: number | null;
+  volume: number | null;
+  currency: string;
+}
+
+function rowToStockPoint(r: StockPointRow): StockPoint {
+  return {
+    date: r.date,
+    close: r.close,
+    prevClose: r.prev_close,
+    changePct: r.change_pct,
+    volume: r.volume,
+    currency: r.currency,
+  };
+}
+
+/**
+ * 일별 종가 일괄 upsert. 키가 (stock_id, 거래일)이라 하루 2회 수집해도 충돌하지 않고,
+ * 같은 거래일 재수집은 정정 종가 반영이 된다.
+ * 전량 성공 아니면 전량 롤백 — 차트 중간에 구멍 뚫린 절반짜리 시계열을 남기지 않는다.
+ */
+export function upsertStockPoints(
+  stockId: number,
+  points: StockPoint[],
+  source: string
+): void {
+  if (!points.length) return;
+  const conn = db();
+  const collectedAt = nowIso();
+  const stmt = conn.prepare(
+    `INSERT INTO stock_points
+       (stock_id, date, close, prev_close, change_pct, volume, currency, source, collected_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(stock_id, date) DO UPDATE SET
+       close=excluded.close,
+       prev_close=excluded.prev_close,
+       change_pct=excluded.change_pct,
+       volume=excluded.volume,
+       currency=excluded.currency,
+       source=excluded.source,
+       collected_at=excluded.collected_at`
+  );
+  conn.exec("BEGIN");
+  try {
+    for (const p of points) {
+      stmt.run(
+        stockId,
+        p.date,
+        p.close,
+        p.prevClose,
+        p.changePct,
+        // volume 컬럼은 INTEGER — 네이버가 실수로 주는 경우가 있어 반올림해 넣는다.
+        p.volume == null ? null : Math.round(p.volume),
+        p.currency || "KRW",
+        source,
+        collectedAt
+      );
+    }
+    conn.exec("COMMIT");
+  } catch (e) {
+    conn.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+/**
+ * 최근 N **거래일** 종가를 거래일 오름차순으로. days 는 달력일이 아니라 행 수다 —
+ * stock_points 에는 휴장일 행이 아예 없으므로 "20일 차트" = 최근 20행이 맞다.
+ * (달력일로 자르면 주말·공휴일이 깎여 20일 요청에 14개만 나온다.)
+ */
+export function getStockPoints(stockId: number, days: number): StockPoint[] {
+  const limit = Math.max(0, Math.trunc(days));
+  if (!limit) return [];
+  const rows = db()
+    .prepare(
+      "SELECT * FROM stock_points WHERE stock_id = ? ORDER BY date DESC LIMIT ?"
+    )
+    .all(stockId, limit) as unknown as StockPointRow[];
+  return rows.map(rowToStockPoint).reverse();
+}
+
+// ── 증시 수집 실행 로그 (알림 멱등) ─────────────────────
+// ⚠️ 여기의 date 는 서버 로컬 수집일(KST). stock_points.date(거래소 거래일)와 의미가 다르다.
+
+export function startStockRun(date: string, market: StockMarket): void {
+  db()
+    .prepare(
+      `INSERT INTO stock_runs (date, market, started_at, ok) VALUES (?, ?, ?, 0)
+       ON CONFLICT(date, market) DO UPDATE SET started_at = excluded.started_at`
+    )
+    .run(date, market, nowIso());
+}
+
+export function finishStockRun(
+  date: string,
+  market: StockMarket,
+  ok: boolean,
+  detail: unknown
+): void {
+  db()
+    .prepare(
+      `INSERT INTO stock_runs (date, market, started_at, finished_at, ok, detail)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(date, market) DO UPDATE SET
+         finished_at = excluded.finished_at,
+         ok = excluded.ok,
+         detail = excluded.detail`
+    )
+    .run(date, market, nowIso(), nowIso(), ok ? 1 : 0, JSON.stringify(detail ?? null));
+}
+
+/** 해당 수집일·시장의 실행 결과. detail 파싱 실패는 null 로 흘려보낸다(알림 멱등 판단만 막으면 됨). */
+export function getStockRun(
+  date: string,
+  market: StockMarket
+): { ok: boolean; detail: unknown } | null {
+  const r = db()
+    .prepare("SELECT ok, detail FROM stock_runs WHERE date = ? AND market = ?")
+    .get(date, market) as { ok: number; detail: string | null } | undefined;
+  if (!r) return null;
+  let detail: unknown = null;
+  try {
+    detail = r.detail ? JSON.parse(r.detail) : null;
+  } catch {
+    detail = null;
+  }
+  return { ok: r.ok === 1, detail };
+}
+
 // ── 보존 정책 ───────────────────────────────────────────
 
 export function pruneOldData(retentionDays: number): number {
@@ -592,5 +928,9 @@ export function pruneOldData(retentionDays: number): number {
   conn.prepare("DELETE FROM listings WHERE date < ?").run(cutoffStr);
   conn.prepare("DELETE FROM reviews WHERE date < ?").run(cutoffStr);
   conn.prepare("DELETE FROM source_fetch_cache WHERE date < ?").run(cutoffStr);
+  // 주식 시계열도 같은 보존창을 적용한다. 빠뜨리면 종목만 무한 누적된다.
+  // (stock_points.date 는 거래소 로컬 거래일, cutoff 는 서버 로컬 날짜라 최대 하루 어긋나지만
+  //  보존 기간이 수십 일 단위라 무시해도 되는 오차다.)
+  conn.prepare("DELETE FROM stock_points WHERE date < ?").run(cutoffStr);
   return Number(info.changes);
 }

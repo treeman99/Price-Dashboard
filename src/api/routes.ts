@@ -19,6 +19,8 @@ import {
   listProductSources,
   upsertProductSource,
   deleteProductSource,
+  getStockPoints,
+  upsertStockPoints,
 } from "../db/repo.ts";
 import { parseSourceInput } from "./sources.ts";
 import { resolveCandidates } from "./resolve.ts";
@@ -49,6 +51,16 @@ import { loadBlocklist, addBlock, removeBlock, applyBlocklist } from "../youtube
 import { addRecommendedChannel, removeRecommendedChannel } from "../../shared/youtube.ts";
 import { markWatched, unmarkWatched, activeWatched, annotateWatched } from "../youtube/watched.ts";
 import { applyRegionFilter } from "../youtube/curate.ts";
+import { getStockSnapshot, refreshStock, isStockCollecting } from "../stock/stock.ts";
+import {
+  listStocks,
+  getStock,
+  createStock,
+  updateStock,
+  deleteStock,
+  reorderStocks,
+} from "../stock/tickers.ts";
+import { searchTicker, fetchHistory } from "../stock/quote.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
 import { rescheduleAll } from "../scheduler/scheduler.ts";
 import { generateCategoryDescription, shouldAutoDescribe } from "../util/category-describe.ts";
@@ -61,6 +73,7 @@ import type {
   UpdateProductInput,
   PeriodDays,
   ScheduleSettings,
+  StockMarket,
 } from "../../shared/types.ts";
 import type { ResolveQuery } from "../collector/sources/types.ts";
 
@@ -143,8 +156,11 @@ api.get("/schedule", (_req, res) => {
 });
 
 /**
- * 스케줄 부분 수정. 전달된 탭(price/events/news/youtube)만 갱신하고 영구 저장한 뒤,
- * 재시작 없이 cron 을 즉시 재등록한다. HH:mm 형식 오류면 400.
+ * 스케줄 부분 수정. 전달된 탭(price/events/news/youtube/stockKr/stockUs)만 갱신하고
+ * 영구 저장한 뒤, 재시작 없이 cron 을 즉시 재등록한다. HH:mm 형식 오류면 400.
+ *
+ * ⚠️ 탭을 늘리면 이 화이트리스트에도 반드시 추가할 것. 빠뜨리면 UI 저장이
+ *    에러 없이 조용히 무시된다(saveSchedule 이 모르는 필드를 그냥 버림).
  */
 api.put("/schedule", (req, res) => {
   try {
@@ -154,6 +170,8 @@ api.put("/schedule", (req, res) => {
     if (body.events !== undefined) patch.events = body.events;
     if (body.news !== undefined) patch.news = body.news;
     if (body.youtube !== undefined) patch.youtube = body.youtube;
+    if (body.stockKr !== undefined) patch.stockKr = body.stockKr;
+    if (body.stockUs !== undefined) patch.stockUs = body.stockUs;
     const updated = saveSchedule(patch);
     rescheduleAll();
     res.json(updated);
@@ -741,4 +759,183 @@ api.delete("/youtube/watched/:videoId", (req, res) => {
   const ok = unmarkWatched(req.params.videoId);
   if (!ok) return res.status(404).json({ error: "본영상 목록에 없습니다." });
   res.json({ ok: true });
+});
+
+// ── 증시 ──
+// 시장(kr/us)이 경로에 박히는 라우트가 많다. :market 은 신뢰 못 할 입력이므로
+// 핸들러마다 parseMarket 으로 좁힌 뒤 StockMarket 으로 쓴다.
+//
+// ⚠️ 등록 순서 주의: GET /stock/search 는 GET /stock/:market 보다 **먼저** 와야 한다.
+//    뒤에 두면 market="search" 로 먹혀 검색이 400 만 뱉는다.
+//    반면 /stock/tickers/... 계열은 세그먼트 수/리터럴이 달라 :market 과 충돌하지 않는다.
+
+const HISTORY_DAYS = 20;
+
+/** :market 검증. kr|us 가 아니면 null → 호출부가 400. */
+function parseMarket(v: unknown): StockMarket | null {
+  return v === "kr" || v === "us" ? v : null;
+}
+
+/** 종목 검색(네이버 자동완성 프록시). market 쿼리로 시장을 좁힐 수 있다. */
+api.get("/stock/search", async (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (!q) return res.status(400).json({ error: "검색어(q)가 필요합니다." });
+  try {
+    const candidates = await searchTicker(q);
+    // market 쿼리는 선택 — 값이 kr|us 가 아니면 필터하지 않고 전 시장을 돌려준다.
+    const market = parseMarket(req.query.market);
+    res.json(market ? candidates.filter((c) => c.market === market) : candidates);
+  } catch (e) {
+    res.status(502).json({ error: `종목 검색에 실패했습니다: ${(e as Error).message}` });
+  }
+});
+
+/** 최신 증시 브리핑 스냅샷 (아직 수집 전이면 null). */
+api.get("/stock/:market", (req, res) => {
+  const market = parseMarket(req.params.market);
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  res.json(getStockSnapshot(market));
+});
+
+/** 증시 수집 진행 상태(프론트 폴링용). */
+api.get("/stock/:market/status", (req, res) => {
+  const market = parseMarket(req.params.market);
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  const snap = getStockSnapshot(market);
+  res.json({ collecting: isStockCollecting(market), updatedAt: snap?.updatedAt ?? null });
+});
+
+/**
+ * 지금 갱신 (수동). LLM 브리핑이라 수 분 걸리므로 **백그라운드로 시작**하고 즉시 202를 반환한다.
+ * 프론트는 /stock/:market/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /stock/:market 을 다시 불러온다.
+ * 이미 수집 중이면 새로 시작하지 않고 409로 안내(중복 수집 방지).
+ */
+api.post("/stock/:market/refresh", (req, res) => {
+  const market = parseMarket(req.params.market);
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  if (isStockCollecting(market)) {
+    return res.status(409).json({ error: "이미 증시 수집이 진행 중입니다.", collecting: true });
+  }
+  void refreshStock({ market, trigger: "manual", notify: true }).catch((e) =>
+    log.warn(`증시 수동 수집 예외 [${market}]: ${(e as Error).message}`)
+  );
+  res.status(202).json({ started: true, collecting: true });
+});
+
+/** 시장별 관심 종목 목록(표시 순서). */
+api.get("/stock/:market/tickers", (req, res) => {
+  const market = parseMarket(req.params.market);
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  res.json(listStocks(market));
+});
+
+/**
+ * 관심 종목 추가. body: { query, pinned? } — 종목코드·티커·종목명 아무거나 받는다.
+ *
+ * ⚠️ 사용자 입력을 quoteCode 로 그대로 쓰면 안 된다. 반드시 자동완성이 돌려준 quoteCode(reutersCode)를 쓴다.
+ *    틀린 quoteCode 는 원장에 멀쩡히 등록된 것처럼 보이면서 시세 조회만 통째로 실패해 발견이 늦다.
+ *
+ * 등록 직후 카드가 비지 않도록 시세를 1차로 채우되(prime), **refreshStock 은 부르지 않는다** —
+ * LLM 브리핑이라 수 분 걸려 요청이 타임아웃난다. fetchHistory + upsertStockPoints 만 한다.
+ * prime 실패는 201 을 막지 않는다(다음 정시 수집이 채운다).
+ */
+api.post("/stock/:market/tickers", async (req, res) => {
+  const market = parseMarket(req.params.market);
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  // 수집 중 종목 변경은 진행 중인 브리핑이 쓰는 목록과 어긋나 결과가 뒤섞인다 → 거부.
+  if (isStockCollecting(market)) {
+    return res
+      .status(409)
+      .json({ error: "수집이 진행 중입니다. 완료된 뒤 종목을 추가해 주세요.", collecting: true });
+  }
+  const query = typeof req.body?.query === "string" ? req.body.query.trim() : "";
+  if (!query) return res.status(400).json({ error: "종목명 또는 종목코드(query)가 필요합니다." });
+
+  let candidates;
+  try {
+    candidates = await searchTicker(query);
+  } catch (e) {
+    return res.status(502).json({ error: `종목 검색에 실패했습니다: ${(e as Error).message}` });
+  }
+  const hit = candidates.find((c) => c.market === market);
+  if (!hit) return res.status(404).json({ error: `종목을 찾지 못했습니다: ${query}` });
+
+  let ticker;
+  try {
+    ticker = createStock({ ...hit, pinned: req.body?.pinned === true });
+  } catch {
+    return res.status(409).json({ error: "이미 등록된 종목입니다." });
+  }
+
+  try {
+    const points = await fetchHistory(hit.quoteCode, market, HISTORY_DAYS);
+    if (points.length) upsertStockPoints(ticker.id, points, "naver");
+  } catch (e) {
+    log.warn(`신규 종목 시세 1차 조회 실패 [${ticker.name}]: ${(e as Error).message}`);
+  }
+  res.status(201).json(ticker);
+});
+
+/**
+ * 종목 수정 (표시명/고정 여부). symbol·quoteCode 는 못 바꾼다 — 그건 다른 종목이라는 뜻이고,
+ * 바꾸면 기존 시계열에 엉뚱한 종가가 이어 붙는다(repo.updateStock 주석 참고).
+ */
+api.patch("/stock/tickers/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (!getStock(id)) return res.status(404).json({ error: "종목 없음" });
+  const body = (req.body ?? {}) as { name?: unknown; pinned?: unknown };
+  const patch: { name?: string; pinned?: boolean } = {};
+  if (body.name != null) {
+    const name = String(body.name).trim();
+    if (!name) return res.status(400).json({ error: "종목명은 비울 수 없습니다." });
+    patch.name = name;
+  }
+  if (body.pinned != null) patch.pinned = body.pinned === true;
+  const updated = updateStock(id, patch);
+  if (!updated) return res.status(404).json({ error: "종목 없음" });
+  res.json(updated);
+});
+
+/**
+ * 시장 내 표시 순서 변경. 해당 시장의 활성 종목 id 전부를 원하는 순서로 { ids: number[] } 로 전달.
+ * PUT /products/order · PUT /news|youtube/categories/order 와 동일한 계약.
+ * 라우트 등록 순서: POST /stock/:market/tickers 와 메서드·세그먼트가 달라 충돌하지 않는다.
+ */
+api.put("/stock/:market/tickers/order", (req, res) => {
+  const market = parseMarket(req.params.market);
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  try {
+    res.json(reorderStocks(market, (req.body?.ids ?? []) as number[]));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * 종목 삭제(soft delete — 시계열은 남는다). 오삭제 방지를 위해 confirm 파라미터에
+ * 정확한 심볼이 일치해야 한다. DELETE /products/:id 와 동일한 계약.
+ */
+api.delete("/stock/tickers/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const stock = getStock(id);
+  if (!stock) return res.status(404).json({ error: "종목 없음" });
+  // 추가와 같은 이유로 수집 중에는 목록을 건드리지 않는다.
+  if (isStockCollecting(stock.market)) {
+    return res
+      .status(409)
+      .json({ error: "수집이 진행 중입니다. 완료된 뒤 종목을 삭제해 주세요.", collecting: true });
+  }
+  if (req.query.confirm !== stock.symbol) {
+    return res.status(400).json({ error: "삭제는 confirm 파라미터에 정확한 종목 심볼이 필요합니다." });
+  }
+  deleteStock(id);
+  res.json({ ok: true });
+});
+
+/** 종목 시계열(차트용). days 는 달력일이 아니라 **거래일 행 수**다. 오름차순. */
+api.get("/stock/tickers/:id/history", (req, res) => {
+  const id = Number(req.params.id);
+  if (!getStock(id)) return res.status(404).json({ error: "종목 없음" });
+  const days = Number(req.query.days) || HISTORY_DAYS;
+  res.json(getStockPoints(id, days));
 });

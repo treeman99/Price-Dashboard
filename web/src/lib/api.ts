@@ -16,6 +16,11 @@ import type {
   UpsertProductSourceInput,
   ResolveResult,
   ScheduleSettings,
+  StockMarket,
+  StockSnapshot,
+  StockTicker,
+  StockSearchCandidate,
+  StockPoint,
 } from "@shared/types";
 
 async function j<T>(res: Response): Promise<T> {
@@ -340,4 +345,66 @@ export const api = {
     fetch(`/api/youtube/watched/${encodeURIComponent(videoId)}`, { method: "DELETE" }).then((r) =>
       j<{ ok: boolean }>(r)
     ),
+
+  // ── 증시 브리핑 (한국장 / 미국장) ──
+  stock: (market: StockMarket) =>
+    fetch(`/api/stock/${market}`).then((r) => j<StockSnapshot | null>(r)),
+
+  stockStatus: (market: StockMarket) =>
+    fetch(`/api/stock/${market}/status`).then((r) =>
+      j<{ collecting: boolean; updatedAt: string | null }>(r)
+    ),
+
+  /**
+   * 브리핑을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
+   * 완료 여부는 stockStatus() 폴링으로 확인한다.
+   */
+  refreshStock: async (market: StockMarket): Promise<{ started: boolean; busy: boolean }> => {
+    const res = await fetch(`/api/stock/${market}/refresh`, { method: "POST" });
+    if (res.status === 409) return { started: false, busy: true };
+    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
+    return { started: true, busy: false };
+  },
+
+  stockTickers: (market: StockMarket) =>
+    fetch(`/api/stock/${market}/tickers`).then((r) => j<StockTicker[]>(r)),
+
+  /** 종목 검색 후보. 사람이 보고 1건을 고른다(자동 선택 금지). */
+  searchTickers: (market: StockMarket, q: string) =>
+    fetch(`/api/stock/search?q=${encodeURIComponent(q)}&market=${market}`).then((r) =>
+      j<StockSearchCandidate[]>(r)
+    ),
+
+  /** 종목 추가. query 는 종목코드·티커·종목명 아무거나(서버가 자동완성으로 해석). */
+  addTicker: (market: StockMarket, input: { query: string; pinned?: boolean }) =>
+    fetch(`/api/stock/${market}/tickers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<StockTicker>(r)),
+
+  updateTicker: (id: number, patch: { name?: string; pinned?: boolean }) =>
+    fetch(`/api/stock/tickers/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => j<StockTicker>(r)),
+
+  /** 종목 표시 순서 변경(해당 시장의 전체 id 순서 전달). 재정렬된 목록 반환. */
+  reorderTickers: (market: StockMarket, ids: number[]) =>
+    fetch(`/api/stock/${market}/tickers/order`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).then((r) => j<StockTicker[]>(r)),
+
+  /** 종목 삭제. 오삭제 방지로 심볼을 confirm 으로 전달. */
+  deleteTicker: (id: number, symbol: string) =>
+    fetch(`/api/stock/tickers/${id}?confirm=${encodeURIComponent(symbol)}`, {
+      method: "DELETE",
+    }).then((r) => j<{ ok: boolean }>(r)),
+
+  /** 종목 일별 종가(차트용). days=거래일 행 수, 오름차순. */
+  tickerHistory: (id: number, days = 20) =>
+    fetch(`/api/stock/tickers/${id}/history?days=${days}`).then((r) => j<StockPoint[]>(r)),
 };
