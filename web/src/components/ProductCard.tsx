@@ -4,6 +4,7 @@ import type { ProductSummary, ProductHistory, PeriodDays } from "@shared/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { PriceChart } from "./PriceChart";
 import { SourceLinkDialog } from "./SourceLinkDialog";
 import { EditProductDialog } from "./EditProductDialog";
@@ -127,22 +128,24 @@ export function ProductCard({
             <Button
               variant="ghost"
               size="icon"
+              className="group/tt relative"
               onClick={() => onMove(summary, "up")}
               disabled={!canUp}
-              title="순서 앞으로"
               aria-label="순서 앞으로"
             >
               <ChevronUp className="h-4 w-4" />
+              <Tip>순서 앞으로</Tip>
             </Button>
             <Button
               variant="ghost"
               size="icon"
+              className="group/tt relative"
               onClick={() => onMove(summary, "down")}
               disabled={!canDown}
-              title="순서 뒤로"
               aria-label="순서 뒤로"
             >
               <ChevronDown className="h-4 w-4" />
+              <Tip>순서 뒤로</Tip>
             </Button>
             <EditProductDialog product={product} onChanged={onChanged} />
             <SourceLinkDialog
@@ -150,8 +153,15 @@ export function ProductCard({
               productName={product.name}
               onChanged={onChanged}
             />
-            <Button variant="ghost" size="icon" onClick={handleDelete} title="영구 삭제">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="group/tt relative"
+              onClick={handleDelete}
+              aria-label="영구 삭제"
+            >
               <Trash2 className="h-4 w-4" />
+              <Tip>영구 삭제</Tip>
             </Button>
           </div>
         </div>

@@ -17,6 +17,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { sourceLabel } from "@/lib/sources";
@@ -127,8 +128,14 @@ export function SourceLinkDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" title="소스 연결 / pcode 확정">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="group/tt relative"
+          aria-label="소스 연결 / pcode 확정"
+        >
           <Link2 className="h-4 w-4" />
+          <Tip>소스 연결 / pcode 확정</Tip>
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-xl">
@@ -194,7 +201,8 @@ export function SourceLinkDialog({
                     <Button
                       variant="ghost"
                       size="icon"
-                      title="연결 해제"
+                      className="group/tt relative"
+                      aria-label="연결 해제"
                       disabled={deleting === s.source}
                       onClick={() => removeSource(s.source)}
                     >
@@ -203,6 +211,7 @@ export function SourceLinkDialog({
                       ) : (
                         <Trash2 className="h-4 w-4" />
                       )}
+                      <Tip>연결 해제</Tip>
                     </Button>
                   </li>
                 );

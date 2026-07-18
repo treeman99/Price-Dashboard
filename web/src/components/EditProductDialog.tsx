@@ -9,6 +9,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { Input, Label } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
@@ -122,8 +123,14 @@ export function EditProductDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" title="상품 정보 수정" aria-label="상품 정보 수정">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="group/tt relative"
+          aria-label="상품 정보 수정"
+        >
           <Pencil className="h-4 w-4" />
+          <Tip>상품 정보 수정</Tip>
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] overflow-y-auto">

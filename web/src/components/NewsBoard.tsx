@@ -16,6 +16,7 @@ import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 
@@ -104,22 +105,40 @@ function Section({
           <span className="text-sm font-normal text-muted-foreground">({items.length})</span>
         </h2>
         <div className="ml-auto flex items-center gap-1">
-          <button onClick={() => onMove(def, "up")} disabled={!canUp} title="위로" className={ctrl}>
+          <button
+            onClick={() => onMove(def, "up")}
+            disabled={!canUp}
+            aria-label="위로"
+            className={`${ctrl} group/tt relative`}
+          >
             <ChevronUp className="h-4 w-4" />
+            <Tip>위로</Tip>
           </button>
-          <button onClick={() => onMove(def, "down")} disabled={!canDown} title="아래로" className={ctrl}>
+          <button
+            onClick={() => onMove(def, "down")}
+            disabled={!canDown}
+            aria-label="아래로"
+            className={`${ctrl} group/tt relative`}
+          >
             <ChevronDown className="h-4 w-4" />
+            <Tip>아래로</Tip>
           </button>
-          <button onClick={() => onEdit(def)} title="카테고리 수정" className={ctrl}>
+          <button
+            onClick={() => onEdit(def)}
+            aria-label="카테고리 수정"
+            className={`${ctrl} group/tt relative`}
+          >
             <Pencil className="h-4 w-4" />
+            <Tip>카테고리 수정</Tip>
           </button>
           {canDelete && (
             <button
               onClick={() => onDelete(def)}
-              title="카테고리 삭제"
-              className="rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-destructive"
+              aria-label="카테고리 삭제"
+              className="group/tt relative rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-destructive"
             >
               <X className="h-4 w-4" />
+              <Tip>카테고리 삭제</Tip>
             </button>
           )}
         </div>

@@ -5,6 +5,7 @@ import { formatPrice, changeTone } from "@shared/stock";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { StockChart } from "./StockChart";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -157,29 +158,31 @@ export function StockCard({
               <Button
                 variant="ghost"
                 size="icon"
+                className="group/tt relative"
                 onClick={() => onMove?.(ticker, "up")}
                 disabled={!canUp || disabled}
-                title="순서 앞으로"
                 aria-label="순서 앞으로"
               >
                 <ChevronUp className="h-4 w-4" />
+                <Tip>순서 앞으로</Tip>
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
+                className="group/tt relative"
                 onClick={() => onMove?.(ticker, "down")}
                 disabled={!canDown || disabled}
-                title="순서 뒤로"
                 aria-label="순서 뒤로"
               >
                 <ChevronDown className="h-4 w-4" />
+                <Tip>순서 뒤로</Tip>
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
+                className="group/tt relative"
                 onClick={togglePin}
                 disabled={busy || disabled}
-                title={ticker.pinned ? "고정 해제" : "고정(브리핑에 상세 분석 첨부)"}
                 aria-label={ticker.pinned ? "고정 해제" : "고정"}
               >
                 {busy ? (
@@ -189,16 +192,18 @@ export function StockCard({
                     className={cn("h-4 w-4", ticker.pinned && "fill-current text-[#059669]")}
                   />
                 )}
+                <Tip>{ticker.pinned ? "고정 해제" : "고정(브리핑에 상세 분석 첨부)"}</Tip>
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
+                className="group/tt relative"
                 onClick={handleDelete}
                 disabled={busy || disabled}
-                title="종목 삭제"
                 aria-label="종목 삭제"
               >
                 <Trash2 className="h-4 w-4" />
+                <Tip>종목 삭제</Tip>
               </Button>
             </div>
           )}

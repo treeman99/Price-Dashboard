@@ -9,6 +9,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { Input, Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import type { ScheduleSettings } from "@shared/types";
@@ -161,12 +162,13 @@ export function ScheduleControl({ kind }: { kind: ScheduleKind }) {
                 <Button
                   variant="ghost"
                   size="icon"
+                  className="group/tt relative"
                   onClick={() => removeRow(i)}
                   disabled={rows.length <= 1}
-                  title="이 시간 삭제"
                   aria-label="이 시간 삭제"
                 >
                   <X className="h-4 w-4" />
+                  <Tip>이 시간 삭제</Tip>
                 </Button>
               </div>
             ))}
