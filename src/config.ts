@@ -43,6 +43,11 @@ export interface AppConfig {
   dbPath: string;
   legacyHistoryJson: string;
   historyRetentionDays: number;
+  /**
+   * 네이버 후보 링크의 '사망'(판매중지/삭제/잘못된 상품번호) 검증 on/off. 기본 on.
+   * 켜면 수집 시 싼 후보 링크를 실제로 프로브해 죽은 링크를 최저가/Top3 에서 제외한다.
+   */
+  verifyListingLinks: boolean;
   naver: { clientId: string; clientSecret: string };
   /** insane-engine (vendored): 차단 사이트 fetch. 팝업/전시 날짜 검증에 사용 */
   insaneEngine: {
@@ -96,6 +101,7 @@ export const config: AppConfig = {
     process.env.LEGACY_HISTORY_JSON?.trim() ||
     "/Users/daegun/Documents/Claude/Projects/자동화/daily-price-tracker/price_history.json",
   historyRetentionDays: int(process.env.HISTORY_RETENTION_DAYS, 90),
+  verifyListingLinks: bool(process.env.VERIFY_LISTING_LINKS, true),
   naver: {
     clientId: process.env.NAVER_CLIENT_ID?.trim() || "",
     clientSecret: process.env.NAVER_CLIENT_SECRET?.trim() || "",
