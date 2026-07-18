@@ -8,6 +8,7 @@ import { EventsBoard } from "@/components/EventsBoard";
 import { NewsBoard } from "@/components/NewsBoard";
 import { YoutubeBoard } from "@/components/YoutubeBoard";
 import { StockBoard } from "@/components/StockBoard";
+import { ScrollToTop } from "@/components/ScrollToTop";
 
 interface TabDef {
   id: string;
@@ -124,6 +125,9 @@ export default function App() {
         )}
         {activeTab.content}
       </main>
+
+      {/* 모든 탭 공통: 아래로 스크롤하면 나타나는 '맨 위로' 버튼 */}
+      <ScrollToTop color={activeTab.color} />
     </div>
   );
 }
