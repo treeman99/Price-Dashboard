@@ -9,6 +9,7 @@ import { isRecommendedChannel } from "../../shared/youtube.ts";
 import { activeWatched, buildWatchedMatcher } from "./watched.ts";
 import { buildReclassSection } from "./reclass.ts";
 import { enrichVideos, fetchUploadDate } from "./oembed.ts";
+import { harvestFreshUploads, type RssVideo } from "./channels.ts";
 import type {
   YoutubeSnapshot,
   YoutubeVideo,
@@ -132,7 +133,8 @@ export function buildPrompt(
   now: string,
   blocked: string[],
   watchedTitles: string[] = [],
-  reclassSection = ""
+  reclassSection = "",
+  seedByCat: Map<string, RssVideo[]> = new Map()
 ): string {
   const cats = defs
     .map((c) => {
@@ -180,12 +182,28 @@ export function buildPrompt(
   항상 우선한다(추천 채널이라도 오래된 영상 금지, 같은 채널 최대 2개 유지, 추천 채널만으로 카테고리를 채우지 마라.
   제외 채널이나 그와 비슷한 성향의 채널을 '유사 채널'로 발굴하지 마라).`
     : "";
+  // 📌 확정 신선 후보: 추천/발굴 채널 RSS에서 게시일이 이미 검증된 창 안 영상.
+  // WebSearch/WebFetch가 구조적으로 못 찾는 '채널 최신 업로드'를 서버가 대신 확보해 주입한다.
+  const seedLines = defs
+    .map((c) => {
+      const vids = (seedByCat.get(c.key) ?? []).slice(0, 12);
+      if (!vids.length) return "";
+      const rows = vids
+        .map((v) => `    · ${v.date} | ${v.channel} | videoId=${v.videoId} | ${v.title}`)
+        .join("\n");
+      return `  ▸ ${c.label} (key: "${c.key}"):\n${rows}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+  const seedSection = seedLines
+    ? `\n\n📌 확정 신선 후보(추천·발굴 채널 RSS — 게시일이 이미 ${cutoff}~${today} 창 안으로 검증됨. videoId·게시일·채널을 그대로 신뢰하라):\n${seedLines}\n  규칙:\n  - 이 목록의 영상은 **실존·신선이 서버로 보증**됐다. 카테고리 주제에 맞으면 **반드시 채택**하라(WebFetch로 watch 내용을 열어 실제 내용을 한국어로 요약).\n  - date는 위 게시일을 **그대로** 쓰고, url은 https://www.youtube.com/watch?v=<videoId> 형식으로 적는다.\n  - 더 알맞은 다른 카테고리가 있으면 거기에 넣어도 된다. 단 주제와 무관하거나 🚫제외 채널·👁본영상 규칙에 걸리면 넣지 않는다.\n  - 이 목록이 전부는 아니다 — 창 안의 다른 좋은 영상도 WebSearch로 추가로 찾아 섞어라.`
+    : "";
   return `너는 한국어 유튜브 소식 큐레이터다. 지금 시각은 ${now}. **조회 시점 기준 최근 ${freshDays}일 이내(${cutoff} 이후 ~ ${today})**에
 업로드된 YouTube 영상만 모아 아래 ${defs.length}개 카테고리로 정리한다. 이 신선도 기준은 **모든 카테고리에 예외 없이 동일하게** 적용된다.
 모든 제목·요약은 **반드시 한국어**로 작성한다(영어 영상도 한국어로 번역·요약). 원제는 originalTitle에 보존한다.
 
 카테고리:
-  - ${cats}${blockSection}${watchedSection}${tasteSection}${reclassSection}
+  - ${cats}${blockSection}${watchedSection}${tasteSection}${seedSection}${reclassSection}
 
 🌐 검색 범위(각 카테고리의 [검색범위]를 반드시 준수):
 - "한국 채널·한국어 영상만": **한국 유튜버가 만든 한국어(음성/자막) 영상만** 채택한다.
@@ -206,15 +224,14 @@ export function buildPrompt(
    - watch URL은 반드시 정식 형식(https://www.youtube.com/watch?v=...)으로 적는다.
 3. 요약(summary)은 제목을 바꿔 쓴 게 아니라 **영상이 실제로 무엇을 다루는지**(주요 포인트 2~4개)를 한국어로 적는다.
 
-⚠️ 신선도 규칙(${freshDays}일, 최우선 — 영상 수보다 중요):
-- 업로드일이 **${cutoff} 이후 ~ ${today}** 인 영상만 채택. 그보다 오래됐거나 날짜가 불명확하면 **제외**.
-- "N일 전/N주 전" 같은 상대표현이 ${freshDays}일을 넘으면 제외. 날짜 미상도 제외.
-- 각 영상 date는 업로드일을 "YYYY-MM-DD"로. (정확한 일자를 모르면 그 영상은 버린다.)
-- **날짜 위조 금지·검증됨**: 서버가 각 영상의 실제 업로드일을 유튜브에서 **직접 재검증**한다.
-  확실치 않아서 ${cutoff}(경계일)로 대충 맞추거나 추정해서 넣은 영상은 **자동 폐기**되어 아무 의미가 없다.
-  watch 페이지에서 실제 업로드일을 **눈으로 확인한** 영상만 넣어라(며칠 전 표시가 아니라 정확한 날짜).
-- **최신 우선**: 가능하면 오늘·어제 등 **가장 최근** 영상을 앞세우고, 경계(${cutoff}) 근처 오래된 것에 몰리지 마라.
-- 쿼터를 채우려고 오래된 영상을 넣지 마라. 카테고리가 0건이어도 괜찮다.
+⚠️ 신선도 규칙(${freshDays}일 이내 — 최우선):
+- 목표: 업로드일이 **${cutoff} 이후 ~ ${today}** 인 최근 영상을 카테고리마다 **빠짐없이** 찾아낸다.
+- **날짜의 최종 판정은 서버가 한다**: 네가 넣은 각 영상은 서버가 **실제 업로드일을 유튜브 watch 페이지에서 직접 재검증**해, 창(${cutoff}~${today}) 밖이면 자동으로 드롭하고 존재하지 않는(지어낸) 영상도 제거한다.
+  → 그러니 **정확한 일자를 확신 못 한다는 이유로 최근으로 보이는 영상을 버리지 마라.** 후보로 올리기만 하면 서버가 진짜 날짜로 걸러준다. **0건을 내는 것보다, 최근으로 보이는 후보를 폭넓게 올리는 편이 항상 옳다**(오래된 건 서버가 알아서 떨궈낸다).
+- 각 영상 date에는 **파악한 최선의 업로드일**을 "YYYY-MM-DD"로 적는다(검색 스니펫의 "N일 전"·게시일 표기, 채널 최신 목록에서의 위치 등 근거 활용). 다만 근거 없이 경계일(${cutoff})로 **일괄 위조하지는 마라**(어차피 서버가 실제 날짜로 교체·검증한다).
+- 단 **명백히 오래된 영상(몇 주·몇 달 전)은 애초에 넣지 마라** — 재검증이 실패(마크업/네트워크)하면 걸러지지 않을 수 있으니, "최근에 올라온 것 같다"는 근거가 있는 영상만 후보로 올린다.
+- **최신 우선**: 오늘·어제처럼 가장 최근 영상을 앞세우고, 경계(${cutoff}) 근처에만 몰리지 마라.
+- 특히 **추천 채널의 최근 업로드는 우선 확인해, 신선도 창 안으로 보이면 반드시 후보에 올린다**(관련성이 맞는 한 빠뜨리지 마라).
 
 🎯 다양성 규칙(신선도 다음으로 중요):
 - 한 카테고리 안에서 같은 도구·제품·주제로 편중 금지 — 서로 다른 주제·도구·채널을 고르게 섞어라.
@@ -323,9 +340,84 @@ function emptySnapshot(date: string, note: string): YoutubeSnapshot {
   };
 }
 
+/** RSS 영상 → YoutubeVideo. LLM이 시딩된 영상을 빠뜨렸을 때의 폴백 병합용(요약은 RSS 설명 앞부분). */
+function rssToVideo(r: RssVideo): YoutubeVideo {
+  const summary = r.description?.trim() ? r.description.trim().slice(0, 300) : "채널 최신 업로드.";
+  return {
+    title: r.title,
+    originalTitle: null,
+    channel: r.channel,
+    channelHandle: null,
+    date: r.date,
+    summary,
+    url: `https://www.youtube.com/watch?v=${r.videoId}`,
+    videoId: r.videoId,
+    thumbnail: thumbFor(r.videoId),
+    views: null,
+    duration: null,
+  };
+}
+
+/**
+ * 카테고리별 '조사할 채널' 발굴. LLM 지식으로 실존 채널명을 나열하고(웹 도구 없이 1턴 — 빠름),
+ * 서버가 그 이름을 channelId→RSS 로 실검증한다(채널명은 LLM, 최신 영상·게시일은 RSS 진실).
+ * 실패하면 빈 맵(추천 채널만으로 진행).
+ */
+async function discoverChannels(defs: YoutubeCategoryDef[]): Promise<Record<string, string[]>> {
+  if (!defs.length) return {};
+  const catList = defs
+    .map(
+      (c) =>
+        `- key="${c.key}" ${c.label} [${c.region === "global" ? "해외 포함" : "한국"}]${
+          c.description ? ` — ${c.description.slice(0, 120)}` : ""
+        }`
+    )
+    .join("\n");
+  const prompt = `아래 각 유튜브 카테고리 주제를 **정기적으로 업로드하는 실존 유튜브 채널**을 카테고리마다 8~12개씩 나열하라(한국 카테고리는 한국 채널 위주, "해외 포함"이면 해외 채널도 가능). 반드시 실제 존재하는 채널만(불확실하면 넣지 마라).
+표기 규칙: **채널명(한글/영문)으로 적어라.** @핸들은 실제 ASCII 핸들(예: @ITSub)을 확실히 아는 경우에만 병기하고, 한글 이름에 @를 임의로 붙이지 마라(@고몽여행 같은 가짜 핸들 금지).
+카테고리:
+${catList}
+
+출력은 JSON 하나만(다른 텍스트 없이):
+{"channels":{${defs.map((c) => `"${c.key}":["채널명 또는 @핸들"]`).join(",")}}}`;
+  try {
+    const text = await runAgentQueryText(
+      prompt,
+      {
+        tools: [], // 웹 도구 없이 지식 기반 1턴 — 빠르고 저렴
+        permissionMode: "bypassPermissions",
+        settingSources: [],
+        maxTurns: 1,
+        model: getAgentModel(),
+        systemPrompt:
+          "너는 유튜브 채널 생태계에 정통한 전문가다. 실존하는 채널만 정확히 나열하고 지정된 JSON 하나만 출력한다.",
+      },
+      120_000,
+      "유튜브 채널 발굴"
+    );
+    const parsed = extractJson(text) as any;
+    const ch = parsed?.channels ?? {};
+    const out: Record<string, string[]> = {};
+    for (const meta of defs) {
+      const arr = Array.isArray(ch[meta.key]) ? ch[meta.key] : [];
+      out[meta.key] = arr
+        .filter((s: unknown): s is string => typeof s === "string" && s.trim().length > 0)
+        .map((s: string) => s.trim())
+        .slice(0, 15);
+    }
+    return out;
+  } catch (e) {
+    log.warn(`유튜브 채널 발굴 실패(추천 채널만 사용): ${(e as Error).message}`);
+    return {};
+  }
+}
+
 /**
  * AI·LLM / 신제품 리뷰 등 유튜브 영상을 Claude Agent SDK(WebSearch/WebFetch)로 전문 조사·요약한다.
  * 최근 youtubeFreshDays 이내 영상만 채택. 실패 시 빈 스냅샷 반환.
+ *
+ * 추천/발굴 채널의 최근 업로드는 서버가 RSS 로 직접 확보(harvestFreshUploads)해 큐레이션에 시딩하고,
+ * LLM 이 빠뜨린 것은 후단에서 폴백 병합한다 — 검색이 못 찾는 '채널 최신 업로드'를 확실히 노출하기 위함.
  */
 export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
   const today = date;
@@ -348,8 +440,24 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
     blockList.map((b) => ({ channel: b.channel, handle: b.handle ?? null }))
   );
   try {
+    // ── RSS 하베스트: 추천 채널 + 발굴 채널의 창 안 업로드를 '확정 신선 후보'로 서버가 직접 확보 ──
+    // (검색/페이지 파싱이 못 찾는 '채널 최신 업로드'를 RSS 로 확보 → 프롬프트 시딩 + 폴백 병합)
+    const discovered = await discoverChannels(promptDefs);
+    const seedByCat = new Map<string, RssVideo[]>();
+    for (const meta of promptDefs) {
+      const queries = [...(meta.recommendedChannels ?? []), ...(discovered[meta.key] ?? [])];
+      const fresh = queries.length ? await harvestFreshUploads(queries, cutoff, today) : [];
+      // 차단 채널/본영상은 시드 단계에서 미리 제외(모순된 시딩 방지). 나머지 필터는 후단 파이프라인에서.
+      seedByCat.set(
+        meta.key,
+        fresh.filter((v) => !isBlocked(v.channel, null) && !isWatched(v.videoId))
+      );
+    }
+    const seedTotal = [...seedByCat.values()].reduce((a, v) => a + v.length, 0);
+    log.info(`유튜브 RSS 하베스트 — 확정 신선 후보 ${seedTotal}건(추천+발굴 채널)`);
+
     const finalText = await runAgentQueryText(
-      buildPrompt(promptDefs, today, cutoff, freshDays, nowLabel(), blockedLabels, watchedTitles, buildReclassSection(defs)),
+      buildPrompt(promptDefs, today, cutoff, freshDays, nowLabel(), blockedLabels, watchedTitles, buildReclassSection(defs), seedByCat),
       {
         // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
         // allowedTools = 그 도구들을 무프롬프트 허용.
@@ -362,7 +470,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
         maxTurns: 120,
         systemPrompt:
           "너는 꼼꼼한 한국어 유튜브 소식 큐레이터다. AI·LLM과 신제품 리뷰 등 최신 YouTube 영상을 " +
-          `최근 ${freshDays}일 이내로만 채택하고(오래되거나 날짜 불명확하면 버림), 영어 영상도 한국어로 번역·요약하며, ` +
+          `최근 ${freshDays}일 이내 위주로 채택하되(명백히 오래된 것만 제외; 정확한 업로드일은 서버가 watch 페이지로 재검증하므로, 최근으로 보이는 후보를 '날짜 확신 부족'을 이유로 0건으로 버리지 마라), 영어 영상도 한국어로 번역·요약하며, ` +
           "watch URL을 정확히 적고, 같은 영상은 통합해 마지막에 지정된 JSON 한 개만 출력한다.",
       },
       config.agentQueryTimeoutMs,
@@ -373,11 +481,22 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
     const p = extractJson(finalText) as any;
     const catsIn = p?.categories ?? {};
 
+    // LLM이 전 카테고리에서 이미 넣은 videoId — 시드 폴백을 어느 카테고리에 병합할지 결정할 때
+    // 교차 중복(같은 영상이 두 카테고리에)을 막는다.
+    const llmUsedIds = new Set<string>();
+    for (const key of Object.keys(catsIn)) {
+      const arr = Array.isArray(catsIn[key]) ? catsIn[key] : [];
+      for (const r of arr) {
+        const v = normVideo(r);
+        if (v?.videoId) llmUsedIds.add(v.videoId);
+      }
+    }
+
     const categories: YoutubeCategory[] = await Promise.all(
       defs.map(async (meta) => {
         const raw = Array.isArray(catsIn?.[meta.key]) ? catsIn[meta.key] : [];
         const seen = new Set<string>();
-        const candidates: YoutubeVideo[] = raw
+        const llmCandidates: YoutubeVideo[] = raw
           .map(normVideo)
           .filter((x: YoutubeVideo | null): x is YoutubeVideo => !!x)
           .filter((x: YoutubeVideo) => isFresh(x.date, today, cutoff))
@@ -386,8 +505,21 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
             if (x.videoId && seen.has(x.videoId)) return false;
             if (x.videoId) seen.add(x.videoId);
             return true;
+          });
+        // 확정 신선 후보(RSS) 중 LLM이 빠뜨린 것을 폴백 병합 → '창 안 영상은 무조건 노출'.
+        // 한 채널이 카테고리를 도배하지 않도록 채널당 3개로 제한.
+        const perChannel = new Map<string, number>();
+        const seedVids: YoutubeVideo[] = (seedByCat.get(meta.key) ?? [])
+          .filter((v) => !llmUsedIds.has(v.videoId) && !seen.has(v.videoId))
+          .filter((v) => {
+            const n = perChannel.get(v.channel) ?? 0;
+            if (n >= 3) return false;
+            perChannel.set(v.channel, n + 1);
+            seen.add(v.videoId);
+            return true;
           })
-          .slice(0, 12);
+          .map(rssToVideo);
+        const candidates: YoutubeVideo[] = [...llmCandidates, ...seedVids].slice(0, 20);
 
         // oEmbed로 실제 채널명/핸들 보강 + 존재하지 않는(지어낸) 영상 제거
         const enriched = await enrichVideos(candidates);
