@@ -96,6 +96,47 @@ export async function fetchUploadDate(videoId: string, timeoutMs = 8000): Promis
   return null;
 }
 
+/**
+ * 영상이 YouTube Shorts 인지 판별. `/shorts/{id}` 로 HEAD(리다이렉트 수동) 요청 시
+ * **숏츠면 200, 일반 영상이면 3xx(→ /watch 로 리다이렉트)** 로 응답한다(실측으로 duration 과 100% 일치).
+ * 판별 실패(네트워크/timeout)는 **false(숏츠 아님)** 로 — 정상 영상을 오제거해 탭이 비는 것을 막는다(fail-open).
+ */
+export async function isShort(videoId: string, timeoutMs = 6000): Promise<boolean> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(`https://www.youtube.com/shorts/${videoId}`, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: ac.signal,
+      headers: { "User-Agent": WATCH_UA },
+    });
+    return r.status === 200; // 200 = 숏츠 / 3xx = 일반(watch 로 리다이렉트)
+  } catch {
+    return false; // 판별 불가 → 숏츠 아님으로 간주(fail-open)
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 목록에서 Shorts 를 제거(동시성 제한). videoId 없는 항목은 판별 불가로 유지. */
+export async function filterOutShorts<T extends { videoId: string | null }>(
+  items: T[],
+  concurrency = 6
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const shortFlags = await Promise.all(
+      batch.map((it) => (it.videoId ? isShort(it.videoId) : Promise.resolve(false)))
+    );
+    batch.forEach((it, idx) => {
+      if (!shortFlags[idx]) out.push(it);
+    });
+  }
+  return out;
+}
+
 /** 영상 목록을 oEmbed로 보강. 실제 채널명/핸들로 교체하고, 존재하지 않는 영상은 제거. */
 export async function enrichVideos<T extends { videoId: string | null; channel: string; channelHandle?: string | null; originalTitle?: string | null }>(
   items: T[]

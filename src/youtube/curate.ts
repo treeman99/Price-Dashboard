@@ -8,7 +8,7 @@ import { loadBlocklist, buildBlockMatcher, UNKNOWN_CHANNEL } from "./blocklist.t
 import { isRecommendedChannel } from "../../shared/youtube.ts";
 import { activeWatched, buildWatchedMatcher } from "./watched.ts";
 import { buildReclassSection } from "./reclass.ts";
-import { enrichVideos, fetchUploadDate } from "./oembed.ts";
+import { enrichVideos, fetchUploadDate, filterOutShorts } from "./oembed.ts";
 import { harvestFreshUploads, type RssVideo } from "./channels.ts";
 import type {
   YoutubeSnapshot,
@@ -239,7 +239,7 @@ export function buildPrompt(
 - 카테고리 주제와 무관한 영상으로 개수를 채우지 마라(관련성이 애매하면 제외).
 
 품질 규칙:
-- 라이브 예정(아직 방송 전)·쇼츠 광고·중복 재업로드는 제외. 같은 영상은 한 번만.
+- **YouTube Shorts(세로형 짧은 영상)는 제외** — 일반 가로형 영상만 채택한다(서버도 Shorts 를 확인해 자동 제거하지만, 애초에 넣지 마라). 라이브 예정(아직 방송 전)·중복 재업로드도 제외. 같은 영상은 한 번만.
 - 카테고리당 **6개 이상을 목표로, 최대 12개**까지 채택(단 신선도·관련성 규칙이 항상 우선 — 좋은 영상이 부족하면 적어도 된다).
 - 조회수가 높거나 신뢰도 높은 채널을 우선하되, 다양성 규칙을 지킨다.
 - 한 영상이 여러 카테고리에 맞으면 가장 잘 맞는 **한 곳**에만 넣는다.
@@ -496,7 +496,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
       defs.map(async (meta) => {
         const raw = Array.isArray(catsIn?.[meta.key]) ? catsIn[meta.key] : [];
         const seen = new Set<string>();
-        const llmCandidates: YoutubeVideo[] = raw
+        const llmRaw: YoutubeVideo[] = raw
           .map(normVideo)
           .filter((x: YoutubeVideo | null): x is YoutubeVideo => !!x)
           .filter((x: YoutubeVideo) => isFresh(x.date, today, cutoff))
@@ -506,6 +506,8 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
             if (x.videoId) seen.add(x.videoId);
             return true;
           });
+        // LLM 이 찾아온 후보에서 Shorts 제거(시드는 하베스트에서 이미 걸러짐).
+        const llmCandidates = await filterOutShorts(llmRaw);
         // 확정 신선 후보(RSS) 중 LLM이 빠뜨린 것을 폴백 병합 → '창 안 영상은 무조건 노출'.
         // 한 채널이 카테고리를 도배하지 않도록 채널당 3개로 제한.
         const perChannel = new Map<string, number>();

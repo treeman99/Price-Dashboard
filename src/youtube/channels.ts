@@ -3,6 +3,7 @@ import path from "node:path";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
+import { filterOutShorts } from "./oembed.ts";
 
 /**
  * 추천/발굴 유튜브 채널의 **최근 업로드를 RSS(feeds/videos.xml)로 직접** 가져온다.
@@ -227,5 +228,7 @@ export async function harvestFreshUploads(
       }
     }
   }
-  return out;
+  // Shorts 제거: 시드가 숏츠로 채워지면(채널당 상한·카테고리 슬라이스) 정상 영상이 밀려나므로
+  // 하베스트 단계에서 미리 걷어낸다.
+  return filterOutShorts(out);
 }
