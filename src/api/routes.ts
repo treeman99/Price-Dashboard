@@ -62,6 +62,7 @@ import {
 } from "../stock/tickers.ts";
 import { searchTicker, fetchHistory } from "../stock/quote.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
+import { getModelSettings, saveAgentModel } from "../util/model-store.ts";
 import { rescheduleAll } from "../scheduler/scheduler.ts";
 import { generateCategoryDescription, shouldAutoDescribe } from "../util/category-describe.ts";
 import { sendIMessage, isIMessageConfigured } from "../notify/imessage.ts";
@@ -175,6 +176,26 @@ api.put("/schedule", (req, res) => {
     const updated = saveSchedule(patch);
     rescheduleAll();
     res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+// ── 수집·큐레이션 AI 모델 (Agent SDK) ──
+
+/** 현재 선택된 Agent SDK 모델 + 선택 가능 목록. */
+api.get("/model", (_req, res) => {
+  res.json(getModelSettings());
+});
+
+/**
+ * 모델 선택 변경. body: { model: string }. 허용 목록 밖이면 400.
+ * 저장 즉시 반영되며(파일에서 매 수집마다 새로 읽음) 서버 재시작 없이 다음 수집/큐레이션부터 적용된다.
+ */
+api.put("/model", (req, res) => {
+  try {
+    const model = (req.body ?? {}).model;
+    res.json(saveAgentModel(model));
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }

@@ -183,6 +183,29 @@ export interface ScheduleSettings {
   stockUs: string[];
 }
 
+// ── 수집/큐레이션 Agent SDK 모델 설정 ──
+
+/** 선택 가능한 Agent SDK 모델 1건. */
+export interface AgentModelOption {
+  /** SDK `options.model` 에 그대로 넘기는 모델 ID (예: "claude-opus-4-8"). */
+  id: string;
+  /** UI 표시명 (예: "Opus 4.8"). */
+  label: string;
+  /** 선택 화면 보조 설명. */
+  description?: string;
+}
+
+/**
+ * 가격·뉴스·유튜브·팝업/전시·증시 등 모든 수집·큐레이션이 공통으로 쓰는 Agent SDK 모델.
+ * data/model.json 에 사용자가 고른 값이 저장되고, 없으면 목록 첫 항목(기본값)을 쓴다.
+ */
+export interface AgentModelSettings {
+  /** 현재 선택된 모델 ID. */
+  model: string;
+  /** 선택 가능한 모델 목록(백엔드가 단일 진실원). */
+  options: AgentModelOption[];
+}
+
 // ── 팝업스토어 · 전시회 보드 (이력 저장 없음, 최신 스냅샷만) ──
 
 export type EventTag = "신규" | "종료임박" | "예정" | null;

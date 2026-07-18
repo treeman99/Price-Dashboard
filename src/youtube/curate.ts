@@ -1,6 +1,7 @@
 import { log } from "../util/log.ts";
 import { config } from "../config.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
+import { getAgentModel } from "../util/model-store.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import { loadCategories } from "./categories.ts";
 import { loadBlocklist, buildBlockMatcher, UNKNOWN_CHANNEL } from "./blocklist.ts";
@@ -356,6 +357,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
+        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
         // 카테고리당 갈래별 검색(최소 4회+)을 보장하되 과도한 탐색(=느린 수집)을 막기 위해 상한을 둔다.
         maxTurns: 120,
         systemPrompt:

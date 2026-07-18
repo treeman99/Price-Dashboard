@@ -16,6 +16,7 @@ import type {
   UpsertProductSourceInput,
   ResolveResult,
   ScheduleSettings,
+  AgentModelSettings,
   StockMarket,
   StockSnapshot,
   StockTicker,
@@ -58,6 +59,17 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => j<ScheduleSettings>(r)),
+
+  /** 수집·큐레이션 Agent SDK 모델 + 선택지 조회. */
+  modelSettings: () => fetch("/api/model").then((r) => j<AgentModelSettings>(r)),
+
+  /** 모델 선택 변경. 다음 수집부터 적용. 갱신된 설정 반환. */
+  updateModel: (model: string) =>
+    fetch("/api/model", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    }).then((r) => j<AgentModelSettings>(r)),
 
   addProduct: (input: CreateProductInput) =>
     fetch("/api/products", {

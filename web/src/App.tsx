@@ -9,6 +9,7 @@ import { NewsBoard } from "@/components/NewsBoard";
 import { YoutubeBoard } from "@/components/YoutubeBoard";
 import { StockBoard } from "@/components/StockBoard";
 import { ScrollToTop } from "@/components/ScrollToTop";
+import { ModelControl } from "@/components/ModelControl";
 
 interface TabDef {
   id: string;
@@ -73,18 +74,22 @@ export default function App() {
         <div className="mx-auto max-w-[1920px] px-4">
           <div className="flex items-center justify-between gap-6 pt-3">
             <h1 className="shrink-0 text-lg font-bold">📷 Daily Dashboard</h1>
-            {serviceInstalled && (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={uninstallService}
-                disabled={uninstalling}
-                title="launchd 자동 수집 서비스 제거"
-              >
-                {uninstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <PowerOff className="h-4 w-4" />}
-                서비스 제거
-              </Button>
-            )}
+            <div className="flex items-center gap-3">
+              {/* 수집·큐레이션 AI 모델 선택은 특정 탭이 아닌 전역 설정 → 헤더에 배치 */}
+              <ModelControl />
+              {serviceInstalled && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={uninstallService}
+                  disabled={uninstalling}
+                  title="launchd 자동 수집 서비스 제거"
+                >
+                  {uninstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <PowerOff className="h-4 w-4" />}
+                  서비스 제거
+                </Button>
+              )}
+            </div>
           </div>
           {/* 게시판 탭 메뉴 — 전체폭, 탭 갯수만큼 균등분할, 탭별 고유색 */}
           <nav className="-mb-px flex w-full gap-2 pt-3" role="tablist">

@@ -1,6 +1,7 @@
 import { log } from "../util/log.ts";
 import { config } from "../config.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
+import { getAgentModel } from "../util/model-store.ts";
 import { localDate } from "../util/date.ts";
 import type {
   StockMarket,
@@ -553,6 +554,7 @@ export async function curateStock(input: CurateStockInput): Promise<StockSnapsho
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
+        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
         maxTurns: 60,
         systemPrompt:
           "도구는 한 번에 하나씩만 호출한다(병렬 도구 호출 금지 — tool_use id 중복으로 API 400 이 난다). " +

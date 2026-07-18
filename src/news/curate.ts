@@ -1,6 +1,7 @@
 import { log } from "../util/log.ts";
 import { config } from "../config.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
+import { getAgentModel } from "../util/model-store.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import { loadCategories } from "./categories.ts";
 import type {
@@ -122,6 +123,7 @@ export async function curateNews(date: string): Promise<NewsSnapshot> {
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
+        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
         maxTurns: 80,
         systemPrompt:
           "너는 꼼꼼한 한국어 뉴스 큐레이터다. 최근 24시간 기사만 채택하고(오래되거나 날짜 불명확하면 버림), " +

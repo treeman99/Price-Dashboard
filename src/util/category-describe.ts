@@ -1,5 +1,6 @@
 import { log } from "./log.ts";
 import { runAgentQueryText } from "./agent-query.ts";
+import { getAgentModel } from "./model-store.ts";
 
 /**
  * 카테고리 추가 시 수집 지침(description) 자동 생성.
@@ -79,7 +80,7 @@ export async function generateCategoryDescription(input: DescribeInput): Promise
         permissionMode: "bypassPermissions",
         settingSources: [],
         maxTurns: 1,
-        model: "sonnet",
+        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
         systemPrompt:
           "너는 수집 카테고리의 검색 지침을 작성하는 전문가다. 요청된 형식의 지침 본문 한 단락만 출력한다.",
       },

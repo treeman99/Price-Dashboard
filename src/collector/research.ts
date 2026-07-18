@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getAgentModel } from "../util/model-store.ts";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import type { Product, Review } from "../../shared/types.ts";
@@ -72,6 +73,7 @@ export async function researchProduct(product: Product): Promise<ResearchResult>
         allowedTools: ["WebSearch"],
         permissionMode: "bypassPermissions",
         settingSources: [], // 로컬 CLAUDE.md/설정 로드 방지
+        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
         maxTurns: 8,
         systemPrompt:
           "너는 가격비교 리서처다. 반드시 마지막에 지정된 JSON 한 개만 출력한다.",

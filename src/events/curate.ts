@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
+import { getAgentModel } from "../util/model-store.ts";
 import { MANDATORY_VENUES, type RawCorpus, type RawGroup } from "./gather.ts";
 import type {
   EventsSnapshot,
@@ -417,6 +418,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
           : ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
+        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
         maxTurns: withEngine ? 60 : 40,
         systemPrompt:
           "너는 꼼꼼한 팝업/전시 큐레이터다. 스니펫을 믿지 말고 WebSearch/WebFetch(차단 시 Bash로 insane-engine)로 실제 날짜를 검증하고, 이미 종료된 행사는 제외한 뒤, 실제 개별 행사를 중복 없이 추려 마지막에 지정된 JSON 한 개만 출력한다.",
