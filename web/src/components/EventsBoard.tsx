@@ -15,6 +15,22 @@ const TAG_STYLE: Record<Exclude<EventTag, null>, { bg: string; label: string }> 
   예정: { bg: "#2E86DE", label: "오픈예정" },
 };
 
+// 팝업 지역을 '서울'과 '그 외(경기 — 수원·화성 등)'로 가르기 위한 판별.
+// region 문자열은 "서울 성수", "경기 수원(스타필드 수원)"처럼 광역 접두어로 오거나,
+// 네이버 폴백 경로에선 "성수"/"수원" 같은 구·시 단독 값으로 온다. 두 형태 모두 처리한다.
+const SEOUL_DISTRICTS = [
+  "성수", "홍대", "여의도", "강남", "잠실", "명동", "한남", "이태원",
+  "연남", "압구정", "삼성동", "성동", "송파", "마포", "용산", "종로",
+  "을지로", "서초", "광진", "영등포", "성북", "노원", "건대",
+];
+/** region이 서울 권역이면 true. 경기/인천 접두어는 명시적으로 '서울 외'로 분류한다. */
+function isSeoulPopup(region: string): boolean {
+  const r = (region || "").trim();
+  if (r.startsWith("서울")) return true;
+  if (r.startsWith("경기") || r.startsWith("인천")) return false;
+  return SEOUL_DISTRICTS.some((d) => r.includes(d));
+}
+
 function TagBadge({ tag }: { tag: EventTag }) {
   if (!tag) return null;
   const s = TAG_STYLE[tag];
@@ -182,6 +198,39 @@ function PopupCard({ p }: { p: PopupItem }) {
   );
 }
 
+/** 팝업 지역 하위 그룹(서울 / 수원·화성 등). 헤더에 색 점·건수를 표시한다. */
+function PopupSubgroup({
+  label,
+  sub,
+  accent,
+  items,
+}: {
+  label: string;
+  sub?: string;
+  accent: string;
+  items: PopupItem[];
+}) {
+  return (
+    <div className="mb-5">
+      <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+        <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
+        <span>{label}</span>
+        {sub && <span className="font-normal text-muted-foreground">{sub}</span>}
+        <span className="font-normal text-muted-foreground">· {items.length}건</span>
+      </h3>
+      {items.length ? (
+        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
+          {items.map((p, i) => (
+            <PopupCard key={i} p={p} />
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">확인된 팝업이 없습니다.</p>
+      )}
+    </div>
+  );
+}
+
 function ExhCard({ e }: { e: ExhibitionItem }) {
   return (
     <EventTile
@@ -305,6 +354,9 @@ export function EventsBoard() {
 
   // 출처(보기) 링크가 없는 항목은 확인이 불가하므로 표시하지 않는다.
   const popups = (snap?.popups ?? []).filter((p) => p.link);
+  // 서울(실제 방문이 부담)과 수원·화성 등 서울 외 지역을 나눠서 보여준다.
+  const seoulPopups = popups.filter((p) => isSeoulPopup(p.region));
+  const outerPopups = popups.filter((p) => !isSeoulPopup(p.region));
   const venues = (snap?.exhibitions.venues ?? []).map((v) => ({
     ...v,
     items: v.items.filter((e) => e.link),
@@ -354,11 +406,10 @@ export function EventsBoard() {
             팝업스토어 <span className="text-sm font-normal text-muted-foreground">({popups.length})</span>
           </SectionTitle>
           {popups.length ? (
-            <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
-              {popups.map((p, i) => (
-                <PopupCard key={i} p={p} />
-              ))}
-            </div>
+            <>
+              <PopupSubgroup label="서울" accent="#7C3AED" items={seoulPopups} />
+              <PopupSubgroup label="수원 · 화성 등" sub="(경기 등 서울 외)" accent="#059669" items={outerPopups} />
+            </>
           ) : (
             <p className="text-sm text-muted-foreground">확인된 팝업이 없습니다.</p>
           )}
