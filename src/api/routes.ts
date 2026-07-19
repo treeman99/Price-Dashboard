@@ -47,10 +47,16 @@ import {
   deleteCategory as ytDeleteCategory,
   reorderCategories as ytReorderCategories,
 } from "../youtube/categories.ts";
-import { loadBlocklist, addBlock, removeBlock, applyBlocklist } from "../youtube/blocklist.ts";
+import {
+  loadBlocklist,
+  addBlock,
+  removeBlock,
+  removeBlocksForCategory,
+  applyBlocklist,
+} from "../youtube/blocklist.ts";
 import { addRecommendedChannel, removeRecommendedChannel } from "../../shared/youtube.ts";
 import { markWatched, unmarkWatched, activeWatched, annotateWatched } from "../youtube/watched.ts";
-import { applyRegionFilter } from "../youtube/curate.ts";
+import { applyRegionFilter, applyYoutubeDedup } from "../youtube/curate.ts";
 import { getStockSnapshot, refreshStock, isStockCollecting } from "../stock/stock.ts";
 import {
   listStocks,
@@ -561,7 +567,7 @@ api.delete("/news/categories/:key", (req, res) => {
  */
 api.get("/youtube", (_req, res) => {
   const snap = applyBlocklist(getYoutubeSnapshot());
-  res.json(annotateWatched(applyRegionFilter(snap, ytLoadCategories())));
+  res.json(annotateWatched(applyYoutubeDedup(applyRegionFilter(snap, ytLoadCategories()))));
 });
 
 /**
@@ -603,7 +609,9 @@ api.post("/youtube/move", (req, res) => {
         .json({ error: "수집이 진행 중입니다. 완료된 뒤 카드를 이동해 주세요.", collecting: true });
     }
     const snap = moveYoutubeVideo(String(videoId), String(fromKey), String(toKey));
-    res.json(annotateWatched(applyRegionFilter(applyBlocklist(snap), ytLoadCategories())));
+    res.json(
+      annotateWatched(applyYoutubeDedup(applyRegionFilter(applyBlocklist(snap), ytLoadCategories())))
+    );
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
@@ -681,6 +689,7 @@ api.delete("/youtube/categories/:key", (req, res) => {
   try {
     const ok = ytDeleteCategory(req.params.key);
     if (!ok) return res.status(404).json({ error: "카테고리를 찾을 수 없습니다." });
+    removeBlocksForCategory(req.params.key); // 그 카테고리 전용 제외 채널도 함께 정리(고아 방지)
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
@@ -734,11 +743,15 @@ api.get("/youtube/blocklist", (_req, res) => {
   res.json(list);
 });
 
-/** 채널 차단(카드의 '이 채널 제외' 버튼). 멱등. */
+/** 채널 차단(카드의 '이 채널 제외' 버튼). categoryKey 지정 시 그 카테고리에서만 제외. 멱등. */
 api.post("/youtube/blocklist", (req, res) => {
   try {
-    const { channel, handle } = req.body ?? {};
-    const entry = addBlock({ channel: String(channel ?? ""), handle: handle ? String(handle) : null });
+    const { channel, handle, categoryKey } = req.body ?? {};
+    const entry = addBlock({
+      channel: String(channel ?? ""),
+      handle: handle ? String(handle) : null,
+      categoryKey: categoryKey ? String(categoryKey) : null,
+    });
     res.json(entry);
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });

@@ -8,13 +8,14 @@ import { loadBlocklist, buildBlockMatcher, UNKNOWN_CHANNEL } from "./blocklist.t
 import { isRecommendedChannel } from "../../shared/youtube.ts";
 import { activeWatched, buildWatchedMatcher } from "./watched.ts";
 import { buildReclassSection } from "./reclass.ts";
-import { enrichVideos, fetchUploadDate, filterOutShorts } from "./oembed.ts";
+import { enrichVideos, fetchWatchInfo, filterOutShorts } from "./oembed.ts";
 import { harvestFreshUploads, type RssVideo } from "./channels.ts";
 import type {
   YoutubeSnapshot,
   YoutubeVideo,
   YoutubeCategory,
   YoutubeCategoryDef,
+  BlockedChannel,
 } from "../../shared/types.ts";
 
 function nowLabel(): string {
@@ -91,6 +92,36 @@ export function applyRegionFilter(
   };
 }
 
+/**
+ * 교차 카테고리 중복 제거: 같은 videoId 가 둘 이상의 카테고리에 들어가 있으면
+ * (LLM 이 "한 영상은 가장 잘 맞는 한 곳에만" 규칙을 어길 때 발생 — 섬네일·업로드일이 같고
+ * 요약만 살짝 다른 카드 쌍의 원인) 카테고리 배열 순서상 **먼저 나온 카테고리**의 것만 남기고
+ * 이후 카테고리의 같은 영상은 버린다. videoId 가 없는 항목은 판별 불가라 그대로 둔다.
+ * 순수 함수(입력 불변) — 수집 시점 정리와 읽기 시점 필터(applyYoutubeDedup)가 함께 쓴다.
+ */
+export function dedupeCategoriesByVideoId(categories: YoutubeCategory[]): YoutubeCategory[] {
+  const seen = new Set<string>();
+  return categories.map((c) => ({
+    ...c,
+    items: c.items.filter((v) => {
+      if (!v.videoId) return true;
+      if (seen.has(v.videoId)) return false;
+      seen.add(v.videoId);
+      return true;
+    }),
+  }));
+}
+
+/**
+ * 읽기 시점 필터: 이미 저장된 스냅샷의 교차 카테고리 중복을 재수집 없이 즉시 제거.
+ * (applyBlocklist·applyRegionFilter 와 동일한 읽기 필터 패턴 — 차단/지역 제거 뒤 마지막에 적용해
+ * 지역필터로 한쪽이 사라진 영상이 다른 카테고리에는 남도록 한다.)
+ */
+export function applyYoutubeDedup(snapshot: YoutubeSnapshot | null): YoutubeSnapshot | null {
+  if (!snapshot) return snapshot;
+  return { ...snapshot, categories: dedupeCategoriesByVideoId(snapshot.categories) };
+}
+
 /** 제목/채널/원제 중 하나라도 제외 키워드를 포함하면 true(대소문자 무시). */
 export function matchesExclude(
   v: { title: string; channel: string; originalTitle?: string | null },
@@ -112,14 +143,17 @@ export function matchesExclude(
  */
 export function stripBlockedRecommended(
   defs: YoutubeCategoryDef[],
-  blocked: { channel: string; handle: string | null }[]
+  blocked: BlockedChannel[]
 ): YoutubeCategoryDef[] {
   if (!blocked.length) return defs;
   return defs.map((d) => {
     const list = d.recommendedChannels;
     if (!list?.length) return d;
+    // 이 카테고리에 적용되는 차단(전역 또는 이 카테고리)만 반영 — 다른 카테고리에서만 차단된 채널은 유지.
+    const relevant = blocked.filter((b) => b.categoryKey == null || b.categoryKey === d.key);
+    if (!relevant.length) return d;
     const kept = list.filter(
-      (e) => !blocked.some((b) => isRecommendedChannel([e], b.channel, b.handle))
+      (e) => !relevant.some((b) => isRecommendedChannel([e], b.channel, b.handle))
     );
     return kept.length === list.length ? d : { ...d, recommendedChannels: kept };
   });
@@ -134,7 +168,8 @@ export function buildPrompt(
   blocked: string[],
   watchedTitles: string[] = [],
   reclassSection = "",
-  seedByCat: Map<string, RssVideo[]> = new Map()
+  seedByCat: Map<string, RssVideo[]> = new Map(),
+  blockedByCat: Map<string, string[]> = new Map()
 ): string {
   const cats = defs
     .map((c) => {
@@ -146,13 +181,18 @@ export function buildPrompt(
         c.recommendedChannels && c.recommendedChannels.length
           ? ` [추천 채널(먼저 확인): ${c.recommendedChannels.join(", ")}]`
           : "";
-      return `${c.emoji} ${c.label} (key: "${c.key}") [검색범위: ${scopeLabel(c.region)}]${exclude}${recommend}${
+      // 이 카테고리 전용 제외 채널 — 다른 카테고리에서는 이 채널을 계속 조사해도 된다.
+      const catBlocked = blockedByCat.get(c.key) ?? [];
+      const blockedHere = catBlocked.length
+        ? ` [제외 채널(이 카테고리에서만 넣지 마라 — 다른 카테고리에서는 조사 가능): ${catBlocked.join(", ")}]`
+        : "";
+      return `${c.emoji} ${c.label} (key: "${c.key}") [검색범위: ${scopeLabel(c.region)}]${exclude}${recommend}${blockedHere}${
         c.description ? ` — ${c.description}` : ""
       }`;
     })
     .join("\n  - ");
   const blockSection = blocked.length
-    ? `\n\n🚫 제외 채널(사용자가 차단 — 절대 포함 금지, 검색·조사 대상에서 빼라):\n  - ${blocked.join(
+    ? `\n\n🚫 전역 제외 채널(사용자가 모든 카테고리에서 차단 — 절대 포함 금지, 검색·조사 대상에서 빼라):\n  - ${blocked.join(
         "\n  - "
       )}\n  이 채널들의 영상은 어떤 카테고리에도 넣지 마라.`
     : "";
@@ -239,7 +279,7 @@ export function buildPrompt(
 - 카테고리 주제와 무관한 영상으로 개수를 채우지 마라(관련성이 애매하면 제외).
 
 품질 규칙:
-- **YouTube Shorts(세로형 짧은 영상)는 제외** — 일반 가로형 영상만 채택한다(서버도 Shorts 를 확인해 자동 제거하지만, 애초에 넣지 마라). 라이브 예정(아직 방송 전)·중복 재업로드도 제외. 같은 영상은 한 번만.
+- **YouTube Shorts(세로형 짧은 영상)는 제외** — 일반 가로형 영상만 채택한다(서버도 Shorts 를 확인해 자동 제거하지만, 애초에 넣지 마라). **라이브(방송 중·예정)도 제외** — 아직 방송 전이거나 지금 생방송 중인 영상은 넣지 마라(서버도 watch 페이지로 확인해 자동 제거한다. 단 이미 끝난 라이브 다시보기는 일반 영상으로 취급). 중복 재업로드도 제외, 같은 영상은 한 번만.
 - 카테고리당 **6개 이상을 목표로, 최대 12개**까지 채택(단 신선도·관련성 규칙이 항상 우선 — 좋은 영상이 부족하면 적어도 된다).
 - 조회수가 높거나 신뢰도 높은 채널을 우선하되, 다양성 규칙을 지킨다.
 - 한 영상이 여러 카테고리에 맞으면 가장 잘 맞는 **한 곳**에만 넣는다.
@@ -273,29 +313,42 @@ function isFresh(date: string | null, today: string, cutoff: string): boolean {
 }
 
 /**
- * 실제 업로드일 재검증. LLM 이 준 date 는 검증 불가라 필터 통과를 위해 cutoff(경계일)로
- * 위조되기 쉽다(실측: 07-06 표기 영상 다수가 실제 06-26~07-04). 그래서 watch 페이지에서
- * 진짜 게시일을 가져와 date 를 교체하고, 신선도 창(cutoff~today) 밖이면 드롭한다.
- * 실제 날짜를 못 구하면(마크업 변경·네트워크) 원래 판정을 유지해 탭이 통째로 비는 것을 막는다.
+ * 실제 업로드일 재검증 + 라이브(방송중/예정) 제외. watch 페이지를 한 번 받아 둘 다 처리한다.
+ * - 라이브: 방송 중이거나 아직 시작 전(예정)인 라이브는 취합에서 제외(종료된 라이브 다시보기 VOD 는 유지).
+ * - 날짜: LLM 이 준 date 는 검증 불가라 필터 통과를 위해 cutoff(경계일)로 위조되기 쉽다(실측: 07-06
+ *   표기 영상 다수가 실제 06-26~07-04). 진짜 게시일로 교체하고 신선도 창(cutoff~today) 밖이면 드롭한다.
+ * 실제 정보를 못 구하면(마크업 변경·네트워크) 원래 판정을 유지해 탭이 통째로 비는 것을 막는다(fail-open).
  */
 async function verifyRealDates(
   items: YoutubeVideo[],
   today: string,
-  cutoff: string
+  cutoff: string,
+  concurrency = 6
 ): Promise<YoutubeVideo[]> {
-  const checked = await Promise.all(
-    items.map(async (v): Promise<YoutubeVideo | null> => {
-      if (!v.videoId) return v;
-      const real = await fetchUploadDate(v.videoId);
-      if (!real) return v; // 검증 불가 → 기존(LLM date) 유지: 우아한 저하
-      if (!isFresh(real, today, cutoff)) {
-        log.info(`유튜브 신선도 재검증 드롭 — ${v.videoId} 실제 ${real} (창 ${cutoff}~${today} 밖, LLM표기 ${v.date})`);
-        return null;
-      }
-      return v.date === real ? v : { ...v, date: real }; // 실제 게시일로 교체(표시도 정확해짐)
-    })
-  );
-  return checked.filter((v): v is YoutubeVideo => v != null);
+  // watch 페이지(≈1MB)를 후보 수만큼 받으므로 동시 요청을 제한한다 — 무제한 팬아웃은 429/타임아웃을
+  // 유발하고, 그 실패는 fail-open 이라 라이브·신선도 판정을 조용히 건너뛰게 만든다(집 IP 429 취약).
+  const out: YoutubeVideo[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const checked = await Promise.all(
+      batch.map(async (v): Promise<YoutubeVideo | null> => {
+        if (!v.videoId) return v;
+        const { date: real, live } = await fetchWatchInfo(v.videoId);
+        if (live) {
+          log.info(`유튜브 라이브(방송중/예정) 제외 — ${v.videoId} "${v.title}"`);
+          return null;
+        }
+        if (!real) return v; // 검증 불가 → 기존(LLM date) 유지: 우아한 저하
+        if (!isFresh(real, today, cutoff)) {
+          log.info(`유튜브 신선도 재검증 드롭 — ${v.videoId} 실제 ${real} (창 ${cutoff}~${today} 밖, LLM표기 ${v.date})`);
+          return null;
+        }
+        return v.date === real ? v : { ...v, date: real }; // 실제 게시일로 교체(표시도 정확해짐)
+      })
+    );
+    for (const v of checked) if (v != null) out.push(v);
+  }
+  return out;
 }
 
 function nonEmpty(v: unknown, max: number): string | null {
@@ -425,7 +478,17 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
   const cutoff = localDateDaysAgo(freshDays);
   const defs = loadCategories();
   const blockList = loadBlocklist();
-  const blockedLabels = blockList.map((b) => (b.handle ? `${b.channel} (${b.handle})` : b.channel));
+  const blockLabel = (b: BlockedChannel) => (b.handle ? `${b.channel} (${b.handle})` : b.channel);
+  // 전역 차단(categoryKey=null)은 프롬프트 상단 '🚫 전역 제외 채널' 섹션으로.
+  const globalBlockedLabels = blockList.filter((b) => b.categoryKey == null).map(blockLabel);
+  // 카테고리별 차단은 그 카테고리 라인에만 붙인다(다른 카테고리에서는 계속 조사 가능).
+  const blockedByCat = new Map<string, string[]>();
+  for (const b of blockList) {
+    if (b.categoryKey == null) continue;
+    const arr = blockedByCat.get(b.categoryKey) ?? [];
+    arr.push(blockLabel(b));
+    blockedByCat.set(b.categoryKey, arr);
+  }
   const isBlocked = buildBlockMatcher();
   // '본영상'으로 체크된 영상은 수집에서 제외한다: 프롬프트로 미리 알리고(중복 조사 방지),
   // 최종적으로 videoId 기준 하드 후필터로 확실히 제거한다.
@@ -434,11 +497,9 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
     .map((w) => w.title)
     .filter((t): t is string => !!t)
     .slice(0, 40);
-  // 차단 채널이 추천 목록에 남아 있으면 모순된 지시가 함께 주입되므로 프롬프트용 defs에서 제거.
-  const promptDefs = stripBlockedRecommended(
-    defs,
-    blockList.map((b) => ({ channel: b.channel, handle: b.handle ?? null }))
-  );
+  // 차단 채널이 추천 목록에 남아 있으면 모순된 지시가 함께 주입되므로 프롬프트용 defs에서 제거
+  // (카테고리별 차단은 해당 카테고리 추천에서만 제거 — stripBlockedRecommended 가 categoryKey 를 본다).
+  const promptDefs = stripBlockedRecommended(defs, blockList);
   try {
     // ── RSS 하베스트: 추천 채널 + 발굴 채널의 창 안 업로드를 '확정 신선 후보'로 서버가 직접 확보 ──
     // (검색/페이지 파싱이 못 찾는 '채널 최신 업로드'를 RSS 로 확보 → 프롬프트 시딩 + 폴백 병합)
@@ -448,16 +509,17 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
       const queries = [...(meta.recommendedChannels ?? []), ...(discovered[meta.key] ?? [])];
       const fresh = queries.length ? await harvestFreshUploads(queries, cutoff, today) : [];
       // 차단 채널/본영상은 시드 단계에서 미리 제외(모순된 시딩 방지). 나머지 필터는 후단 파이프라인에서.
+      // 차단은 이 카테고리(meta.key)에 적용되는 것만(전역 + 이 카테고리) — 다른 카테고리 차단은 여기서 무시.
       seedByCat.set(
         meta.key,
-        fresh.filter((v) => !isBlocked(v.channel, null) && !isWatched(v.videoId))
+        fresh.filter((v) => !isBlocked(v.channel, null, meta.key) && !isWatched(v.videoId))
       );
     }
     const seedTotal = [...seedByCat.values()].reduce((a, v) => a + v.length, 0);
     log.info(`유튜브 RSS 하베스트 — 확정 신선 후보 ${seedTotal}건(추천+발굴 채널)`);
 
     const finalText = await runAgentQueryText(
-      buildPrompt(promptDefs, today, cutoff, freshDays, nowLabel(), blockedLabels, watchedTitles, buildReclassSection(defs), seedByCat),
+      buildPrompt(promptDefs, today, cutoff, freshDays, nowLabel(), globalBlockedLabels, watchedTitles, buildReclassSection(defs), seedByCat, blockedByCat),
       {
         // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
         // allowedTools = 그 도구들을 무프롬프트 허용.
@@ -526,10 +588,10 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
         // oEmbed로 실제 채널명/핸들 보강 + 존재하지 않는(지어낸) 영상 제거
         const enriched = await enrichVideos(candidates);
 
-        // 차단 채널 제외(실제 채널명 기준) + 카테고리 제외 키워드(제목/채널) 하드 필터
-        // + 한국 전용(kr) 카테고리는 해외(원제가 비한국어) 영상 하드 제외.
+        // 차단 채널 제외(실제 채널명 기준, 이 카테고리에 적용되는 차단만) + 카테고리 제외 키워드(제목/채널)
+        // 하드 필터 + 한국 전용(kr) 카테고리는 해외(원제가 비한국어) 영상 하드 제외.
         const items = enriched
-          .filter((x) => !isBlocked(x.channel, x.channelHandle))
+          .filter((x) => !isBlocked(x.channel, x.channelHandle, meta.key))
           .filter((x) => !isWatched(x.videoId)) // '본영상' 체크된 영상은 수집 제외
           .filter((x) => !matchesExclude(x, meta.excludeKeywords))
           .filter((x) => !isForeignForKr(x, meta.region));
@@ -542,18 +604,22 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
       })
     );
 
-    const total = categories.reduce((a, c) => a + c.items.length, 0);
+    // 교차 카테고리 중복 제거: 카테고리별 파이프라인은 각자 videoId 를 dedup 하지만
+    // 서로 다른 카테고리에 같은 영상이 걸치는 경우(LLM 이 한 영상을 두 곳에 배치)는 못 막는다.
+    // 저장·이메일·iMessage 는 모두 이 스냅샷을 그대로 쓰므로 여기서 한 번 정리한다.
+    const dedupedCategories = dedupeCategoriesByVideoId(categories);
+    const total = dedupedCategories.reduce((a, c) => a + c.items.length, 0);
     const snapshot: YoutubeSnapshot = {
       date: today,
       updatedAt: new Date().toISOString(),
       source: "llm",
       freshDays,
-      categories,
+      categories: dedupedCategories,
       notes: p?.notes ? String(p.notes) : null,
     };
     log.info(
       `유튜브 큐레이션(LLM) 완료 — 총 ${total}건 [` +
-        categories.map((c) => `${c.emoji}${c.items.length}`).join(" ") +
+        dedupedCategories.map((c) => `${c.emoji}${c.items.length}`).join(" ") +
         "]"
     );
     return snapshot;

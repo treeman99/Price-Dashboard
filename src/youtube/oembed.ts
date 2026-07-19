@@ -68,11 +68,33 @@ export function extractUploadIso(html: string): string | null {
 }
 
 /**
- * 영상의 **실제 업로드일**을 유튜브 watch 페이지에서 직접 확인해 로컬 YYYY-MM-DD 로 돌려준다.
- * LLM 은 oEmbed 로 검증되지 않는 date 를 신선도 필터 통과를 위해 cutoff(경계일)로 위조하는
- * 경향이 있어(대량 오탐), 게시일만은 서버가 원본에서 재검증한다. 실패 시 null.
+ * watch 페이지 HTML 이 **방송 중(라이브 나우) 또는 시작 전(예정)** 영상인지 판별(순수 함수).
+ * 실측 마크업 근거:
+ *   - 방송 중: 메인 영상 microformat 의 `"liveBroadcastDetails":{"isLiveNow":true` (종료 전엔 endTimestamp 없음).
+ *   - 예정: videoDetails 의 `"isUpcoming":true`.
+ *   - 종료된 라이브 다시보기(VOD): isLiveNow=false·endTimestamp 존재·isUpcoming 없음 → false(취합 대상, 유지).
+ *   - 일반 영상: `"isLiveContent":false` — 위 토큰이 없음.
+ * liveBroadcastDetails 는 메인 영상에만 있어 추천 사이드바 라이브로 인한 오탐을 피한다(실측: 일반 영상 페이지엔 isLiveNow:true 토큰 없음).
  */
-export async function fetchUploadDate(videoId: string, timeoutMs = 8000): Promise<string | null> {
+export function isLiveOrUpcomingHtml(html: string): boolean {
+  // liveBroadcastDetails 객체 안(닫는 중괄호 전)에 isLiveNow:true 가 있으면 방송 중 — 키 순서 무관.
+  // (객체는 평면 구조라 [^}]* 가 객체 경계를 넘지 않는다. 메인 영상에만 있어 사이드바 오탐 방지.)
+  return /"liveBroadcastDetails":\{[^}]*"isLiveNow":true/.test(html) || /"isUpcoming":true/.test(html);
+}
+
+export interface WatchInfo {
+  /** 실제 업로드일(로컬 YYYY-MM-DD). 못 구하면 null. */
+  date: string | null;
+  /** 방송 중이거나 시작 전(예정) 라이브면 true. 종료된 라이브 VOD·일반 영상은 false. */
+  live: boolean;
+}
+
+/**
+ * watch 페이지를 한 번 받아 **실제 업로드일 + 라이브(방송중/예정) 여부**를 함께 반환한다.
+ * (게시일 재검증과 라이브 판별을 같은 요청으로 처리 — 추가 왕복 없음.)
+ * status!=200·네트워크 실패면 {date:null, live:false} — 보수적으로 유지(드롭하지 않음, fail-open).
+ */
+export async function fetchWatchInfo(videoId: string, timeoutMs = 8000): Promise<WatchInfo> {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
   for (let attempt = 0; attempt < 2; attempt++) {
     const ac = new AbortController();
@@ -82,18 +104,30 @@ export async function fetchUploadDate(videoId: string, timeoutMs = 8000): Promis
         signal: ac.signal,
         headers: { "User-Agent": WATCH_UA, "Accept-Language": "ko-KR,ko;q=0.9" },
       });
-      if (r.status !== 200) return null; // 404 등 → 검증 불가(존재 여부는 oEmbed가 별도 처리)
-      const iso = extractUploadIso(await r.text());
-      if (!iso) return null;
-      const d = new Date(iso);
-      return isNaN(d.getTime()) ? null : localDate(d);
+      if (r.status !== 200) return { date: null, live: false }; // 404 등 → 검증 불가
+      const html = await r.text();
+      const iso = extractUploadIso(html);
+      const d = iso ? new Date(iso) : null;
+      return {
+        date: d && !isNaN(d.getTime()) ? localDate(d) : null,
+        live: isLiveOrUpcomingHtml(html),
+      };
     } catch {
       // 네트워크/timeout → 마지막 시도면 포기
     } finally {
       clearTimeout(timer);
     }
   }
-  return null;
+  return { date: null, live: false };
+}
+
+/**
+ * 영상의 **실제 업로드일**을 유튜브 watch 페이지에서 직접 확인해 로컬 YYYY-MM-DD 로 돌려준다.
+ * LLM 은 oEmbed 로 검증되지 않는 date 를 신선도 필터 통과를 위해 cutoff(경계일)로 위조하는
+ * 경향이 있어(대량 오탐), 게시일만은 서버가 원본에서 재검증한다. 실패 시 null.
+ */
+export async function fetchUploadDate(videoId: string, timeoutMs = 8000): Promise<string | null> {
+  return (await fetchWatchInfo(videoId, timeoutMs)).date;
 }
 
 /**

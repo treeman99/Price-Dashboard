@@ -7,9 +7,11 @@ import {
   matchesExclude,
   isForeignForKr,
   applyRegionFilter,
+  dedupeCategoriesByVideoId,
+  applyYoutubeDedup,
 } from "./curate.ts";
-import { parseHandle, extractUploadIso } from "./oembed.ts";
-import type { YoutubeCategoryDef, YoutubeSnapshot } from "../../shared/types.ts";
+import { parseHandle, extractUploadIso, isLiveOrUpcomingHtml } from "./oembed.ts";
+import type { YoutubeCategoryDef, YoutubeSnapshot, BlockedChannel } from "../../shared/types.ts";
 
 const defs: YoutubeCategoryDef[] = [
   { key: "ai", label: "AI · LLM", emoji: "🤖", color: "#000", region: "global" },
@@ -57,6 +59,14 @@ test("buildPrompt: 추천 채널이 있으면 ⭐ 취향 프로필 섹션 포함
   assert.match(p, /빈 결과를 "새 영상 없음"으로\s*\n?\s*단정하지 말고/);
 });
 
+const blk = (channel: string, handle: string | null, categoryKey: string | null = null): BlockedChannel => ({
+  id: `${handle ?? channel}::${categoryKey ?? "*"}`,
+  channel,
+  handle,
+  categoryKey,
+  blockedAt: "2026-01-01T00:00:00.000Z",
+});
+
 test("stripBlockedRecommended: 차단 채널과 매칭되는 추천 항목만 제거(이름/핸들 매칭)", () => {
   const withRec: YoutubeCategoryDef[] = [
     {
@@ -67,13 +77,24 @@ test("stripBlockedRecommended: 차단 채널과 매칭되는 추천 항목만 �
   ];
   // 핸들로 차단 → "테크몽 (@techmong)" 제거, 이름으로 차단 → "조코딩" 제거. "@paniboy"는 유지.
   const out = stripBlockedRecommended(withRec, [
-    { channel: "테크몽 Techmong", handle: "@TechMong" }, // 이름 표기가 달라도 핸들로 매칭
-    { channel: "조코딩", handle: null },
+    blk("테크몽 Techmong", "@TechMong"), // 이름 표기가 달라도 핸들로 매칭(전역 차단)
+    blk("조코딩", null),
   ]);
   assert.deepEqual(out[0].recommendedChannels, ["@paniboy"]);
   assert.equal(out[1], defs[1]); // 추천 채널 없는 카테고리는 그대로
   // 차단 목록이 비면 원본 그대로.
   assert.equal(stripBlockedRecommended(withRec, []), withRec);
+});
+
+test("stripBlockedRecommended: 카테고리별 차단은 그 카테고리 추천에서만 제거", () => {
+  const withRec: YoutubeCategoryDef[] = [
+    { ...defs[0], recommendedChannels: ["@paniboy"] }, // key "ai"
+    { ...defs[1], recommendedChannels: ["@paniboy"] }, // key "reviews"
+  ];
+  // "@paniboy"를 reviews 에서만 차단 → ai 추천은 유지, reviews 추천만 제거.
+  const out = stripBlockedRecommended(withRec, [blk("빠니보틀", "@paniboy", "reviews")]);
+  assert.deepEqual(out[0].recommendedChannels, ["@paniboy"]); // ai 유지
+  assert.deepEqual(out[1].recommendedChannels, []); // reviews 제거
 });
 
 test("matchesExclude: 제목/채널/원제에 제외 키워드 포함 시 true(대소문자 무시)", () => {
@@ -143,11 +164,87 @@ test("applyRegionFilter: kr 카테고리의 해외 영상만 제거, global은 �
   assert.equal(applyRegionFilter(null, defs), null);
 });
 
+test("dedupeCategoriesByVideoId: 교차 카테고리 같은 videoId 는 먼저 나온 카테고리만 남긴다", () => {
+  const vid = (videoId: string | null, summary: string) => ({
+    title: "제목",
+    originalTitle: null,
+    channel: "같은채널",
+    channelHandle: null,
+    date: "2026-07-16",
+    summary,
+    url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : "https://x",
+    videoId,
+    thumbnail: videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null,
+  });
+  const cats = [
+    { key: "ai", label: "AI", emoji: "🤖", color: "#000", items: [vid("aaaaaaaaaaa", "요약A"), vid("bbbbbbbbbbb", "고유")] },
+    // 같은 영상(aaaaaaaaaaa)이 요약만 살짝 다르게 두 번째 카테고리에도 들어옴 → 제거 대상
+    { key: "reviews", label: "리뷰", emoji: "🆕", color: "#000", items: [vid("aaaaaaaaaaa", "요약A2"), vid("ccccccccccc", "고유")] },
+  ];
+  const out = dedupeCategoriesByVideoId(cats);
+  assert.deepEqual(out.map((c) => c.items.map((v) => v.videoId)), [
+    ["aaaaaaaaaaa", "bbbbbbbbbbb"], // 먼저 나온 ai 는 그대로
+    ["ccccccccccc"], // reviews 의 중복 aaaaaaaaaaa 만 제거
+  ]);
+  // 원본 불변(순수 함수)
+  assert.equal(cats[1].items.length, 2);
+});
+
+test("dedupeCategoriesByVideoId: 같은 카테고리 내 중복도 제거, videoId 없는 항목은 유지", () => {
+  const v = (videoId: string | null) => ({
+    title: "t", originalTitle: null, channel: "c", channelHandle: null,
+    date: "2026-07-16", summary: "s",
+    url: "https://x", videoId, thumbnail: null,
+  });
+  const cats = [
+    { key: "ai", label: "AI", emoji: "🤖", color: "#000", items: [v("aaaaaaaaaaa"), v("aaaaaaaaaaa"), v(null), v(null)] },
+  ];
+  const out = dedupeCategoriesByVideoId(cats);
+  // 같은 videoId 1개만, videoId 없는 항목(판별 불가)은 둘 다 유지
+  assert.deepEqual(out[0].items.map((x) => x.videoId), ["aaaaaaaaaaa", null, null]);
+});
+
+test("applyYoutubeDedup: null 은 그대로, 스냅샷은 교차 카테고리 중복 제거", () => {
+  assert.equal(applyYoutubeDedup(null), null);
+  const snap: YoutubeSnapshot = {
+    date: "2026-07-16", updatedAt: "2026-07-16T00:00:00Z", source: "llm", freshDays: 7,
+    categories: [
+      { key: "a", label: "A", emoji: "🅰️", color: "#000", items: [{ title: "t", originalTitle: null, channel: "c", channelHandle: null, date: "2026-07-16", summary: "s", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", videoId: "dQw4w9WgXcQ", thumbnail: null }] },
+      { key: "b", label: "B", emoji: "🅱️", color: "#000", items: [{ title: "t2", originalTitle: null, channel: "c", channelHandle: null, date: "2026-07-16", summary: "s2", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", videoId: "dQw4w9WgXcQ", thumbnail: null }] },
+    ],
+    notes: null,
+  };
+  const out = applyYoutubeDedup(snap)!;
+  assert.equal(out.categories[0].items.length, 1);
+  assert.equal(out.categories[1].items.length, 0);
+});
+
 test("parseHandle: author_url에서 @handle 추출", () => {
   assert.equal(parseHandle("https://www.youtube.com/@KTpresident"), "@KTpresident");
   assert.equal(parseHandle("https://www.youtube.com/@media.AUTO_1"), "@media.AUTO_1");
   assert.equal(parseHandle("https://www.youtube.com/channel/UCabc123"), null);
   assert.equal(parseHandle(null), null);
+});
+
+test("isLiveOrUpcomingHtml: 방송중/예정만 true, 종료 라이브 VOD·일반 영상은 false(실측 마크업)", () => {
+  // 방송 중(실측: @LofiGirl/live 등) — liveBroadcastDetails.isLiveNow:true, endTimestamp 없음
+  const liveNow =
+    '..."liveBroadcastDetails":{"isLiveNow":true,"startTimestamp":"2026-07-01T15:18:47+00:00"}...';
+  assert.equal(isLiveOrUpcomingHtml(liveNow), true);
+  // 키 순서가 바뀌어도 방송중으로 판정(정규식이 순서에 의존하지 않음)
+  const liveNowReordered =
+    '..."liveBroadcastDetails":{"startTimestamp":"2026-07-01T15:18:47+00:00","isLiveNow":true}...';
+  assert.equal(isLiveOrUpcomingHtml(liveNowReordered), true);
+  // 예정(시작 전) — videoDetails.isUpcoming:true
+  const upcoming = '..."isUpcoming":true,"isLiveContent":true...';
+  assert.equal(isLiveOrUpcomingHtml(upcoming), true);
+  // 종료된 라이브 다시보기(VOD) — isLiveNow:false + endTimestamp 존재 → 유지 대상
+  const endedVod =
+    '..."liveBroadcastDetails":{"isLiveNow":false,"startTimestamp":"2022-07-12T15:59:30+00:00","endTimestamp":"2026-05-20T02:11:23+00:00"}...';
+  assert.equal(isLiveOrUpcomingHtml(endedVod), false);
+  // 일반 영상(실측: dQw4w9WgXcQ) — isLiveContent:false, 라이브 토큰 없음
+  const normal = '..."isLiveContent":false...';
+  assert.equal(isLiveOrUpcomingHtml(normal), false);
 });
 
 test("extractUploadIso: watch 페이지 마크업에서 실제 업로드 ISO 추출(실측 형태)", () => {

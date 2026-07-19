@@ -9,14 +9,17 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { BlockedChannel } from "@shared/types";
+import type { BlockedChannel, YoutubeCategoryDef } from "@shared/types";
 
 export function BlockedChannelsDialog({
   open,
+  defs,
   onClose,
   onChanged,
 }: {
   open: boolean;
+  /** 카테고리 정의(제외 범위 key→라벨 표시용). */
+  defs: YoutubeCategoryDef[];
   onClose: () => void;
   /** 차단 해제 등으로 목록이 바뀌었을 때(보드가 스냅샷을 다시 불러오도록). */
   onChanged: () => void;
@@ -64,8 +67,8 @@ export function BlockedChannelsDialog({
             <Ban className="h-4 w-4" /> 조사 제외 채널 관리
           </DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
-            여기 있는 채널은 유튜브 소식 조사에서 제외됩니다. '해제'를 누르면 다시 조사에 포함되고,
-            현재 목록에 남아 있던 해당 채널 영상도 즉시 다시 보입니다.
+            각 채널은 옆에 표시된 카테고리에서만 조사·표시가 제외됩니다(다른 카테고리에서는 계속 나올 수 있어요).
+            '해제'를 누르면 그 카테고리 조사에 다시 포함되고, 남아 있던 해당 채널 영상도 즉시 다시 보입니다.
           </DialogDescription>
         </DialogHeader>
 
@@ -89,7 +92,14 @@ export function BlockedChannelsDialog({
                 className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
               >
                 <div className="min-w-0">
-                  <p className="truncate font-medium">{b.channel}</p>
+                  <p className="flex items-center gap-1.5 truncate font-medium">
+                    <span className="truncate">{b.channel}</span>
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
+                      {b.categoryKey
+                        ? (defs.find((d) => d.key === b.categoryKey)?.label ?? b.categoryKey)
+                        : "모든 카테고리"}
+                    </span>
+                  </p>
                   <p className="truncate text-xs text-muted-foreground">
                     {b.handle ? `${b.handle} · ` : ""}
                     {new Date(b.blockedAt).toLocaleString("ko-KR")} 제외

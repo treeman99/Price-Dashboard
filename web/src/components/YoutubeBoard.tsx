@@ -200,7 +200,7 @@ function VideoCard({
   /** 이 카드의 채널이 현재 카테고리 추천 채널에 등록되어 있는지 */
   recommended: boolean;
   onToggleRecommend: (video: YoutubeVideo) => void;
-  onBlock: (video: YoutubeVideo) => void;
+  onBlock: (video: YoutubeVideo, categoryKey: string) => void;
   onMove: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
   onToggleWatched: (video: YoutubeVideo) => void;
 }) {
@@ -287,11 +287,11 @@ function VideoCard({
               onMove={onMove}
             />
             <button
-              onClick={() => onBlock(video)}
+              onClick={() => onBlock(video, currentKey)}
               disabled={!canBlockChannel(video)}
               title={
                 canBlockChannel(video)
-                  ? `'${video.channel}' 채널을 조사에서 제외`
+                  ? `'${video.channel}' 채널을 이 카테고리 조사에서 제외`
                   : "채널 정보가 없어 제외할 수 없습니다"
               }
               className="inline-flex items-center gap-1 text-muted-foreground/70 transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-muted-foreground/70"
@@ -331,7 +331,7 @@ function Section({
   onMove: (def: YoutubeCategoryDef, dir: "up" | "down") => void;
   onEdit: (def: YoutubeCategoryDef) => void;
   onDelete: (def: YoutubeCategoryDef) => void;
-  onBlock: (video: YoutubeVideo) => void;
+  onBlock: (video: YoutubeVideo, categoryKey: string) => void;
   onMoveVideo: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
   onToggleWatched: (video: YoutubeVideo) => void;
   onToggleRecommend: (video: YoutubeVideo, categoryKey: string) => void;
@@ -475,25 +475,27 @@ export function YoutubeBoard() {
     return () => clearInterval(id);
   }, [collecting]);
 
-  async function blockChannel(v: YoutubeVideo) {
+  async function blockChannel(v: YoutubeVideo, categoryKey: string) {
     const label = v.channelHandle ? `${v.channel} (${v.channelHandle})` : v.channel;
+    const catLabel = defs.find((d) => d.key === categoryKey)?.label ?? categoryKey;
     if (
       !confirm(
-        `'${label}' 채널을 앞으로 유튜브 조사에서 제외할까요?\n현재 목록의 이 채널 영상도 사라집니다.\n('제외 채널 관리'에서 언제든 되돌릴 수 있어요.)`
+        `'${label}' 채널을 '${catLabel}' 카테고리에서 제외할까요?\n이 카테고리의 해당 채널 영상만 사라지고, 다른 카테고리에서는 계속 나올 수 있어요.\n('제외 채널 관리'에서 언제든 되돌릴 수 있어요.)`
       )
     )
       return;
     try {
-      await api.blockYoutubeChannel({ channel: v.channel, handle: v.channelHandle ?? null });
-      // 낙관적 제거: 같은 채널 영상 모두 화면에서 즉시 제거
+      await api.blockYoutubeChannel({ channel: v.channel, handle: v.channelHandle ?? null, categoryKey });
+      // 낙관적 제거: 이 카테고리에서만 같은 채널 영상 즉시 제거(다른 카테고리는 유지)
       setSnap((prev) =>
         prev
           ? {
               ...prev,
-              categories: prev.categories.map((c) => ({
-                ...c,
-                items: c.items.filter((it) => !sameChannel(it, v)),
-              })),
+              categories: prev.categories.map((c) =>
+                c.key === categoryKey
+                  ? { ...c, items: c.items.filter((it) => !sameChannel(it, v)) }
+                  : c
+              ),
             }
           : prev
       );
@@ -732,6 +734,7 @@ export function YoutubeBoard() {
       <CategoryDialog kind="youtube" state={dialog} onClose={() => setDialog(null)} onSaved={load} />
       <BlockedChannelsDialog
         open={blockDialogOpen}
+        defs={defs}
         onClose={() => setBlockDialogOpen(false)}
         onChanged={() => {
           load();

@@ -455,12 +455,17 @@ export interface YoutubeSnapshot {
 
 /** 조사에서 제외할 유튜브 채널(차단 목록 1건). */
 export interface BlockedChannel {
-  /** 안정적 식별자. handle이 있으면 "@handle", 없으면 "name:채널명"(모두 정규화). */
+  /** 안정적 식별자. "채널키::카테고리키"(채널키: handle 있으면 "@handle", 없으면 "name:채널명"; 카테고리키 없으면 "*"=전역). */
   id: string;
   /** 표시용 채널명(차단 시점에 보였던 이름). */
   channel: string;
   /** 채널 핸들(있으면, 예: "@mkbhd"). 없으면 null. */
   handle: string | null;
+  /**
+   * 제외 적용 범위. 특정 카테고리 key 면 **그 카테고리에서만** 제외되고 다른 카테고리에서는 계속 조사된다.
+   * null 이면 전역(모든 카테고리 제외 — 구버전 항목 하위호환).
+   */
+  categoryKey: string | null;
   /** 차단 시각(ISO). */
   blockedAt: string;
 }

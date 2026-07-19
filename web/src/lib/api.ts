@@ -329,7 +329,7 @@ export const api = {
   youtubeBlocklist: () =>
     fetch("/api/youtube/blocklist").then((r) => j<BlockedChannel[]>(r)),
 
-  blockYoutubeChannel: (input: { channel: string; handle?: string | null }) =>
+  blockYoutubeChannel: (input: { channel: string; handle?: string | null; categoryKey?: string | null }) =>
     fetch("/api/youtube/blocklist", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
