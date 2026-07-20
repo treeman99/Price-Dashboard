@@ -5,7 +5,16 @@ import { renderLineChartPng } from "./chart.ts";
 import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import { listStocks } from "../stock/tickers.ts";
-import { changeTone, formatPrice } from "../../shared/stock.ts";
+import {
+  changeTone,
+  effectiveRole,
+  formatPrice,
+  marketLabel,
+  roleLabel,
+  partitionWatchlist,
+  watchMarket,
+  foreignSectionTitle,
+} from "../../shared/stock.ts";
 import type {
   StockAnalysis,
   StockIndex,
@@ -54,11 +63,34 @@ function indexValue(v: number | null): string {
 function flagOf(m: StockMarket): string {
   return m === "kr" ? "🇰🇷" : "🇺🇸";
 }
-function titleOf(m: StockMarket): string {
-  return m === "kr" ? "국내증시 브리핑" : "미국증시 브리핑";
+/**
+ * 브리핑 제목. 역할이 붙으면 "미국증시 마감결산"/"미국증시 개장프리뷰" 로 갈린다.
+ *
+ * ⚠️ role='both'·한국장은 **현행 문자열을 1바이트도 바꾸지 않는다.** 사용자의 기존 메일
+ * 필터·검색이 깨지지 않아야 하고, 기존 테스트도 이 보증에 물려 있다.
+ */
+function titleOf(s: StockSnapshot): string {
+  const base = s.market === "kr" ? "국내증시" : "미국증시";
+  const label = roleLabel(effectiveRole(s));
+  return `${base} ${label ?? "브리핑"}`;
 }
-function subjectOf(s: StockSnapshot): string {
-  return `${flagOf(s.market)} ${titleOf(s.market)} - ${s.date}`;
+
+/**
+ * 이메일 제목.
+ *
+ * ⚠️ 역할별 분기는 **필수다.** 예전에는 두 슬롯의 제목이 `🇺🇸 미국증시 브리핑 - 2026-07-20` 으로
+ * **바이트 단위로 동일**했다(s.date 가 KST 수집일이라 같은 날 두 런이 같은 값). From/To 까지
+ * 같아서 Gmail 이 두 통을 한 스레드로 병합했고, 두 번째 메일이 접혀 사실상 보이지 않았다.
+ *
+ * 날짜만 갈라서도 안 된다 — 07-17 과 07-20 중 무엇이 결산인지 사용자가 외워야 한다.
+ * 역할 토큰 + 역할별로 의미 있는 날짜를 함께 쓴다.
+ */
+export function subjectOf(s: StockSnapshot): string {
+  const role = effectiveRole(s);
+  const head = `${flagOf(s.market)} ${titleOf(s)}`;
+  if (role === "close") return `${head} - ${s.sessionDate ?? s.date}(뉴욕)`;
+  if (role === "preview") return `${head} - ${s.sessionDate ?? s.date}(뉴욕) 밤`;
+  return `${head} - ${s.date}`;
 }
 
 /** CID 는 종목 단위로 유일해야 한다 — 한·미에 같은 심볼이 공존할 수 있어 market 을 함께 넣는다. */
@@ -146,10 +178,21 @@ function analysisCard(a: StockAnalysis, cid: string | null): string {
   </div>`;
 }
 
-function watchCard(w: StockWatchItem): string {
-  return `<div style="margin-bottom:10px;padding:12px 14px;background:#fffdf5;border-radius:8px;border-left:4px solid #f0ad4e">
+/**
+ * 관심 종목 카드. marketNote 가 있으면 '해외 참고' 항목이라 배경·보더를 앰버가 아닌
+ * 슬레이트-블루로 바꾸고 시장 칩을 붙여 **한눈에 다른 묶음임을 보이게** 한다.
+ * 통화 표기는 항목의 currency 만 보므로(shared/stock.ts formatPrice) 별도 분기가 필요 없다 —
+ * 해외 항목엔 verifyWatchlist 가 실제 시장의 통화를 붙여 두었다.
+ */
+function watchCard(w: StockWatchItem, marketNote?: string): string {
+  const bg = marketNote ? "#f5f7fb" : "#fffdf5";
+  const bar = marketNote ? "#5b7cfa" : "#f0ad4e";
+  const chip = marketNote
+    ? ` <span style="background:#e8edf7;color:#3f5185;border-radius:4px;padding:1px 6px;font-size:11px">${escapeHtml(marketNote)}</span>`
+    : "";
+  return `<div style="margin-bottom:10px;padding:12px 14px;background:${bg};border-radius:8px;border-left:4px solid ${bar}">
     <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(w.attention)} ${escapeHtml(w.name)}
-      <span style="color:#888;font-size:13px">${escapeHtml(w.symbol)}</span>
+      <span style="color:#888;font-size:13px">${escapeHtml(w.symbol)}</span>${chip}
       <span style="font-weight:600">${formatPrice(w.close, w.currency)}</span> ${pctBadge(w.changePct)}</h3>
     ${w.summary ? `<p style="margin:0;color:#444;font-size:13px;line-height:1.6">${escapeHtml(w.summary)}</p>` : ""}
     ${w.levels ? `<p style="margin:4px 0 0;color:#666;font-size:12px"><b>주목 가격대</b> ${escapeHtml(w.levels)}</p>` : ""}
@@ -168,10 +211,21 @@ function summaryTable(s: StockSnapshot): string {
       <td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#666">${rationale ? escapeHtml(rationale) : "-"}</td>
     </tr>`;
 
+  // 표에는 시장 컬럼이 없다. 해외 참고 항목을 관심 종목과 같은 💡 로 찍으면 카드에서 애써
+  // 분리한 게 표에서 다시 섞인다 → 프리픽스를 🌐 로 나누고 라벨에 시장명을 박는다.
+  const { domestic, foreign } = partitionWatchlist(s);
   const rows = [
     ...s.indices.map((i) => row(`📊 ${escapeHtml(i.name)}`, i.changePct, i.outlook, i.rationale)),
     ...s.analyses.map((a) => row(`📈 ${escapeHtml(a.name)}`, a.changePct, a.outlook, a.rationale)),
-    ...s.watchlist.map((w) => row(`💡 ${escapeHtml(w.name)}`, w.changePct, w.outlook, w.rationale)),
+    ...domestic.map((w) => row(`💡 ${escapeHtml(w.name)}`, w.changePct, w.outlook, w.rationale)),
+    ...foreign.map((w) =>
+      row(
+        `🌐 ${escapeHtml(w.name)}(${escapeHtml(marketLabel(watchMarket(w, s.market)))})`,
+        w.changePct,
+        w.outlook,
+        w.rationale
+      )
+    ),
   ].join("");
 
   if (!rows) return `<p style="color:#999">표에 담을 항목이 없습니다.</p>`;
@@ -185,11 +239,26 @@ function summaryTable(s: StockSnapshot): string {
   </table>`;
 }
 
+/**
+ * 헤더 서브라인의 거래일 병기.
+ *
+ * ⚠️ close/preview 는 `sessionDate !== date` 조건부 로직을 쓰면 안 된다. 프리뷰의 sessionDate
+ * 는 '오늘 밤 뉴욕 세션'이라 KST 수집일과 **같아지는 날이 대부분**이고, 그러면 대상 세션 표기가
+ * 조용히 사라진다. 역할이 있으면 항상 표시하고, 문구로 두 브리핑을 구분한다.
+ */
+function sessionLineOf(s: StockSnapshot): string {
+  const role = effectiveRole(s);
+  if (role === "close" && s.sessionDate) return ` · 간밤 뉴욕장(${escapeHtml(s.sessionDate)}) 마감 결산`;
+  if (role === "preview" && s.sessionDate)
+    return ` · 오늘 밤(${escapeHtml(s.sessionDate)}) 뉴욕장 개장 프리뷰`;
+  // both·한국장은 현행 조건부 로직 유지.
+  return s.sessionDate && s.sessionDate !== s.date ? ` · 거래일 ${escapeHtml(s.sessionDate)}` : "";
+}
+
 function shellHtml(s: StockSnapshot, body: string): string {
-  const session =
-    s.sessionDate && s.sessionDate !== s.date ? ` · 거래일 ${escapeHtml(s.sessionDate)}` : "";
+  const session = sessionLineOf(s);
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif;max-width:680px;margin:0 auto;padding:16px">
-    <h1 style="color:#1a1a2e;border-bottom:3px solid #1a1a2e;padding-bottom:8px">${flagOf(s.market)} ${titleOf(s.market)}</h1>
+    <h1 style="color:#1a1a2e;border-bottom:3px solid #1a1a2e;padding-bottom:8px">${flagOf(s.market)} ${titleOf(s)}</h1>
     <p style="color:#666;font-size:13px">${escapeHtml(s.date)}${session} · 대시보드: <a href="http://localhost:${config.port}">localhost:${config.port}</a></p>
     ${body}
     <hr style="margin-top:32px;border:none;border-top:1px solid #eee">
@@ -224,9 +293,24 @@ export function buildStockEmailHtml(s: StockSnapshot, chartSymbols?: ReadonlySet
   const indices = s.indices.length
     ? s.indices.map(indexCard).join("")
     : `<p style="color:#999">지수 데이터를 가져오지 못했습니다.</p>`;
-  const watchlist = s.watchlist.length
-    ? s.watchlist.map(watchCard).join("")
+  const { domestic, foreign } = partitionWatchlist(s);
+  const watchlist = domestic.length
+    ? domestic.map((w) => watchCard(w)).join("")
     : `<p style="color:#999">오늘 추려진 관심 종목이 없습니다.</p>`;
+  // 해외 참고는 **평소 0건이 정상**이다. 관심 종목처럼 플레이스홀더 문구를 두면
+  // 매일 '해외 참고 없음'이 뜨는 노이즈가 되므로 비면 섹션 자체를 렌더하지 않는다(웹과 동일).
+  const foreignSection = foreign.length
+    ? `
+    <h2 style="color:#5b7cfa;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">${escapeHtml(
+      foreignSectionTitle(s.market)
+    )}</h2>
+    <p style="color:#666;font-size:12px;margin:0 0 10px">${escapeHtml(
+      marketLabel(s.market)
+    )}에 상장되지 않은 종목입니다. 오늘 이 장에서 직접 거래되지 않으며, 시세·통화는 해당 종목의 상장 시장 기준입니다.</p>
+    ${foreign
+      .map((w) => watchCard(w, marketLabel(watchMarket(w, s.market))))
+      .join("")}`
+    : "";
 
   const body = `
     <h2 style="color:#4361ee;margin-top:28px;border-bottom:2px solid #eee;padding-bottom:6px">🌍 24시간 뉴스 브리핑</h2>
@@ -241,6 +325,7 @@ export function buildStockEmailHtml(s: StockSnapshot, chartSymbols?: ReadonlySet
     <h2 style="color:#f0ad4e;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">💡 오늘의 관심 종목</h2>
     ${watchlist}
     <p style="color:#8a6d3b;font-size:12px;background:#fff3cd;border-radius:6px;padding:8px 10px;margin-top:8px">관심 종목은 시장에서 거론되는 사실을 정리한 것으로 매수 추천이 아닙니다.</p>
+${foreignSection}
 
     <h2 style="color:#1a1a2e;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">📋 종합 테이블</h2>
     ${summaryTable(s)}
@@ -268,7 +353,8 @@ function renderStockChart(a: StockAnalysis): Buffer {
 
 /** 증시 브리핑 iMessage 텍스트(플레인). 이메일과 달리 '요약 + 메일 보라'가 목적이라 몇 줄로 끊는다. */
 export function stockIMessageText(s: StockSnapshot): string {
-  const head = `${flagOf(s.market)} ${titleOf(s.market)} (${s.date})`;
+  // 잠금화면 미리보기는 첫 줄만 보인다 → 역할 구분은 이 head 한 줄이 유일한 수단이다.
+  const head = `${flagOf(s.market)} ${titleOf(s)} (${s.date})`;
   const lines: string[] = [head];
 
   if (s.closed) {
@@ -279,7 +365,13 @@ export function stockIMessageText(s: StockSnapshot): string {
       .map((i) => `${i.name} ${indexValue(i.value)} ${pctText(i.changePct)}`)
       .join(" · ");
     if (idx) lines.push(idx);
-    lines.push(`등록 ${(s.analyses ?? []).length}종목 · 관심 ${(s.watchlist ?? []).length}종목`);
+    // 관심 건수는 domestic 기준으로 센다 — 배열이 하나라 그냥 length 를 쓰면 해외 참고가
+    // 관심 종목 수에 합산돼 채널마다 다시 섞인다. 해외 참고는 있을 때만 덧붙인다(500자 예산).
+    const { domestic, foreign } = partitionWatchlist(s);
+    lines.push(
+      `등록 ${(s.analyses ?? []).length}종목 · 관심 ${domestic.length}종목` +
+        (foreign.length ? ` · 해외참고 ${foreign.length}종목` : "")
+    );
     lines.push("📧 메일 확인!");
   }
 

@@ -57,6 +57,8 @@ function krInput(over: Partial<StockPromptInput> = {}): StockPromptInput {
       { name: "코스닥", value: 837.43, changePct: -0.11 },
     ],
     exchangeRate: { value: 1385.5, changePct: 0.2 },
+    // 기본 role 은 'both'(현행 혼합 브리핑) — 역할 분리 이전 동작을 그대로 단언하기 위해서다.
+    role: "both",
     ...over,
   };
 }
@@ -87,6 +89,7 @@ function usInput(over: Partial<StockPromptInput> = {}): StockPromptInput {
       { name: "나스닥", value: 20500.9, changePct: -0.44 },
     ],
     exchangeRate: null,
+    role: "both",
     ...over,
   };
 }
@@ -445,4 +448,94 @@ test("STOCK_DISCLAIMER — 추천 아님·책임 소재를 모두 명시한다",
   assert.match(STOCK_DISCLAIMER, /투자 판단의 근거로 사용하지 마세요/);
   assert.match(STOCK_DISCLAIMER, /매수 추천이 아니며/);
   assert.match(STOCK_DISCLAIMER, /투자 손실 책임은 투자자 본인/);
+});
+
+test("buildPrompt(kr): watchlist 지침에 미국 티커 예시가 없다 — 한국장에 NVDA 가 올라온 원인", () => {
+  const p = buildPrompt(krInput());
+  assert.ok(!p.includes("NVDA"), "한국장 프롬프트에 미국 티커 리터럴이 남으면 안 된다");
+  assert.ok(p.includes("**KRX 상장 종목만**"));
+  assert.ok(p.includes("해외 상장 종목을 watchlist 에 넣지 마라"));
+  // '해외 참고' 섹션의 존재를 모델에게 알리지 않는다 — 칸이 있다고 알려주면 채우기 시작한다.
+  assert.ok(!p.includes("해외 참고"), "구제 경로를 프롬프트에 노출하면 해외 종목 생산을 부추긴다");
+});
+
+test("buildPrompt(us): 미국장은 티커 예시를 쓰고 한국 종목을 금지한다", () => {
+  const p = buildPrompt({ ...krInput(), market: "us" });
+  assert.ok(p.includes('**티커**("AAPL")'));
+  assert.ok(p.includes("해외 상장 종목을 watchlist 에 넣지 마라"));
+  assert.ok(!p.includes("해외 참고"));
+});
+
+// ── buildPrompt: 미국장 역할 분기 ────────────────────────────────────
+//
+// role='both' 는 기존 usSection 을 그대로 재사용하므로 위쪽의 기존 단언들이 변경 없이
+// 통과한다 — 그것이 단일 슬롯 사용자의 하위호환 보증이다. 아래는 새 두 역할만 다룬다.
+
+test("buildPrompt(us/close) — 마감 결산만 다루고 오늘 밤 전망은 배제한다", () => {
+  const p = buildPrompt(usInput({ role: "close", sessionDate: "2026-07-17" }));
+  assert.match(p, /마감 결산/);
+  assert.match(p, /이미 마감된 뉴욕 세션/);
+  assert.match(p, /2026-07-17/);
+  // 결산 전용 주제
+  assert.match(p, /섹터별 등락/);
+  assert.match(p, /시간외/);
+  // 프리뷰 전용 주제가 새어 들어오면 두 브리핑이 같은 내용을 반복한다.
+  assert.doesNotMatch(p, /선물·프리마켓/);
+  assert.doesNotMatch(p, /오늘 밤 예정된 실적발표/);
+  // 오늘 밤 전망 금지 지시가 실제로 들어 있어야 한다.
+  assert.match(p, /오늘 밤 개장 전망은 담지 마라/);
+});
+
+test("buildPrompt(us/preview) — 아직 열리지 않은 세션임을 못박고 결산 반복을 금한다", () => {
+  const p = buildPrompt(usInput({ role: "preview", sessionDate: "2026-07-20" }));
+  assert.match(p, /개장 프리뷰/);
+  assert.match(p, /아직 열리지 않았다/); // 섹션 본문
+  assert.match(p, /아직 개장 전이다/); // 헤더 거래일 문장
+  assert.match(p, /2026-07-20/);
+  // 프리뷰 전용 주제
+  assert.match(p, /선물·프리마켓/);
+  assert.match(p, /CPI·고용·FOMC/);
+  // 지어낸 종가 방지 — 이 프롬프트의 최대 위험이라 문구를 테스트로 못박는다.
+  assert.match(p, /절대 지어내지 마라/);
+  assert.match(p, /직전 마감 세션 기준/);
+  // 결산 전용 상세 주제는 빠져야 한다.
+  assert.doesNotMatch(p, /섹터별 등락/);
+});
+
+test("buildPrompt — 역할별 뉴스 bucket 목록이 프롬프트에 반영된다", () => {
+  const close = buildPrompt(usInput({ role: "close" }));
+  assert.ok(close.includes("전일 마감"));
+  assert.doesNotMatch(close, /"오늘 밤 일정"/);
+
+  const preview = buildPrompt(usInput({ role: "preview" }));
+  assert.ok(preview.includes("오늘 밤 일정"));
+  assert.doesNotMatch(preview, /"전일 마감"/);
+});
+
+test("normalizeBucket — 역할별 목록 밖 값은 중립 버킷('산업·기업')으로 접힌다", () => {
+  // ⚠️ normalizeBucket 은 목록 밖 값을 드롭하지 않고 **배열의 마지막 원소**로 접는다.
+  // 폴백 목적지가 "관심 종목 후보"(투자 추천 오해 소지)가 되면 안 되므로 두 목록 모두
+  // 마지막을 "산업·기업" 으로 고정했다. 목록 순서를 건드리면 여기서 걸린다.
+  assert.equal(normalizeBucket("오늘 밤 일정", "us", "close"), "산업·기업");
+  assert.equal(normalizeBucket("전일 마감", "us", "preview"), "산업·기업");
+  assert.equal(normalizeBucket("지어낸분류", "us", "close"), "산업·기업");
+  // 각 역할의 고유 버킷은 그대로 통과한다.
+  assert.equal(normalizeBucket("전일 마감", "us", "close"), "전일 마감");
+  assert.equal(normalizeBucket("오늘 밤 일정", "us", "preview"), "오늘 밤 일정");
+  assert.equal(normalizeBucket("선물·프리마켓", "us", "preview"), "선물·프리마켓");
+  // role 미지정(=both)은 현행 목록·현행 폴백 그대로.
+  assert.equal(normalizeBucket("지어낸분류", "us"), "관심 종목 후보");
+});
+
+test("스냅샷 생성 3경로 모두 role/slot 을 실어야 한다", () => {
+  // 한 경로라도 빠뜨리면 그 경로의 브리핑만 화면·메일에서 역할 라벨을 잃는다.
+  const meta = { role: "close" as const, roleReason: "slot=08:00", slot: "08:00" };
+  const empty = emptySnapshot("us", "2026-07-20", "실패", "2026-07-17", meta);
+  assert.equal(empty.role, "close");
+  assert.equal(empty.slot, "08:00");
+  const holiday = holidaySnapshot("us", "2026-07-18", "2026-07-17", "주말", meta);
+  assert.equal(holiday.role, "close");
+  assert.equal(holiday.slot, "08:00");
+  // 메타를 안 넘기면 필드가 없다 → 읽는 쪽이 effectiveRole 로 'both' 로 접는다.
+  assert.equal(emptySnapshot("kr", "2026-07-20", "실패").role, undefined);
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildStockEmailHtml, stockIMessageText } from "./stock-email.ts";
+import { buildStockEmailHtml, stockIMessageText, subjectOf } from "./stock-email.ts";
 import type { StockAnalysis, StockSnapshot, StockWatchItem } from "../../shared/types.ts";
 
 const DISCLAIMER = "본 정보는 투자 권유가 아니며 투자 판단의 책임은 본인에게 있습니다.";
@@ -279,4 +279,139 @@ test("buildStockEmailHtml: verified=false 면 '시세 미검증' 배지", () => 
   const html = buildStockEmailHtml(snapshot({ analyses: [analysis({ verified: false })] }));
   assert.ok(html.includes("시세 미검증"));
   assert.ok(!buildStockEmailHtml(snapshot()).includes("시세 미검증"));
+});
+
+// ── 해외 참고 분리 ─────────────────────────────────────────────
+// 한국장 브리핑에 NVDA 가 '오늘의 관심 종목'으로, 그것도 원화 표기로 실렸던 사건의 회귀 방지.
+
+function foreignWatch(): StockWatchItem {
+  return {
+    ...analysis({
+      symbol: "NVDA",
+      name: "엔비디아",
+      quoteCode: "NVDA.O",
+      close: 187.42,
+      currency: "USD", // verifyWatchlist 가 us 시장 조회 결과로 확정한 통화
+    }),
+    attention: "🔥강",
+    levels: null,
+    market: "us",
+  };
+}
+
+test("buildStockEmailHtml: 타 시장 종목은 관심 종목이 아니라 '해외 참고' 섹션으로 간다", () => {
+  const html = buildStockEmailHtml(snapshot({ watchlist: [foreignWatch()] }));
+  const foreignAt = html.indexOf("🌐 해외 참고");
+  assert.ok(foreignAt > 0, "해외 참고 섹션이 렌더되어야 한다");
+  // 관심 종목 섹션은 비었으므로 플레이스홀더가 뜬다(해외 항목이 그 자리를 차지하면 안 된다).
+  assert.ok(html.includes("오늘 추려진 관심 종목이 없습니다."));
+  // 통화는 항목 기준 — 원화로 새면 안 된다.
+  assert.ok(html.includes("$187.42"));
+  assert.ok(!html.includes("187원"));
+});
+
+test("buildStockEmailHtml: 해외 참고는 관심 종목 뒤·종합 테이블 앞에 온다", () => {
+  const html = buildStockEmailHtml(snapshot({ watchlist: [foreignWatch()] }));
+  const order = ["💡 오늘의 관심 종목", "🌐 해외 참고", "📋 종합 테이블"];
+  let at = -1;
+  for (const s of order) {
+    const i = html.indexOf(s);
+    assert.ok(i > at, `${s} 섹션 순서 오류`);
+    at = i;
+  }
+});
+
+test("buildStockEmailHtml: 해외 참고가 0건이면 섹션 자체를 렌더하지 않는다", () => {
+  // 평소 0건이 정상이라 '해외 참고 없음' 플레이스홀더는 매일 뜨는 노이즈가 된다.
+  assert.ok(!buildStockEmailHtml(snapshot()).includes("🌐 해외 참고"));
+});
+
+test("buildStockEmailHtml: 종합 테이블에서 해외 항목은 🌐 + 시장명으로 구분된다", () => {
+  // 표에는 시장 컬럼이 없어 라벨에 안 넣으면 카드에서 분리한 게 표에서 다시 섞인다.
+  const html = buildStockEmailHtml(snapshot({ watchlist: [foreignWatch()] }));
+  assert.ok(html.includes("🌐 엔비디아(미국장)"));
+  assert.ok(!html.includes("💡 엔비디아"));
+});
+
+test("buildStockEmailHtml: 미국장 브리핑의 한국 종목은 '국내(한국) 참고'로 부른다", () => {
+  // 한국 사용자에게 삼성전자를 '해외'라 부르면 틀린 말이다 — 라벨은 시장 상대적이다.
+  const kr: StockWatchItem = { ...analysis(), attention: "⚡중", levels: null, market: "kr" };
+  const html = buildStockEmailHtml(snapshot({ market: "us", watchlist: [kr] }));
+  assert.ok(html.includes("🌐 국내(한국) 참고"));
+});
+
+test("stockIMessageText: 관심 건수는 자국 기준이고 해외 참고는 있을 때만 덧붙는다", () => {
+  const s = snapshot({ watchlist: [foreignWatch()] });
+  assert.match(stockIMessageText(s), /등록 1종목 · 관심 0종목 · 해외참고 1종목/);
+  // 해외 항목이 없으면 기존 문구 그대로(불필요한 500자 예산 소모 없음)
+  assert.match(stockIMessageText(snapshot()), /등록 1종목 · 관심 1종목$/m);
+});
+
+test("하위호환: market 태그 없는 옛 스냅샷은 전부 관심 종목으로 렌더된다", () => {
+  // loadFromDisk 가 `as StockSnapshot` 캐스트라 옛 JSON 이 그대로 흐른다.
+  // 후퇴 방지 가드 때문에 옛 파일이 며칠씩 서빙될 수 있어 실제로 밟히는 경로다.
+  const legacy = snapshot(); // watchlist 항목에 market 키가 없다
+  assert.equal(legacy.watchlist[0].market, undefined);
+  const html = buildStockEmailHtml(legacy);
+  assert.ok(html.includes("SK하이닉스"));
+  assert.ok(!html.includes("🌐 해외 참고"));
+  assert.match(stockIMessageText(legacy), /관심 1종목/);
+});
+
+// ── 역할 라벨 (마감결산 / 개장프리뷰) ────────────────────────────────
+//
+// 역할 분리 전에는 같은 날 두 슬롯의 subject 가 `🇺🇸 미국증시 브리핑 - 2026-07-20` 으로
+// **바이트 단위로 동일**했다(s.date 가 KST 수집일이라 두 런이 같은 값). From/To 까지 같아
+// Gmail 이 두 통을 한 스레드로 병합했고 두 번째 메일이 접혔다. 아래가 그 회귀 방지선이다.
+
+test("subject — role 이 없으면 현행 문자열 그대로(구 스냅샷·단일 슬롯 하위호환)", () => {
+  assert.equal(subjectOf(snapshot()), "🇰🇷 국내증시 브리핑 - 2026-07-17");
+  assert.equal(
+    subjectOf(snapshot({ market: "us", role: "both" })),
+    "🇺🇸 미국증시 브리핑 - 2026-07-17"
+  );
+});
+
+test("subject — 두 역할의 제목이 서로 달라야 한다(Gmail 스레드 병합 방지)", () => {
+  const close = subjectOf(
+    snapshot({ market: "us", role: "close", date: "2026-07-20", sessionDate: "2026-07-17" })
+  );
+  const preview = subjectOf(
+    snapshot({ market: "us", role: "preview", date: "2026-07-20", sessionDate: "2026-07-20" })
+  );
+  assert.notEqual(close, preview, "같은 날 두 슬롯의 제목이 동일하면 Gmail 이 스레드로 묶는다");
+  // 역할 토큰이 있어야 한다 — 날짜만 다르면 사용자가 무엇이 결산인지 외워야 한다.
+  assert.match(close, /마감결산/);
+  assert.match(close, /2026-07-17/);
+  assert.match(preview, /개장프리뷰/);
+  assert.match(preview, /2026-07-20/);
+});
+
+test("본문 h1 도 역할별로 갈린다 — 제목만 바꾸면 메일을 연 순간 다시 구분 불가", () => {
+  const close = buildStockEmailHtml(
+    snapshot({ market: "us", role: "close", date: "2026-07-20", sessionDate: "2026-07-17" })
+  );
+  assert.match(close, /미국증시 마감결산/);
+  assert.match(close, /간밤 뉴욕장\(2026-07-17\) 마감 결산/);
+
+  const preview = buildStockEmailHtml(
+    snapshot({ market: "us", role: "preview", date: "2026-07-20", sessionDate: "2026-07-20" })
+  );
+  assert.match(preview, /미국증시 개장프리뷰/);
+  // ⚠️ 프리뷰는 sessionDate 와 date 가 같다. 예전 `sessionDate !== date` 조건부 병기였다면
+  // 대상 세션 표기가 통째로 사라졌을 자리다.
+  assert.match(preview, /오늘 밤\(2026-07-20\) 뉴욕장 개장 프리뷰/);
+});
+
+test("iMessage head 에도 역할 토큰이 들어간다(잠금화면은 첫 줄만 보인다)", () => {
+  const close = stockIMessageText(
+    snapshot({ market: "us", role: "close", date: "2026-07-20", sessionDate: "2026-07-17" })
+  );
+  assert.match(close.split("\n")[0], /마감결산/);
+  const preview = stockIMessageText(
+    snapshot({ market: "us", role: "preview", date: "2026-07-20", sessionDate: "2026-07-20" })
+  );
+  assert.match(preview.split("\n")[0], /개장프리뷰/);
+  // role 없는 구 스냅샷은 현행 문구 유지.
+  assert.match(stockIMessageText(snapshot()).split("\n")[0], /국내증시 브리핑/);
 });

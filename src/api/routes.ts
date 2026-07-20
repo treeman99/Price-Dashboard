@@ -824,11 +824,29 @@ api.get("/stock/search", async (req, res) => {
   }
 });
 
-/** 최신 증시 브리핑 스냅샷 (아직 수집 전이면 null). */
+/**
+ * 최신 증시 브리핑 스냅샷 (아직 수집 전이면 null).
+ *
+ * 미국장은 슬롯마다 성격이 다른 스냅샷이 최대 3개 공존한다(마감결산/개장프리뷰/혼합).
+ * 응답 shape 을 깨지 않기 위해 **본문은 여전히 '가장 최신' 스냅샷 하나**이고,
+ * 역할별 스냅샷은 `variants` 필드로 **덧붙인다**(기존 프론트는 이 필드를 무시하면 그만이다).
+ * `?role=close|preview|both` 로 단건 조회도 가능하다.
+ */
 api.get("/stock/:market", (req, res) => {
   const market = parseMarket(req.params.market);
   if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
-  res.json(getStockSnapshot(market));
+  const q = req.query.role;
+  if (q === "close" || q === "preview" || q === "both") return res.json(getStockSnapshot(market, q));
+  const latest = getStockSnapshot(market);
+  if (!latest) return res.json(null);
+  res.json({
+    ...latest,
+    variants: {
+      close: getStockSnapshot(market, "close"),
+      preview: getStockSnapshot(market, "preview"),
+      both: getStockSnapshot(market, "both"),
+    },
+  });
 });
 
 /** 증시 수집 진행 상태(프론트 폴링용). */
@@ -850,6 +868,10 @@ api.post("/stock/:market/refresh", (req, res) => {
   if (isStockCollecting(market)) {
     return res.status(409).json({ error: "이미 증시 수집이 진행 중입니다.", collecting: true });
   }
+  // slot 미지정 → refreshStock 이 런 시작 시각 기준 '가장 최근 지난 슬롯'에 귀속시킨다.
+  // 그 슬롯이 이미 발송됐으면 조용히 스킵, 미발송이면 여기서 보충 발송된다.
+  // 오늘 지난 슬롯이 아직 없으면(첫 슬롯 이전) 알림 없이 화면만 갱신한다 — 보내면 곧 오는
+  // 첫 정시 슬롯이 같은 브리핑을 한 번 더 보낸다. '지난 슬롯만 후보'라 미래 슬롯 선점도 없다.
   void refreshStock({ market, trigger: "manual", notify: true }).catch((e) =>
     log.warn(`증시 수동 수집 예외 [${market}]: ${(e as Error).message}`)
   );

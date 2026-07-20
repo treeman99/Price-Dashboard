@@ -54,8 +54,15 @@ export function StockCard({
   onMove,
   onChanged,
   disabled,
+  marketNote,
 }: {
   analysis: StockAnalysis | StockWatchItem;
+  /**
+   * '해외 참고' 항목의 실제 시장 라벨(예: "미국장"). 있으면 심볼 줄에 배지로 뜬다.
+   * 카드를 dumb 하게 유지하려고 명시적 prop 으로 받는다 — 관심 종목과 해외 참고는
+   * 둘 다 StockWatchItem 이라 구조만으로는 구별할 수 없다.
+   */
+  marketNote?: string;
   /** 등록 종목이면 원장 행. '오늘의 관심 종목'은 원장에 없어 undefined — 편집 UI를 숨긴다. */
   ticker?: StockTicker;
   canUp?: boolean;
@@ -143,6 +150,16 @@ export function StockCard({
                   {watch.attention}
                 </Badge>
               )}
+              {/* 해외 참고 항목의 실제 시장. "attention" in analysis 만으로는 관심/해외참고를
+                  구별할 수 없어(둘 다 StockWatchItem) 섹션이 명시적으로 내려준다. */}
+              {marketNote && (
+                <Badge className="border-slate-200 bg-slate-100 px-1.5 py-0 text-[10px] font-normal text-slate-600">
+                  {marketNote}
+                </Badge>
+              )}
+              {/* ⚠️ 이 배지는 **등록 종목(analyses) 전용**이다 — curate.ts 가 `verified: q.close != null`
+                  로 여전히 false 를 만든다. 관심 종목·해외 참고는 드롭 정책상 verified=false 가
+                  도달하지 않을 뿐이므로 데드코드로 오인해 지우지 말 것. */}
               {analysis.verified === false && (
                 <Badge
                   className="border-amber-200 bg-amber-100 px-1.5 py-0 text-[10px] font-normal text-amber-700"

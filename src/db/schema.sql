@@ -126,7 +126,11 @@ CREATE TABLE IF NOT EXISTS stock_runs (
   started_at  TEXT NOT NULL,
   finished_at TEXT,
   ok          INTEGER NOT NULL DEFAULT 0,
-  detail      TEXT,                      -- JSON: { notified: { email, imessage }, ... }
+  -- JSON: { notifiedBySlot: { "08:00": { email, imessage }, ... }, ... }
+  -- ⚠️ 알림 멱등 키는 (date, market, **슬롯 시각**) 이다. 하루 복수 슬롯을 지원해야 하는데
+  -- SQLite 는 PK 를 ALTER 로 못 바꾸고 migrate() 에 테이블 재작성 전례가 없어,
+  -- 슬롯 차원을 이 자유형 JSON 안에 맵으로 둔다(상세: src/stock/notify-ledger.ts).
+  detail      TEXT,
   PRIMARY KEY (date, market)
 );
 

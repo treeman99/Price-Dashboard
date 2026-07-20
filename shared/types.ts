@@ -470,15 +470,25 @@ export interface BlockedChannel {
   blockedAt: string;
 }
 
-// ── 증시 브리핑 (한국장 08:00 개장 전 / 미국장 18:00 결산+프리뷰) ──
+// ── 증시 브리핑 (한국장 = 개장 전 프리뷰 / 미국장 = 슬롯별 마감결산·개장프리뷰) ──
 //
 // ⚠️ 이 섹션에는 서로 다른 '날짜' 개념이 두 개 공존한다. 헷갈리면 차트 x축이 하루씩 밀린다.
 //   · StockPoint.date / StockSnapshot.sessionDate → **거래소 로컬 거래일**
 //   · StockSnapshot.date                          → **서버 로컬 수집일**(KST)
-// 미국장은 이 둘이 거의 항상 다르다(18:00 KST 수집 = 전날 뉴욕 거래일).
+// 미국장은 이 둘이 다를 수 있다. role='close'(간밤 결산)면 거의 항상 다르고,
+// role='preview'(오늘 밤 프리뷰)면 오늘 밤 뉴욕 날짜라 KST 수집일과 같아지는 날이 많다.
 
 /** 거래소 구분. 'kr'=KRX(코스피·코스닥), 'us'=NYSE·NASDAQ. */
 export type StockMarket = "kr" | "us";
+
+/**
+ * 브리핑의 성격. 슬롯 시각에서 유도한다(src/stock/slot-role.ts).
+ * - 'close'   = 간밤에 **마감된** 뉴욕 세션의 결산 (아침 슬롯)
+ * - 'preview' = 오늘 밤 **열릴** 뉴욕 세션의 개장 프리뷰 (오후 슬롯)
+ * - 'both'    = 두 성격을 한 브리핑에 담는 현행 혼합본. 역할 분리가 비활성일 때의 폴백이며
+ *               **하위호환의 기본값**이다(구 스냅샷의 role 부재도 이 값으로 읽는다).
+ */
+export type StockSlotRole = "close" | "preview" | "both";
 
 /**
  * 사용자가 등록한 관심 종목 1건(원장).
@@ -589,7 +599,13 @@ export interface StockAnalysis {
   risks: string;
   /** 한줄 판단 이모지: 📈 / 📉 / ➡️ */
   verdict: string;
-  /** 시세를 결정론적 소스로 검증했는지. false면 화면에 '시세 미검증' 표시. */
+  /**
+   * 시세를 결정론적 소스로 검증했는지.
+   * - analyses(등록 종목): **false 가 될 수 있다**(curate.ts 의 `verified: q.close != null`).
+   *   화면·메일이 '시세 미검증' 배지를 띄운다 — 이 배지는 등록 종목 전용이다.
+   * - watchlist: **항상 true**. 검증 실패 항목은 verifyWatchlist 가 드롭하므로
+   *   false 인 watchlist 항목은 더 이상 생성되지 않는다(옛 스냅샷에는 남아 있을 수 있다).
+   */
   verified: boolean;
 }
 
@@ -602,14 +618,48 @@ export interface StockWatchItem extends StockAnalysis {
   attention: string;
   /** 단기 지지/저항 등 주목 가격대 서술. */
   levels: string | null;
+  /**
+   * 이 종목이 **실제로 상장된 시장**. verifyWatchlist 가 네이버 자동완성 후보의
+   * nationCode 로 확정해 붙인다. StockSnapshot.market 과 다르면 '해외 참고' 항목이다.
+   *
+   * 옵셔널인 이유: 이 필드 도입 이전에 저장된 스냅샷 JSON 에는 키가 없다
+   * (loadFromDisk 가 `as StockSnapshot` 캐스트라 런타임 검증이 없다).
+   * 읽는 쪽은 반드시 `partitionWatchlist` 를 거친다. 옛 항목 중 **verified===true** 인 것만
+   * '스냅샷 시장 소속'이 보장되고(옛 verifyWatchlist 가 c.market===market 로 거른 뒤에만
+   * 시세를 붙였다), `태그 없음 && verified!==true` 는 옛 정책이 통과시킨 오염 의심 항목이라
+   * 렌더에서 제외된다(한국장 스냅샷의 NVDA 가 그 사례).
+   */
+  market?: StockMarket;
 }
 
 export interface StockSnapshot {
   market: StockMarket;
   /** 서버 로컬 수집일 YYYY-MM-DD (KST). */
   date: string;
-  /** 브리핑이 다루는 **거래소 로컬 거래일**. 미국장 18:00 런이면 전날 뉴욕 거래일. */
+  /**
+   * 브리핑이 다루는 **거래소 로컬 거래일**. 의미가 role 별로 다르다:
+   * - role='close'   → 이미 **마감된** 직전 뉴욕 거래일(lastUsSessionDate)
+   * - role='preview' → **오늘 밤 열릴** 뉴욕 거래일(= KST 수집일과 같은 날짜)
+   * - role='both'    → 직전 마감 거래일(현행 혼합본과 동일)
+   * - kr             → 오늘(09:00 개장 전) 또는 다음 거래일(휴장 시)
+   * ⚠️ preview 는 이 날짜가 date 와 같아질 수 있다. `sessionDate !== date` 조건으로 거래일
+   *    표기를 켜고 끄면 프리뷰에서 대상 세션이 화면에서 조용히 사라진다 — 렌더는 role 로 분기할 것.
+   */
   sessionDate: string | null;
+  /**
+   * 이 브리핑의 성격. **옵셔널이어야 한다** — loadFromDisk 가 `as StockSnapshot` 캐스트라
+   * 런타임 검증이 전혀 없고, 이 필드 도입 이전에 저장된 디스크 스냅샷에는 키가 없다
+   * (StockWatchItem.market 과 같은 패턴). 읽는 쪽은 **반드시** shared/stock.ts 의
+   * effectiveRole() 을 거쳐 undefined 를 'both' 로 접을 것.
+   *
+   * ⚠️ source('llm'|'empty'|'holiday')를 재활용해 역할을 표현하면 안 된다. 후퇴 방지 가드와
+   *    알림 게이트(stock.ts)가 그 값을 분기 조건으로 쓰고 있어 값이 늘면 판정이 오염된다.
+   */
+  role?: StockSlotRole;
+  /** 역할 판정 근거(로그·화면 툴팁용). 예: "slot=08:00 close 밴드 / 분리 활성" */
+  roleReason?: string;
+  /** 귀속 슬롯("HH:mm" 또는 "manual"). catch-up 게이트(hasSnapshotForSlot)와 표시에 쓴다. */
+  slot?: string;
   updatedAt: string;
   /**
    * 'llm'=정상 큐레이션, 'empty'=수집 실패, 'holiday'=휴장(정상 결과).
@@ -625,7 +675,13 @@ export interface StockSnapshot {
   news: StockNewsItem[];
   /** 사용자 등록 종목 분석. */
   analyses: StockAnalysis[];
-  /** 오늘의 관심 종목(사실 요약). 등록 종목과 겹치지 않는다. */
+  /**
+   * 오늘의 관심 종목(사실 요약). 등록 종목과 겹치지 않는다.
+   * ⚠️ **이 시장 종목과 '해외 참고'(타 시장) 항목이 한 배열에 섞여 있다.** 항목의 market 태그로
+   *    렌더 계층이 분리한다 — 반드시 shared/stock.ts 의 partitionWatchlist 를 거쳐 렌더할 것.
+   *    그냥 통째로 그리면 한국장 브리핑에 NVDA 가 섞여 보이던 원래 버그가 재발한다.
+   * 시세가 검증된 항목만 들어온다(검증 실패는 verifyWatchlist 가 드롭).
+   */
   watchlist: StockWatchItem[];
   /** 전 채널(화면·메일·iMessage)에 노출되는 면책 문구. */
   disclaimer: string;

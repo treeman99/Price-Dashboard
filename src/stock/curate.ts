@@ -11,6 +11,7 @@ import type {
   StockWatchItem,
   StockIndex,
   StockPoint,
+  StockSlotRole,
 } from "../../shared/types.ts";
 
 /**
@@ -27,6 +28,28 @@ export const NEWS_BUCKETS: Record<StockMarket, string[]> = {
   kr: ["해외 시장", "환율·금리", "산업·기업", "수급", "관심 종목 후보"],
   us: ["전일 마감", "금리·통화", "산업·기업", "오늘 밤 일정", "관심 종목 후보"],
 };
+
+/**
+ * 미국장 **역할별** 뉴스 분류. NEWS_BUCKETS.us 는 결산용("전일 마감")과 프리뷰용
+ * ("오늘 밤 일정")이 섞인 혼합(both) 목록이라, 역할을 나누면 각각 반대쪽 버킷이 부적합해진다.
+ *
+ * ⚠️ **마지막 원소는 의도적으로 "산업·기업" 이다.** normalizeBucket 은 목록 밖 값을 드롭하지
+ * 않고 배열의 **마지막 원소로 접는다**. 프리뷰 런에서 모델이 "전일 마감" 을 뱉었을 때 그것이
+ * "관심 종목 후보"(= 투자 추천으로 오해될 소지가 있는 자리)로 둔갑하면 안 되므로, 폴백
+ * 목적지를 가장 중립적인 버킷으로 고정한다. **목록 순서를 나중에 건드리지 말 것.**
+ * (렌더는 이메일·웹 모두 `bucket || "기타"` 동적 그룹핑이라 목록 변경만으로는 깨지지 않는다.)
+ */
+export const US_NEWS_BUCKETS_BY_ROLE: Record<"close" | "preview", string[]> = {
+  close: ["전일 마감", "금리·통화", "관심 종목 후보", "산업·기업"],
+  preview: ["오늘 밤 일정", "선물·프리마켓", "금리·통화", "관심 종목 후보", "산업·기업"],
+};
+
+/** 이 브리핑에 쓸 뉴스 분류 목록. 미국장 close/preview 만 좁히고 나머지는 현행 목록. */
+export function bucketsFor(market: StockMarket, role: StockSlotRole): string[] {
+  if (market === "us" && (role === "close" || role === "preview"))
+    return US_NEWS_BUCKETS_BY_ROLE[role];
+  return NEWS_BUCKETS[market];
+}
 
 /** verdict 로 허용되는 이모지. 그 외 값은 중립(➡️)으로 접는다. */
 const VERDICTS = ["📈", "📉", "➡️"];
@@ -63,8 +86,13 @@ export interface StockPromptInput {
   market: StockMarket;
   /** 서버 로컬 수집일(KST) YYYY-MM-DD. */
   today: string;
-  /** 브리핑이 다루는 거래소 로컬 거래일. */
+  /** 브리핑이 다루는 거래소 로컬 거래일. role 별로 의미가 다르다(StockSnapshot.sessionDate 주석). */
   sessionDate: string | null;
+  /**
+   * 브리핑 성격. **필수 필드로 둔다** — 옵셔널이면 호출부가 빠뜨렸을 때 조용히 'both' 로
+   * 빠져 회귀를 못 잡는다. 호출부는 stock.ts 한 곳뿐이라 파급이 작다.
+   */
+  role: StockSlotRole;
   /** "YYYY-MM-DD HH:mm" 형태의 현재 시각 라벨. */
   now: string;
   /** 사용자 등록 종목 + 확정 시세. */
@@ -143,7 +171,83 @@ function krSection(input: StockPromptInput): string {
 뉴스 분류(bucket) — 반드시 이 중 하나로만 표기: ${NEWS_BUCKETS.kr.map((b) => `"${b}"`).join(", ")}`;
 }
 
-/** 미국장(뉴욕 종가 결산 + 오늘 밤 개장 프리뷰) 조사 지침. */
+/** 전 미국장 섹션이 공유하는 도구 호출 규칙(병렬 호출 금지). */
+const US_TOOL_RULE = `⛔ **도구는 반드시 한 번에 하나씩만 호출하라. 여러 WebSearch 를 한 턴에 병렬로 날리지 마라.**
+(병렬 호출 시 tool_use id 가 중복돼 API 가 400 을 뱉고 브리핑 전체가 실패한다 — 실측된 실패다.)
+검색 → 결과 확인 → 다음 검색 순서로 진행하라.`;
+
+function bucketRule(market: StockMarket, role: StockSlotRole): string {
+  return `뉴스 분류(bucket) — 반드시 이 중 하나로만 표기: ${bucketsFor(market, role)
+    .map((b) => `"${b}"`)
+    .join(", ")}`;
+}
+
+/**
+ * 미국장 **마감결산**(role='close') 조사 지침 — 아침 슬롯.
+ *
+ * sessionDate 는 **이미 마감된** 뉴욕 세션이다. 확정된 결과만 다루고, 오늘 밤 전망은
+ * 같은 날 오후의 별도 프리뷰 브리핑이 담당한다. 두 브리핑이 같은 내용을 반복하면
+ * 슬롯을 나눈 의미가 없어진다.
+ */
+function usCloseSection(input: StockPromptInput): string {
+  return `이 브리핑은 **간밤에 마감된 뉴욕 세션(${
+    input.sessionDate ?? "(거래일 미상)"
+  })의 마감 결산**이다.
+이미 **확정된 결과**만 다뤄라. **오늘 밤 개장 전망은 담지 마라** — 오늘 오후에 별도의
+'개장 프리뷰' 브리핑이 따로 나가므로, 여기서 전망을 쓰면 같은 내용이 하루 두 번 반복된다.
+
+${US_TOOL_RULE}
+
+조사 주제(주제별로 하나씩 순차 WebSearch):
+1. 해당 거래일 뉴욕 3대 지수(다우·S&P500·나스닥) 마감 결과와 **그 원인**
+2. 섹터별 등락(무엇이 오르고 무엇이 빠졌는지)
+3. 아래 등록 종목 각각의 관련 뉴스·실적·공시
+4. **마감 후 시간외(after-hours) 실적 발표와 그 반응**
+5. 미국 국채금리·달러 인덱스·유가의 그날 움직임
+6. 연준(Fed) 인사 발언·정책 기대
+7. AI·반도체 업황
+
+${bucketRule(input.market, "close")}`;
+}
+
+/**
+ * 미국장 **개장프리뷰**(role='preview') 조사 지침 — 오후 슬롯.
+ *
+ * ⚠️ sessionDate 가 **아직 열리지 않은** 세션이라는 점이 이 프롬프트의 핵심 위험이다.
+ * 모델이 그 날짜의 '종가'를 지어낼 유인이 결산보다 훨씬 크므로 명시적으로 금지한다.
+ * (숫자 필드 자체는 quote.ts 값으로 덮어써지지만, 서술문 안의 숫자는 덮어쓸 수 없다.)
+ */
+function usPreviewSection(input: StockPromptInput): string {
+  return `이 브리핑은 **오늘 밤(한국시간) 열릴 뉴욕 세션(${
+    input.sessionDate ?? "(거래일 미상)"
+  })의 개장 프리뷰**다.
+⛔ 이 세션은 **아직 열리지 않았다.** 이 날짜의 확정 종가·등락률은 존재하지 않으니 **절대 지어내지 마라.**
+   [확정 시세] 표의 숫자는 전부 **직전 마감 세션 기준**이다 — 인용할 때 그 사실을 명시하라.
+⛔ 직전 세션 마감 결산은 **오늘 아침에 이미 별도 브리핑으로 나갔다.** 배경으로 한 줄만 언급하고
+   상세 복기(지수별 마감·섹터 등락 나열)를 반복하지 마라.
+
+${US_TOOL_RULE}
+
+조사 주제(주제별로 하나씩 순차 WebSearch):
+1. **오늘 밤 예정된 실적발표·경제지표**(CPI·고용·FOMC 등) 일정
+2. 선물·프리마켓 동향
+3. 오늘 밤 시장에서 주목받는 종목과 그 이유
+4. 아래 등록 종목 각각의 관련 뉴스·실적·공시
+5. 간밤 아시아·유럽장 흐름이 오늘 밤 뉴욕장에 주는 신호
+6. 미국 국채금리·달러 인덱스·유가
+7. 연준(Fed) 인사 발언·정책 기대
+8. AI·반도체 업황
+
+${bucketRule(input.market, "preview")}`;
+}
+
+/**
+ * 미국장 **혼합**(role='both') 조사 지침 — 결산과 프리뷰를 한 브리핑에 담는 현행 동작.
+ *
+ * 역할 분리가 비활성일 때(슬롯 1개, 같은 밴드 슬롯만, 안전대 밖 슬롯, 수동 갱신) 쓰인다.
+ * ⚠️ **이 함수의 문구는 한 글자도 바꾸지 마라.** 단일 슬롯 사용자의 브리핑이 배포로 인해
+ * 달라지지 않는다는 하위호환 보증이 여기 걸려 있다.
+ */
 function usSection(input: StockPromptInput): string {
   return `이 브리핑은 성격이 둘이다: **어젯밤 뉴욕 종가 결산(${
     input.sessionDate ?? "(거래일 미상)"
@@ -176,13 +280,50 @@ function usSection(input: StockPromptInput): string {
  */
 export function buildPrompt(input: StockPromptInput): string {
   const marketName = input.market === "kr" ? "한국장(KRX)" : "미국장(뉴욕)";
-  const section = input.market === "kr" ? krSection(input) : usSection(input);
+  // 한국장은 슬롯이 하나이고 krSection 이 이미 '개장 전 프리뷰' 전용 문안이라 역할 분기가 없다.
+  // 미국장만 3분기 — 'both' 는 기존 usSection 을 그대로 재사용해 현행 동작을 보존한다.
+  const section =
+    input.market === "kr"
+      ? krSection(input)
+      : input.role === "close"
+        ? usCloseSection(input)
+        : input.role === "preview"
+          ? usPreviewSection(input)
+          : usSection(input);
+
+  // 헤더의 거래일 문장도 역할별로 가른다. preview 에서 "대상 거래일은 X" 로만 두면 모델이
+  // 'X 의 확정 결과'를 쓰려 하고, 그 날짜는 아직 열리지도 않았다.
+  const sessionLine =
+    input.market === "us" && input.role === "close"
+      ? `대상 거래일은 **${input.sessionDate ?? "(거래일 미상)"}** (이미 마감된 뉴욕 세션)`
+      : input.market === "us" && input.role === "preview"
+        ? `대상 세션은 **${input.sessionDate ?? "(거래일 미상)"}** (오늘 밤 열릴 뉴욕 세션 — 아직 개장 전이다)`
+        : `대상 거래일은 **${input.sessionDate ?? "(거래일 미상)"}**`;
   const fx = input.exchangeRate
     ? `- 원달러 환율: ${fmtNum(input.exchangeRate.value)} (${fmtPct(input.exchangeRate.changePct)})`
     : "- 원달러 환율: 조회실패";
 
+  // ⚠️ watchlist 심볼 규칙은 **반드시 시장별로 분기한다.**
+  // 예전엔 이 문장이 시장 공용이었고 하필 예시가 미국 티커("NVDA")였다. 한국장 프롬프트에도
+  // 그 예시가 그대로 들어갔고, krSection 의 조사 주제("전일 미국장 영향", "AI·반도체 업황")가
+  // 엔비디아를 조사 범위로 끌어오면서 모델이 **지시대로** NVDA 를 한국장 watchlist 에 올렸다.
+  //
+  // 그리고 여기서 '해외 종목은 서버가 해외 참고로 분리해준다'는 사실을 **알리지 않는다.**
+  // 칸이 있다고 알려주면 모델이 그 칸을 채우기 시작한다. 해외 참고 라우팅은 오염을 버리지 않고
+  // 건지는 **구제 경로**이지 제품 목표가 아니다 — 프롬프트는 예방, 라우팅은 그물로 역할을 나눈다.
+  const watchSymbolRule =
+    input.market === "kr"
+      ? `  · **KRX 상장 종목만** 올려라. symbol 은 **6자리 KRX 종목코드**("005930") — 종목명이 아니다.
+    서버가 이 값으로 시세를 사후 조회한다.
+  · **미국·일본 등 해외 상장 종목을 watchlist 에 넣지 마라.** 오늘 한국장에 영향을 주는 해외 종목은
+    watchlist 가 아니라 news[] 나 지수 comment 에서 다뤄라.`
+      : `  · **미국 상장 종목만** 올려라. symbol 은 **티커**("AAPL") — 회사명이 아니다.
+    서버가 이 값으로 시세를 사후 조회한다.
+  · **한국 등 해외 상장 종목을 watchlist 에 넣지 마라.** 미국장에 영향을 주는 해외 종목은
+    watchlist 가 아니라 news[] 나 지수 comment 에서 다뤄라.`;
+
   return `너는 한국어 증시 정보 정리 담당이다. 지금 시각은 ${input.now}. 대상 시장은 **${marketName}**,
-대상 거래일은 **${input.sessionDate ?? "(거래일 미상)"}**, 수집일은 ${input.today} 이다.
+${sessionLine}, 수집일은 ${input.today} 이다.
 모든 서술은 **반드시 한국어**로 작성한다(영문 소스도 번역).
 
 ${section}
@@ -221,7 +362,7 @@ ${fx}
   )} 중 하나).
   **rationale 과 risks 는 필수다 — 비어 있으면 그 종목 분석은 통째로 폐기된다.**
 - watchlist[]: 시장에서 거론되는 종목(등록 종목과 겹치지 않게). 각 항목에 symbol 과 name 을 반드시 적는다.
-  · symbol: 한국 종목이면 6자리 코드("005930"), 미국 종목이면 티커("NVDA"). 서버가 이 값으로 시세를 사후 조회한다.
+${watchSymbolRule}
   · attention(${ATTENTIONS.join(" · ")}) / levels(주목 가격대 서술, 없으면 null)
   · **추천이 아니라 "왜 거론되는지"의 사실 요약**임을 잊지 마라. rationale·risks 는 여기서도 필수다.
 
@@ -264,14 +405,27 @@ export function normalizeAttention(v: unknown): string {
   return hit ?? "⚡중";
 }
 
-/** bucket 이 시장별 허용 목록 밖이면 마지막 값("관심 종목 후보")으로 접는다. */
-export function normalizeBucket(v: unknown, market: StockMarket): string {
-  const buckets = NEWS_BUCKETS[market];
+/**
+ * bucket 이 허용 목록 밖이면 **목록의 마지막 값으로 접는다**(드롭하지 않는다).
+ * role 을 받는 이유는 미국장 목록이 역할별로 좁혀지기 때문이다 — 폴백 목적지가 무엇인지가
+ * 곧 오분류의 착지점이므로 US_NEWS_BUCKETS_BY_ROLE 의 순서 주석을 함께 볼 것.
+ * 기본값 'both' 는 현행 목록 그대로라, role 을 넘기지 않는 호출부의 동작이 변하지 않는다.
+ */
+export function normalizeBucket(
+  v: unknown,
+  market: StockMarket,
+  role: StockSlotRole = "both"
+): string {
+  const buckets = bucketsFor(market, role);
   const s = typeof v === "string" ? v.trim() : "";
   return buckets.includes(s) ? s : buckets[buckets.length - 1];
 }
 
-export function normalizeNewsItem(r: unknown, market: StockMarket): StockNewsItem | null {
+export function normalizeNewsItem(
+  r: unknown,
+  market: StockMarket,
+  role: StockSlotRole = "both"
+): StockNewsItem | null {
   const o = r as Record<string, unknown> | null;
   const title = str(o?.title, 200);
   const date = normDate(o?.date);
@@ -283,7 +437,7 @@ export function normalizeNewsItem(r: unknown, market: StockMarket): StockNewsIte
     date,
     summary: str(o?.summary, 1000),
     link: typeof o?.link === "string" && o.link.trim() ? o.link.trim() : null,
-    bucket: normalizeBucket(o?.bucket, market),
+    bucket: normalizeBucket(o?.bucket, market, role),
   };
 }
 
@@ -369,7 +523,11 @@ export interface CuratedNarratives {
 }
 
 /** 파싱된 JSON → 정규화된 서술 묶음. 순수 함수(테스트 대상). */
-export function normalizeCurated(parsed: unknown, market: StockMarket): CuratedNarratives {
+export function normalizeCurated(
+  parsed: unknown,
+  market: StockMarket,
+  role: StockSlotRole = "both"
+): CuratedNarratives {
   const p = parsed as Record<string, unknown> | null;
   const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
   const analyses = arr(p?.analyses)
@@ -381,7 +539,7 @@ export function normalizeCurated(parsed: unknown, market: StockMarket): CuratedN
       .map(normalizeIndexNarrative)
       .filter((x): x is IndexNarrative => !!x),
     news: arr(p?.news)
-      .map((r) => normalizeNewsItem(r, market))
+      .map((r) => normalizeNewsItem(r, market, role))
       .filter((x): x is StockNewsItem => !!x),
     analyses,
     // 관심 종목은 등록 종목과 겹치지 않는다(StockSnapshot.watchlist 주석 §601).
@@ -393,17 +551,29 @@ export function normalizeCurated(parsed: unknown, market: StockMarket): CuratedN
   };
 }
 
+/**
+ * 스냅샷에 실리는 역할 메타. 스냅샷 생성 경로가 3곳(empty/holiday/toSnapshot)이라
+ * 한 곳이라도 빠뜨리면 그 경로의 브리핑만 화면·메일에서 역할 라벨을 잃는다.
+ */
+export interface SnapshotRoleMeta {
+  role?: StockSlotRole;
+  roleReason?: string;
+  slot?: string;
+}
+
 /** 빈(실패) 스냅샷. source="empty" — 호출자의 후퇴 방지 가드가 이 값을 본다. */
 export function emptySnapshot(
   market: StockMarket,
   date: string,
   note: string,
-  sessionDate: string | null = null
+  sessionDate: string | null = null,
+  meta: SnapshotRoleMeta = {}
 ): StockSnapshot {
   return {
     market,
     date,
     sessionDate,
+    ...meta,
     updatedAt: new Date().toISOString(),
     source: "empty",
     closed: false,
@@ -422,12 +592,14 @@ export function holidaySnapshot(
   market: StockMarket,
   date: string,
   sessionDate: string | null,
-  reason: string | null
+  reason: string | null,
+  meta: SnapshotRoleMeta = {}
 ): StockSnapshot {
   return {
     market,
     date,
     sessionDate,
+    ...meta,
     updatedAt: new Date().toISOString(),
     source: "holiday",
     closed: true,
@@ -446,7 +618,8 @@ function toSnapshot(
   input: StockPromptInput,
   n: CuratedNarratives,
   histories: Map<string, StockPoint[]>,
-  indexHistories: Map<string, StockPoint[]>
+  indexHistories: Map<string, StockPoint[]>,
+  meta: SnapshotRoleMeta
 ): StockSnapshot {
   const byName = new Map(n.indices.map((i) => [i.name, i]));
   const indices: StockIndex[] = input.indices.map((q) => {
@@ -499,6 +672,11 @@ function toSnapshot(
     close: null,
     changePct: null,
     weekChangePct: null,
+    // ⚠️ placeholder 다. 이 시점엔 종목의 **실제 시장을 알 수 없다**(시장 판정은 시세 조회에서만 가능).
+    // verifyWatchlist 가 실제 시세의 통화로 반드시 덮어쓰며, 못 덮어쓴 항목은 드롭된다 —
+    // 즉 이 임시값이 디스크까지 살아남는 경로는 이제 구조적으로 닫혀 있다.
+    // (한국장 브리핑의 NVDA 에 currency:"KRW" 가 붙어 저장된 사건이 정확히 이 임시값의 생존이었다.
+    //  당시엔 검증 실패 항목을 verified=false 로 남겼기 때문이다.)
     currency: input.market === "kr" ? "KRW" : "USD",
     history: [],
     ma5: null,
@@ -517,6 +695,7 @@ function toSnapshot(
     market: input.market,
     date: input.today,
     sessionDate: input.sessionDate,
+    ...meta,
     updatedAt: new Date().toISOString(),
     source: "llm",
     closed: false,
@@ -535,6 +714,10 @@ export interface CurateStockInput extends StockPromptInput {
   histories?: Map<string, StockPoint[]>;
   /** 지수 표시명 → 20거래일 시계열. */
   indexHistories?: Map<string, StockPoint[]>;
+  /** 역할 판정 근거. 프롬프트에는 쓰지 않고 스냅샷에만 실린다(로그·화면 툴팁용). */
+  roleReason?: string;
+  /** 귀속 슬롯. 프롬프트에는 쓰지 않고 스냅샷에만 실린다(catch-up 게이트용). */
+  slot?: string;
 }
 
 /**
@@ -543,7 +726,15 @@ export interface CurateStockInput extends StockPromptInput {
  * 실패 시 빈 스냅샷(source="empty") 반환.
  */
 export async function curateStock(input: CurateStockInput): Promise<StockSnapshot> {
-  const marketName = input.market === "kr" ? "한국장" : "미국장";
+  // 라벨에 역할을 붙인다. 이게 없으면 같은 날 두 런이 로그에서 완전히 구분되지 않는다
+  // (실측 로그가 정확히 그 상태였다: "증시 큐레이션(미국장)" 두 줄).
+  const roleTag = input.role === "close" ? "·마감결산" : input.role === "preview" ? "·개장프리뷰" : "";
+  const marketName = `${input.market === "kr" ? "한국장" : "미국장"}${roleTag}`;
+  const meta: SnapshotRoleMeta = {
+    role: input.role,
+    roleReason: input.roleReason,
+    slot: input.slot,
+  };
   try {
     const finalText = await runAgentQueryText(
       buildPrompt({ ...input, now: input.now || nowLabel() }),
@@ -568,15 +759,22 @@ export async function curateStock(input: CurateStockInput): Promise<StockSnapsho
       `증시 큐레이션(${marketName})`
     );
     if (!finalText) {
-      return emptySnapshot(input.market, input.today, "증시 큐레이션 결과가 비어 있습니다.", input.sessionDate);
+      return emptySnapshot(
+        input.market,
+        input.today,
+        "증시 큐레이션 결과가 비어 있습니다.",
+        input.sessionDate,
+        meta
+      );
     }
 
-    const n = normalizeCurated(extractJson(finalText), input.market);
+    const n = normalizeCurated(extractJson(finalText), input.market, input.role);
     const snapshot = toSnapshot(
       input,
       n,
       input.histories ?? new Map(),
-      input.indexHistories ?? new Map()
+      input.indexHistories ?? new Map(),
+      meta
     );
     log.info(
       `증시 큐레이션(LLM) 완료 [${marketName}] — 지수 ${snapshot.indices.length} / 뉴스 ${snapshot.news.length} / ` +
@@ -589,7 +787,8 @@ export async function curateStock(input: CurateStockInput): Promise<StockSnapsho
       input.market,
       input.today,
       `증시 큐레이션 실패: ${(e as Error).message}`,
-      input.sessionDate
+      input.sessionDate,
+      meta
     );
   }
 }

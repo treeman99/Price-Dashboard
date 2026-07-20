@@ -9,13 +9,23 @@ import {
 } from "lucide-react";
 import type {
   StockMarket,
+  StockSlotRole,
   StockSnapshot,
   StockTicker,
   StockIndex,
   StockNewsItem,
   StockAnalysis,
 } from "@shared/types";
-import { marketLabel, changeTone } from "@shared/stock";
+import {
+  marketLabel,
+  changeTone,
+  effectiveRole,
+  isPreviewUpcoming,
+  partitionWatchlist,
+  roleLabel,
+  watchMarket,
+  foreignSectionTitle,
+} from "@shared/stock";
 import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -27,6 +37,18 @@ import { AddTickerDialog } from "@/components/AddTickerDialog";
 import { ScheduleControl } from "@/components/ScheduleControl";
 
 const MARKETS: StockMarket[] = ["kr", "us"];
+
+/**
+ * `GET /stock/:market` 응답. 본문은 '가장 최신' 스냅샷이고, 역할별 스냅샷은 variants 로 덧붙는다.
+ * 미국장은 슬롯마다 성격이 다른 브리핑이 별도 파일에 저장되므로(마감결산/개장프리뷰),
+ * 이게 없으면 오후 프리뷰가 화면에서 아침 결산을 가려 하루 종일 한쪽만 보인다.
+ */
+type StockSnapshotResponse = StockSnapshot & {
+  variants?: Partial<Record<StockSlotRole, StockSnapshot | null>>;
+};
+
+/** 역할 서브탭 선택값. "latest" = 가장 최근에 갱신된 브리핑(기본). */
+type SnapshotView = "latest" | "close" | "preview";
 
 /** 등락률 텍스트 색 — 한국 증시 관례(상승 빨강 / 하락 파랑 / 보합 회색). */
 function toneClass(pct: number | null): string {
@@ -107,10 +129,19 @@ function NewsCard({ item }: { item: StockNewsItem }) {
   );
 }
 
-function SectionTitle({ children, count }: { children: ReactNode; count?: number }) {
+/** tone: 섹션 강조색. 기본은 보드 브랜드 초록, '해외 참고'는 슬레이트로 낮춰 부차 정보임을 보인다. */
+function SectionTitle({
+  children,
+  count,
+  tone = "#059669",
+}: {
+  children: ReactNode;
+  count?: number;
+  tone?: string;
+}) {
   return (
-    <div className="mb-3 flex items-center gap-2 border-b pb-2" style={{ borderColor: "#059669" }}>
-      <h2 className="flex items-center gap-2 text-lg font-bold" style={{ color: "#059669" }}>
+    <div className="mb-3 flex items-center gap-2 border-b pb-2" style={{ borderColor: tone }}>
+      <h2 className="flex items-center gap-2 text-lg font-bold" style={{ color: tone }}>
         {children}
         {count != null && (
           <span className="text-sm font-normal text-muted-foreground">({count})</span>
@@ -147,7 +178,8 @@ function placeholderAnalysis(t: StockTicker): StockAnalysis {
 
 export function StockBoard() {
   const [market, setMarket] = useState<StockMarket>("kr");
-  const [snap, setSnap] = useState<StockSnapshot | null>(null);
+  const [resp, setResp] = useState<StockSnapshotResponse | null>(null);
+  const [view, setView] = useState<SnapshotView>("latest");
   const [tickers, setTickers] = useState<StockTicker[]>([]);
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
@@ -156,7 +188,7 @@ export function StockBoard() {
   const load = useCallback(async () => {
     try {
       const [s, t] = await Promise.all([api.stock(market), api.stockTickers(market)]);
-      setSnap(s);
+      setResp(s as StockSnapshotResponse | null);
       setTickers(t);
       setErr(null);
     } catch (e) {
@@ -177,7 +209,8 @@ export function StockBoard() {
   // 시장을 바꾸면 스냅샷·종목목록을 다시 불러온다(이전 시장 데이터가 잠깐 비치지 않게 loading 부터 세운다).
   useEffect(() => {
     setLoading(true);
-    setSnap(null);
+    setResp(null);
+    setView("latest");
     setTickers([]);
     load();
     checkStatus(); // 진입 시 (예: 정시 브리핑이 돌고 있으면) '수집 중'을 즉시 반영
@@ -232,12 +265,46 @@ export function StockBoard() {
     }
   }
 
+  // 서브탭 선택에 따라 실제로 그릴 스냅샷을 고른다. 선택한 역할 브리핑이 아직 없으면 null
+  // (예: 배포 직후 아침 결산만 돌고 프리뷰가 아직 안 돈 상태).
+  const snap: StockSnapshot | null =
+    view === "latest" ? resp : (resp?.variants?.[view] ?? null);
+  // 서브탭은 역할별 브리핑이 실제로 존재할 때만 띄운다. 역할 분리가 비활성이면(슬롯 1개 등)
+  // variants 가 비어 있어 탭이 나타나지 않고 화면이 현행과 동일하다.
+  const roleViews = (["close", "preview"] as const).filter((r) => !!resp?.variants?.[r]);
+
   const updated = snap?.updatedAt ? new Date(snap.updatedAt).toLocaleString("ko-KR") : null;
-  // 미국장은 수집일(KST)과 거래일(뉴욕)이 거의 항상 다르다 → 다를 때만 거래일을 병기한다.
-  const showSession = snap?.sessionDate && snap.sessionDate !== snap.date;
+  // 역할 배지·거래일 라벨. 구 스냅샷은 role 이 없으므로 반드시 effectiveRole 을 거친다
+  // (직접 snap.role 을 읽으면 undefined 가 화면으로 샌다).
+  const role = snap ? effectiveRole(snap) : "both";
+  const badge = snap ? roleLabel(role) : null;
+  // ⚠️ `sessionDate !== date` 조건은 role='both'·한국장에만 쓴다. 프리뷰의 sessionDate 는
+  // '오늘 밤 뉴욕 세션'이라 KST 수집일과 같아지는 날이 대부분이고, 그러면 대상 세션 표기가
+  // 조용히 사라진다. 역할이 있으면 항상 표시하고 라벨로 두 브리핑을 구분한다.
+  // ⚠️ 프리뷰의 '오늘 밤'은 **조건부**다. 프리뷰는 오후 슬롯에서만 갱신되므로 다음 오후까지
+  // 약 9시간 동안 어제 밤 프리뷰가 남아 있고, 그것을 '오늘 밤'이라 단언하면 이미 지나간
+  // 세션을 미래형으로 읽게 된다. 지난 프리뷰는 시제를 과거로 돌려 두 브리핑을 구분한다.
+  const previewUpcoming = !!snap && isPreviewUpcoming(snap);
+  const sessionText = !snap?.sessionDate
+    ? null
+    : role === "close"
+      ? `거래일 ${snap.sessionDate}(마감)`
+      : role === "preview"
+        ? previewUpcoming
+          ? `대상 세션 ${snap.sessionDate}(오늘 밤)`
+          : `대상 세션 ${snap.sessionDate}(종료된 세션 · 지난 프리뷰)`
+        : snap.sessionDate !== snap.date
+          ? `거래일 ${snap.sessionDate}`
+          : null;
 
   const bySymbol = new Map<string, StockAnalysis>();
   snap?.analyses.forEach((a) => bySymbol.set(a.symbol, a));
+
+  // 관심 종목은 '이 시장 종목'과 '해외 참고'가 한 배열에 섞여 온다 — 반드시 공용 헬퍼로 가른다
+  // (이메일도 같은 함수를 쓴다). 헬퍼가 watchlist 부재를 방어하므로 옛 스냅샷도 안전하다.
+  const { domestic, foreign } = snap
+    ? partitionWatchlist(snap)
+    : { domestic: [], foreign: [] };
 
   // 뉴스는 bucket 으로 묶되, 스냅샷에 나온 순서를 유지한다(LLM 이 중요도순으로 준다).
   const newsBuckets: Array<{ bucket: string; items: StockNewsItem[] }> = [];
@@ -271,9 +338,18 @@ export function StockBoard() {
           <span>
             · 수집 시 이메일 발송(지금 갱신 포함)
             {snap && ` · ${snap.date}`}
-            {showSession && ` · 거래일 ${snap!.sessionDate}`}
+            {sessionText && ` · ${sessionText}`}
             {updated && ` · 최종 갱신 ${updated}`}
           </span>
+          {badge && (
+            // title 에 판정 근거를 실어, 스케줄을 바꿨을 때 왜 이 역할이 됐는지 화면에서 바로 보이게 한다.
+            <span
+              className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-foreground/80"
+              title={snap?.roleReason ?? undefined}
+            >
+              {badge}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <AddTickerDialog market={market} onAdded={load} />
@@ -287,6 +363,31 @@ export function StockBoard() {
           </Button>
         </div>
       </div>
+
+      {/* 역할 서브탭 — 아침 결산과 오늘 밤 프리뷰를 나란히 볼 수 있게 한다.
+          역할 분리가 비활성이면 variants 가 비어 탭 자체가 나타나지 않는다(현행 화면 그대로). */}
+      {roleViews.length > 0 && (
+        <div className="mb-4 flex items-center gap-1">
+          {(["latest", ...roleViews] as SnapshotView[]).map((v) => (
+            <Button
+              key={v}
+              variant={v === view ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setView(v)}
+            >
+              {/* 프리뷰 탭 라벨도 본문과 같은 술어로 시제를 맞춘다. 탭만 미래형으로 남으면
+                  본문이 '종료된 세션'이라 해도 사용자는 탭 이름을 먼저 믿는다. */}
+              {v === "latest"
+                ? "최신"
+                : v === "close"
+                  ? "간밤 결산"
+                  : resp?.variants?.preview && isPreviewUpcoming(resp.variants.preview)
+                    ? "오늘 밤 프리뷰"
+                    : "지난 프리뷰"}
+            </Button>
+          ))}
+        </div>
+      )}
 
       {err && (
         <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">
@@ -307,8 +408,13 @@ export function StockBoard() {
         <div className="mb-4 flex items-start gap-2 rounded-md border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
           <Info className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            {snap.sessionDate ?? snap.date}
-            {snap.closedReason ? ` ${snap.closedReason}` : ""} 휴장 — 다음 거래일 브리핑을 기다립니다.
+            {snap.date}
+            {snap.closedReason ? ` ${snap.closedReason}` : ""} 휴장 —{" "}
+            {role === "preview"
+              ? "오늘 밤 뉴욕장이 열리지 않습니다. 다음 거래일 프리뷰를 기다립니다."
+              : role === "close"
+                ? `직전 마감(${snap.sessionDate ?? "미상"}) 결산은 다음 거래일 아침 브리핑이 이어받습니다.`
+                : "다음 거래일 브리핑을 기다립니다."}
           </span>
         </div>
       )}
@@ -358,16 +464,39 @@ export function StockBoard() {
             )}
           </section>
 
-          {/* 오늘의 관심 종목 */}
-          {!!snap?.watchlist.length && (
+          {/* 오늘의 관심 종목 — 이 시장 상장 종목만 */}
+          {!!domestic.length && (
             <section className="mt-8">
-              <SectionTitle count={snap.watchlist.length}>🔍 오늘의 관심 종목</SectionTitle>
+              <SectionTitle count={domestic.length}>🔍 오늘의 관심 종목</SectionTitle>
               <p className="mb-3 rounded-md bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
                 시장에서 거론되는 사실을 정리한 것으로 매수 추천이 아닙니다.
               </p>
               <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
-                {snap.watchlist.map((w, i) => (
+                {domestic.map((w, i) => (
                   <StockCard key={`${w.symbol}-${i}`} analysis={w} />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* 해외 참고 — 이 브리핑 시장에 상장되지 않은 종목.
+              점선 테두리 + 음영으로 관심 종목 그리드와 구조적으로 끊는다. */}
+          {!!foreign.length && snap && (
+            <section className="mt-8 rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-4">
+              <SectionTitle count={foreign.length} tone="#64748b">
+                {foreignSectionTitle(snap.market)}
+              </SectionTitle>
+              <p className="mb-3 text-sm text-muted-foreground">
+                {marketLabel(snap.market)}에 상장되지 않은 종목입니다. 오늘 이 장에서 직접 거래되지
+                않으며, 시세·통화는 해당 종목의 상장 시장 기준입니다.
+              </p>
+              <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
+                {foreign.map((w, i) => (
+                  <StockCard
+                    key={`${w.symbol}-${i}`}
+                    analysis={w}
+                    marketNote={marketLabel(watchMarket(w, snap.market))}
+                  />
                 ))}
               </div>
             </section>
