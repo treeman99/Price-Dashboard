@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { googleCalendarUrl } from "../../shared/calendar.ts";
+import { splitPopupsByRegion, POPUP_GROUPS } from "../../shared/events.ts";
 import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem } from "../../shared/types.ts";
@@ -76,15 +77,34 @@ function actions(parts: string[]): string {
   return xs.length ? `<p style="margin:6px 0 0">${xs.join('<span style="color:#ccc"> · </span>')}</p>` : "";
 }
 
-function popupCard(p: PopupItem): string {
+function popupCard(p: PopupItem, color: string): string {
   const link = linkAnchor(p.link, "🔗 보기");
   const cal = calAnchor(p.name, p.startDate, p.endDate, p.region, p.summary, p.link);
-  return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid #7C3AED">
+  return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid ${color}">
     <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(p.name)}${tagBadge(p.tag)}</h3>
     <p style="margin:0 0 4px;color:#666;font-size:13px">📍 ${escapeHtml(p.region)}${p.period ? ` · ${escapeHtml(p.period)}` : ""}</p>
     ${p.summary ? `<p style="margin:0 0 4px;color:#444;font-size:13px">${escapeHtml(p.summary)}</p>` : ""}
     ${actions([link, cal])}
   </div>`;
+}
+
+/**
+ * 팝업 지역 하위 그룹(서울 / 수원·화성 등) 블록. 화면의 PopupSubgroup 과 같은
+ * 라벨·색·건수 표기를 쓴다(판별 기준은 shared/events.ts 공용).
+ */
+function popupSubgroup(
+  group: { label: string; sub: string; accent: string },
+  items: PopupItem[]
+): string {
+  const head = `<h3 style="margin:18px 0 8px;font-size:14px;color:#1a1a2e">
+    <span style="color:${group.accent}">●</span> ${escapeHtml(group.label)}${
+      group.sub ? ` <span style="color:#888;font-weight:normal">${escapeHtml(group.sub)}</span>` : ""
+    } <span style="color:#888;font-weight:normal">· ${items.length}건</span>
+  </h3>`;
+  const body = items.length
+    ? items.map((p) => popupCard(p, group.accent)).join("")
+    : `<p style="color:#999;font-size:13px">해당 지역의 팝업 없음</p>`;
+  return head + body;
 }
 
 function exhCard(e: ExhibitionItem, color: string): string {
@@ -111,8 +131,10 @@ function festivalCard(f: FestivalItem, color: string): string {
 
 /** 팝업/전시/축제 이메일 HTML. 순수 함수 — 발송하지 않는다. */
 export function buildEventsEmailHtml(s: EventsSnapshot): string {
+  // 화면과 동일하게 서울 / 서울 외(수원·화성 등)로 나눠 보여준다.
+  const { seoul, outer } = splitPopupsByRegion(s.popups);
   const popupHtml = s.popups.length
-    ? s.popups.map(popupCard).join("")
+    ? popupSubgroup(POPUP_GROUPS.seoul, seoul) + popupSubgroup(POPUP_GROUPS.outer, outer)
     : `<p style="color:#999">확인된 팝업이 없습니다.</p>`;
 
   const venueHtml = s.exhibitions.venues

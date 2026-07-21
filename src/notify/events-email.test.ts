@@ -70,6 +70,33 @@ test("buildEventsEmailHtml: 3개 섹션과 항목이 렌더된다", () => {
   assert.ok(html.includes("함평 나비축제"));
 });
 
+test("buildEventsEmailHtml: 팝업을 서울 / 수원·화성 등으로 나눠 렌더한다", () => {
+  const html = buildEventsEmailHtml(
+    snapshot({
+      popups: [
+        popup({ name: "성수 팝업", region: "서울 성수" }),
+        popup({ name: "수원 팝업", region: "경기 수원" }),
+      ],
+    })
+  );
+  const seoulAt = html.indexOf("서울");
+  const outerAt = html.indexOf("수원 · 화성 등");
+  assert.ok(seoulAt >= 0 && outerAt > seoulAt, "서울 그룹이 서울 외 그룹보다 먼저 나온다");
+  assert.ok(html.includes("(경기 등 서울 외)"));
+  // 각 팝업이 자기 그룹 뒤에 놓인다.
+  assert.ok(html.indexOf("성수 팝업") > seoulAt && html.indexOf("성수 팝업") < outerAt);
+  assert.ok(html.indexOf("수원 팝업") > outerAt);
+});
+
+test("buildEventsEmailHtml: 한쪽 지역이 비면 그룹 머리말 + 없음 문구", () => {
+  const html = buildEventsEmailHtml({
+    ...snapshot(),
+    popups: [popup({ region: "서울 성수" })],
+  });
+  assert.ok(html.includes("수원 · 화성 등"));
+  assert.ok(html.includes("해당 지역의 팝업 없음"));
+});
+
 test("buildEventsEmailHtml: 전부 비어도 throw 없이 안내 문구", () => {
   const html = buildEventsEmailHtml(
     snapshot({ popups: [], exhibitions: { venues: [] }, festivals: [] })

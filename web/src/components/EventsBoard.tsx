@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus, Tag, PartyPopper } from "lucide-react";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem, EventTag } from "@shared/types";
 import { googleCalendarUrl } from "@shared/calendar";
+import { splitPopupsByRegion, POPUP_GROUPS } from "@shared/events";
 import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -14,22 +15,6 @@ const TAG_STYLE: Record<Exclude<EventTag, null>, { bg: string; label: string }> 
   종료임박: { bg: "#FF5A5A", label: "종료임박" },
   예정: { bg: "#2E86DE", label: "오픈예정" },
 };
-
-// 팝업 지역을 '서울'과 '그 외(경기 — 수원·화성 등)'로 가르기 위한 판별.
-// region 문자열은 "서울 성수", "경기 수원(스타필드 수원)"처럼 광역 접두어로 오거나,
-// 네이버 폴백 경로에선 "성수"/"수원" 같은 구·시 단독 값으로 온다. 두 형태 모두 처리한다.
-const SEOUL_DISTRICTS = [
-  "성수", "홍대", "여의도", "강남", "잠실", "명동", "한남", "이태원",
-  "연남", "압구정", "삼성동", "성동", "송파", "마포", "용산", "종로",
-  "을지로", "서초", "광진", "영등포", "성북", "노원", "건대",
-];
-/** region이 서울 권역이면 true. 경기/인천 접두어는 명시적으로 '서울 외'로 분류한다. */
-function isSeoulPopup(region: string): boolean {
-  const r = (region || "").trim();
-  if (r.startsWith("서울")) return true;
-  if (r.startsWith("경기") || r.startsWith("인천")) return false;
-  return SEOUL_DISTRICTS.some((d) => r.includes(d));
-}
 
 function TagBadge({ tag }: { tag: EventTag }) {
   if (!tag) return null;
@@ -354,9 +339,8 @@ export function EventsBoard() {
 
   // 출처(보기) 링크가 없는 항목은 확인이 불가하므로 표시하지 않는다.
   const popups = (snap?.popups ?? []).filter((p) => p.link);
-  // 서울(실제 방문이 부담)과 수원·화성 등 서울 외 지역을 나눠서 보여준다.
-  const seoulPopups = popups.filter((p) => isSeoulPopup(p.region));
-  const outerPopups = popups.filter((p) => !isSeoulPopup(p.region));
+  // 서울(실제 방문이 부담)과 수원·화성 등 서울 외 지역을 나눠서 보여준다(메일과 동일 기준).
+  const { seoul: seoulPopups, outer: outerPopups } = splitPopupsByRegion(popups);
   const venues = (snap?.exhibitions.venues ?? []).map((v) => ({
     ...v,
     items: v.items.filter((e) => e.link),
@@ -407,8 +391,8 @@ export function EventsBoard() {
           </SectionTitle>
           {popups.length ? (
             <>
-              <PopupSubgroup label="서울" accent="#7C3AED" items={seoulPopups} />
-              <PopupSubgroup label="수원 · 화성 등" sub="(경기 등 서울 외)" accent="#059669" items={outerPopups} />
+              <PopupSubgroup {...POPUP_GROUPS.seoul} items={seoulPopups} />
+              <PopupSubgroup {...POPUP_GROUPS.outer} items={outerPopups} />
             </>
           ) : (
             <p className="text-sm text-muted-foreground">확인된 팝업이 없습니다.</p>
