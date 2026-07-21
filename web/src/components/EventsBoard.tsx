@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus, Tag, PartyPopper } from "lucide-react";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem, EventTag } from "@shared/types";
 import { googleCalendarUrl } from "@shared/calendar";
-import { splitPopupsByRegion, POPUP_GROUPS } from "@shared/events";
+import { splitPopupsByRegion, withLinkedItemsOnly, POPUP_GROUPS } from "@shared/events";
 import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -337,15 +337,13 @@ export function EventsBoard() {
 
   const updated = snap?.updatedAt ? new Date(snap.updatedAt).toLocaleString("ko-KR") : null;
 
-  // 출처(보기) 링크가 없는 항목은 확인이 불가하므로 표시하지 않는다.
-  const popups = (snap?.popups ?? []).filter((p) => p.link);
-  // 서울(실제 방문이 부담)과 수원·화성 등 서울 외 지역을 나눠서 보여준다(메일과 동일 기준).
+  // 출처(보기) 링크가 없는 항목은 확인이 불가하므로 표시하지 않는다(메일과 동일 기준).
+  const shown = snap ? withLinkedItemsOnly(snap) : null;
+  const popups = shown?.popups ?? [];
+  // 서울(실제 방문이 부담)과 수원·화성 등 서울 외 지역을 나눠서 보여준다.
   const { seoul: seoulPopups, outer: outerPopups } = splitPopupsByRegion(popups);
-  const venues = (snap?.exhibitions.venues ?? []).map((v) => ({
-    ...v,
-    items: v.items.filter((e) => e.link),
-  }));
-  const festivals = (snap?.festivals ?? []).filter((f) => f.link);
+  const venues = shown?.exhibitions.venues ?? [];
+  const festivals = shown?.festivals ?? [];
 
   return (
     <div>

@@ -113,12 +113,46 @@ test("buildEventsEmailHtml: 정상 링크는 '보기' 앵커 + 캘린더 앵커"
   assert.ok(html.includes("📅 캘린더 추가"));
 });
 
-test("buildEventsEmailHtml: link 가 null 이면 '보기' 앵커가 없다", () => {
+test("buildEventsEmailHtml: link 가 null 인 항목은 화면과 같이 아예 빠진다", () => {
   const html = buildEventsEmailHtml(
-    snapshot({ popups: [popup({ link: null })], exhibitions: { venues: [] }, festivals: [] })
+    snapshot({
+      popups: [popup({ link: null })],
+      exhibitions: { venues: [{ name: "코엑스", items: [exhibition({ link: null })] }] },
+      festivals: [festival({ link: null })],
+    })
   );
   assert.ok(!html.includes("🔗 보기"));
-  assert.ok(html.includes("성수 팝업")); // 카드 자체는 남는다
+  assert.ok(!html.includes("성수 팝업"));
+  assert.ok(!html.includes("코엑스 전시"));
+  assert.ok(!html.includes("함평 나비축제"));
+  // 링크 없는 항목만 있으면 각 섹션은 '없음' 상태가 된다.
+  assert.ok(html.includes("확인된 팝업이 없습니다."));
+  assert.ok(html.includes("확인된 축제가 없습니다."));
+  // 전시장 그룹 자체는 남고 화면과 같은 문구를 쓴다.
+  assert.ok(html.includes("코엑스"));
+  assert.ok(html.includes("이번 주 확인된 행사 없음"));
+});
+
+test("buildEventsEmailHtml: 링크가 있으면 스킴이 불안전해도 카드는 남는다(화면과 동일)", () => {
+  // 화면은 link 의 '존재'만 보고 거른다. 스킴 안전성은 앵커 렌더 단계가 따로 막는다.
+  const html = buildEventsEmailHtml(
+    // eslint-disable-next-line no-script-url
+    snapshot({ popups: [popup({ link: "javascript:alert(1)" })], exhibitions: { venues: [] }, festivals: [] })
+  );
+  assert.ok(html.includes("성수 팝업"));
+  assert.ok(!html.includes("javascript:"));
+});
+
+test("eventsIMessageText: 링크 없는 항목은 건수에서 빠진다(화면·메일과 동일 기준)", () => {
+  const t = eventsIMessageText(
+    snapshot({
+      popups: [popup(), popup({ name: "링크없음 팝업", link: null })],
+      exhibitions: { venues: [{ name: "코엑스", items: [exhibition({ link: null })] }] },
+      festivals: [festival()],
+    })
+  );
+  assert.match(t, /🛍 팝업 1 · 🏛 전시 0 · 🎉 축제 1/);
+  assert.ok(!t.includes("링크없음 팝업"));
 });
 
 test("buildEventsEmailHtml: 시작일이 없으면 캘린더 앵커가 없다", () => {

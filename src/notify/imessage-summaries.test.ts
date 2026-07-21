@@ -33,12 +33,15 @@ test("priceIMessageText: 상품별 최저가 + 변동(▼/▲) 표기", () => {
 test("eventsIMessageText: 카운트 + 신규 강조 + 팝업 이름", () => {
   const s = {
     date: "2026-07-17",
+    // link 는 표시 대상 판별에 쓰이므로(화면·메일과 동일 기준) 채워 둔다.
     popups: [
-      { name: "니케 팝업", isNew: true },
-      { name: "쿠키런 팝업", isNew: false },
+      { name: "니케 팝업", isNew: true, link: "https://e.com/1" },
+      { name: "쿠키런 팝업", isNew: false, link: "https://e.com/2" },
     ],
-    exhibitions: { venues: [{ name: "코엑스", items: [{ title: "케이펫", isNew: false }] }] },
-    festivals: [{ name: "보령머드축제", isNew: true }],
+    exhibitions: {
+      venues: [{ name: "코엑스", items: [{ title: "케이펫", isNew: false, link: "https://e.com/3" }] }],
+    },
+    festivals: [{ name: "보령머드축제", isNew: true, link: "https://e.com/4" }],
   } as unknown as EventsSnapshot;
   const t = eventsIMessageText(s);
   assert.match(t, /팝업 2 · 🏛 전시 1 · 🎉 축제 1/);
@@ -49,7 +52,7 @@ test("eventsIMessageText: 카운트 + 신규 강조 + 팝업 이름", () => {
 test("eventsIMessageText: 신규 없으면 신규 줄 생략", () => {
   const s = {
     date: "2026-07-17",
-    popups: [{ name: "A", isNew: false }],
+    popups: [{ name: "A", isNew: false, link: "https://e.com/1" }],
     exhibitions: { venues: [] },
     festivals: [],
   } as unknown as EventsSnapshot;

@@ -1,7 +1,7 @@
 // 팝업 지역 분류(대시보드 화면 + 이메일 공용).
 // 화면과 메일이 같은 기준으로 서울/서울 외를 갈라야 하므로 판별식을 여기 한 곳에 둔다.
 
-import type { PopupItem } from "./types.ts";
+import type { EventsSnapshot, PopupItem } from "./types.ts";
 
 // region 문자열은 "서울 성수", "경기 수원(스타필드 수원)"처럼 광역 접두어로 오거나,
 // 네이버 폴백 경로에선 "성수"/"수원" 같은 구·시 단독 값으로 온다. 두 형태 모두 처리한다.
@@ -26,6 +26,23 @@ export function splitPopupsByRegion<T extends Pick<PopupItem, "region">>(
   return {
     seoul: popups.filter((p) => isSeoulPopup(p.region)),
     outer: popups.filter((p) => !isSeoulPopup(p.region)),
+  };
+}
+
+/**
+ * 출처(보기) 링크가 없는 항목을 걷어낸 스냅샷. 확인할 수 없는 항목은 보여주지 않는다.
+ * 링크 '존재' 여부만 본다 — 스킴 안전성은 렌더 단계(safeHref)가 따로 거른다.
+ * 전시장 그룹은 항목이 0건이 되어도 남긴다(화면이 '이번 주 확인된 행사 없음'을 표시).
+ */
+export function withLinkedItemsOnly(s: EventsSnapshot): EventsSnapshot {
+  return {
+    ...s,
+    popups: s.popups.filter((p) => p.link),
+    exhibitions: {
+      ...s.exhibitions,
+      venues: s.exhibitions.venues.map((v) => ({ ...v, items: v.items.filter((e) => e.link) })),
+    },
+    festivals: (s.festivals ?? []).filter((f) => f.link),
   };
 }
 

@@ -2,13 +2,15 @@ import nodemailer from "nodemailer";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { googleCalendarUrl } from "../../shared/calendar.ts";
-import { splitPopupsByRegion, POPUP_GROUPS } from "../../shared/events.ts";
+import { splitPopupsByRegion, withLinkedItemsOnly, POPUP_GROUPS } from "../../shared/events.ts";
 import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem } from "../../shared/types.ts";
 
 /** 팝업/전시/축제 iMessage 텍스트: 카운트 + '신규' 강조 + 팝업 이름 일부. */
-export function eventsIMessageText(s: EventsSnapshot): string {
+export function eventsIMessageText(raw: EventsSnapshot): string {
+  // 건수가 화면·메일과 어긋나지 않도록 같은 기준으로 거른다.
+  const s = withLinkedItemsOnly(raw);
   const exhCount = s.exhibitions.venues.reduce((a, v) => a + v.items.length, 0);
   const festivals = s.festivals ?? [];
   const newItems = [
@@ -26,13 +28,15 @@ export function eventsIMessageText(s: EventsSnapshot): string {
 }
 
 /** 팝업/전시/축제를 본인 iMessage 로 발송. off/미설정/전부 0건이면 false. 절대 throw 안 함. */
-export async function sendEventsIMessage(s: EventsSnapshot): Promise<boolean> {
+export async function sendEventsIMessage(raw: EventsSnapshot): Promise<boolean> {
   if (!isIMessageConfigured()) return false;
   // 전부 0건이면 무의미한 '팝업 0·전시 0·축제 0' 푸시를 보내지 않는다(유튜브/뉴스와 일관).
+  // 표시 대상(링크 있는 항목) 기준으로 세야 '0건 메시지'를 제대로 막는다.
+  const s = withLinkedItemsOnly(raw);
   const total =
     s.popups.length +
     s.exhibitions.venues.reduce((a, v) => a + v.items.length, 0) +
-    (s.festivals ?? []).length;
+    s.festivals.length;
   if (total === 0) return false;
   try {
     await sendIMessage(eventsIMessageText(s));
@@ -130,8 +134,9 @@ function festivalCard(f: FestivalItem, color: string): string {
 }
 
 /** 팝업/전시/축제 이메일 HTML. 순수 함수 — 발송하지 않는다. */
-export function buildEventsEmailHtml(s: EventsSnapshot): string {
-  // 화면과 동일하게 서울 / 서울 외(수원·화성 등)로 나눠 보여준다.
+export function buildEventsEmailHtml(raw: EventsSnapshot): string {
+  // 화면과 같은 기준: 출처 링크 없는 항목 제외 → 서울/서울 외로 분리.
+  const s = withLinkedItemsOnly(raw);
   const { seoul, outer } = splitPopupsByRegion(s.popups);
   const popupHtml = s.popups.length
     ? popupSubgroup(POPUP_GROUPS.seoul, seoul) + popupSubgroup(POPUP_GROUPS.outer, outer)
