@@ -7,6 +7,7 @@ import { loadCategories } from "./categories.ts";
 import { loadBlocklist, buildBlockMatcher, UNKNOWN_CHANNEL } from "./blocklist.ts";
 import { isRecommendedChannel } from "../../shared/youtube.ts";
 import { activeWatched, buildWatchedMatcher } from "./watched.ts";
+import { buildDismissMatcher, dismissedHints } from "./dismissed.ts";
 import { buildReclassSection } from "./reclass.ts";
 import { enrichVideos, fetchWatchInfo, filterOutShorts } from "./oembed.ts";
 import { harvestFreshUploads, type RssVideo } from "./channels.ts";
@@ -16,6 +17,7 @@ import type {
   YoutubeCategory,
   YoutubeCategoryDef,
   BlockedChannel,
+  DismissedVideo,
 } from "../../shared/types.ts";
 
 function nowLabel(): string {
@@ -169,7 +171,10 @@ export function buildPrompt(
   watchedTitles: string[] = [],
   reclassSection = "",
   seedByCat: Map<string, RssVideo[]> = new Map(),
-  blockedByCat: Map<string, string[]> = new Map()
+  blockedByCat: Map<string, string[]> = new Map(),
+  // 제외 영상은 **맨 뒤**에 붙인다 — watchedTitles 뒤에 끼워 넣으면 reclass.test.ts 처럼
+  // reclassSection 을 위치 인자로 넘기는 기존 호출부가 조용히 어긋난다.
+  dismissedItems: DismissedVideo[] = []
 ): string {
   const cats = defs
     .map((c) => {
@@ -201,6 +206,22 @@ export function buildPrompt(
         "\n  - "
       )}\n  위와 동일한 영상은 어떤 카테고리에도 넣지 마라(제목이 조금 달라도 같은 영상이면 제외).`
     : "";
+  // 🙅 제외 영상: 사용자가 카드의 [제외] 버튼으로 걷어낸 영상.
+  // 🚫 제외 채널과 **성격이 다르다** — 저쪽은 "이 채널이 싫다"(채널 배제), 이쪽은 "채널은 맞는데
+  // 이런 종류의 영상은 아니다"(종류 회피)다. 둘을 섞어 지시하면 큐레이터가 채널을 통째로 버리게 되므로
+  // 하드 규칙(그 영상 자체 금지)과 소프트 신호(비슷한 종류 후순위)를 프롬프트에서 명시적으로 분리한다.
+  const dismissLines = dismissedItems
+    .map((d) => {
+      const title = d.title?.trim() || d.videoId; // 원클릭 제외라 제목이 비어 있을 수 있다
+      const channel = d.channel?.trim() || UNKNOWN_CHANNEL;
+      const where = d.categoryKey ? ` [${d.categoryKey} 카테고리에서 거부]` : "";
+      const reason = d.reason?.trim() ? ` (사유: ${d.reason.trim()})` : "";
+      return `"${title}" — ${channel}${where}${reason}`;
+    })
+    .join("\n  - ");
+  const dismissedSection = dismissLines
+    ? `\n\n🙅 제외한 영상(사용자가 카드에서 직접 걷어낸 영상 — **채널이 아니라 영상의 '종류'를 거부**한 것이다):\n  - ${dismissLines}\n  규칙(두 층위를 반드시 구분해서 지켜라):\n  - (1) **하드 규칙**: 위 목록의 영상 자체는 어떤 카테고리에도 다시 넣지 마라(제목이 조금 달라도 같은 영상이면 제외).\n  - (2) **학습 신호**: 이 목록은 "채널은 맞지만 **이런 종류**의 영상은 원하지 않는다"는 사용자 신호다.\n    목록의 공통점(주제 각도·형식·깊이·톤)을 파악해, **비슷한 성격의 다른 영상도 우선순위를 낮춰라**.\n  - 단 **채널 자체를 배제하지는 마라** — 여기 적힌 채널의 다른 영상은 종류만 다르면 계속 후보로 올려도 된다.\n    채널을 통째로 빼는 것은 🚫 제외 채널 섹션만의 역할이다(그 목록에 없는 채널을 임의로 배제하지 마라).\n  - **(사유: ...)가 붙은 항목은 사용자의 명시적 지시**로 취급해 반드시 준수하라. 그 사유에 해당하는 영상은\n    다른 채널의 영상이라도 똑같이 피한다.\n  - [카테고리에서 거부] 표기는 어느 맥락에서 거부됐는지를 알려준다 — 그 카테고리에서 특히 강하게 회피하되,\n    사유가 카테고리와 무관한 성격(형식·톤 등)이면 다른 카테고리에도 같은 취향을 적용하라.`
+    : "";
   // ⭐ 취향 프로필: 사용자가 카드에서 직접 별표한 추천 채널이 하나라도 있으면,
   // '먼저 확인할 목록'을 넘어 취향 신호로 적극 활용하도록 별도 섹션을 주입한다.
   const hasRecommended = defs.some((c) => c.recommendedChannels?.length);
@@ -218,9 +239,10 @@ export function buildPrompt(
   **그 취향과 닮은 영상을 우선**하라. 다른 카테고리의 추천 채널 취향을 끌어오지 마라.
 - (3) 유사 채널 발굴: 추천 채널과 성격이 비슷한 다른 채널의 좋은 영상도 적극 후보에 올려,
   사용자가 취향에 맞는 새 채널을 발견하게 하라.
-- 단, 취향 신호는 **어떤 절대 규칙도 이기지 못한다**: 신선도·다양성·검색범위·🚫제외 채널·👁본영상 규칙이
+- 단, 취향 신호는 **어떤 절대 규칙도 이기지 못한다**: 신선도·다양성·검색범위·🚫제외 채널·👁본영상·🙅제외 영상 규칙이
   항상 우선한다(추천 채널이라도 오래된 영상 금지, 같은 채널 최대 2개 유지, 추천 채널만으로 카테고리를 채우지 마라.
-  제외 채널이나 그와 비슷한 성향의 채널을 '유사 채널'로 발굴하지 마라).`
+  제외 채널이나 그와 비슷한 성향의 채널을 '유사 채널'로 발굴하지 마라.
+  **추천 채널의 영상이라도 🙅제외한 영상과 같은 종류면 넣지 마라** — 별표는 채널 신호, 제외는 종류 신호라 서로 층위가 다르다).`
     : "";
   // 📌 확정 신선 후보: 추천/발굴 채널 RSS에서 게시일이 이미 검증된 창 안 영상.
   // WebSearch/WebFetch가 구조적으로 못 찾는 '채널 최신 업로드'를 서버가 대신 확보해 주입한다.
@@ -243,7 +265,7 @@ export function buildPrompt(
 모든 제목·요약은 **반드시 한국어**로 작성한다(영어 영상도 한국어로 번역·요약). 원제는 originalTitle에 보존한다.
 
 카테고리:
-  - ${cats}${blockSection}${watchedSection}${tasteSection}${seedSection}${reclassSection}
+  - ${cats}${blockSection}${watchedSection}${dismissedSection}${tasteSection}${seedSection}${reclassSection}
 
 🌐 검색 범위(각 카테고리의 [검색범위]를 반드시 준수):
 - "한국 채널·한국어 영상만": **한국 유튜버가 만든 한국어(음성/자막) 영상만** 채택한다.
@@ -493,6 +515,10 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
   // '본영상'으로 체크된 영상은 수집에서 제외한다: 프롬프트로 미리 알리고(중복 조사 방지),
   // 최종적으로 videoId 기준 하드 후필터로 확실히 제거한다.
   const isWatched = buildWatchedMatcher();
+  // 사용자가 제외한 영상도 같은 방식으로 이중 방어한다: 프롬프트로 알리고(+종류 회피 학습),
+  // videoId 기준 하드 후필터로 확실히 제거한다. 본영상과 달리 만료가 없어 영구히 걸린다.
+  const isDismissed = buildDismissMatcher();
+  const dismissHints = dismissedHints();
   const watchedTitles = activeWatched()
     .map((w) => w.title)
     .filter((t): t is string => !!t)
@@ -508,18 +534,22 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
     for (const meta of promptDefs) {
       const queries = [...(meta.recommendedChannels ?? []), ...(discovered[meta.key] ?? [])];
       const fresh = queries.length ? await harvestFreshUploads(queries, cutoff, today) : [];
-      // 차단 채널/본영상은 시드 단계에서 미리 제외(모순된 시딩 방지). 나머지 필터는 후단 파이프라인에서.
+      // 차단 채널/본영상/제외 영상은 시드 단계에서 미리 제외(모순된 시딩 방지). 나머지 필터는 후단 파이프라인에서.
       // 차단은 이 카테고리(meta.key)에 적용되는 것만(전역 + 이 카테고리) — 다른 카테고리 차단은 여기서 무시.
+      // 제외 영상을 시드로 다시 주입하면 "반드시 채택하라"(시드)와 "다시 넣지 마라"(제외)가 충돌해
+      // 프롬프트가 자기모순에 빠지므로 여기서 반드시 걸러야 한다.
       seedByCat.set(
         meta.key,
-        fresh.filter((v) => !isBlocked(v.channel, null, meta.key) && !isWatched(v.videoId))
+        fresh.filter(
+          (v) => !isBlocked(v.channel, null, meta.key) && !isWatched(v.videoId) && !isDismissed(v.videoId)
+        )
       );
     }
     const seedTotal = [...seedByCat.values()].reduce((a, v) => a + v.length, 0);
     log.info(`유튜브 RSS 하베스트 — 확정 신선 후보 ${seedTotal}건(추천+발굴 채널)`);
 
     const finalText = await runAgentQueryText(
-      buildPrompt(promptDefs, today, cutoff, freshDays, nowLabel(), globalBlockedLabels, watchedTitles, buildReclassSection(defs), seedByCat, blockedByCat),
+      buildPrompt(promptDefs, today, cutoff, freshDays, nowLabel(), globalBlockedLabels, watchedTitles, buildReclassSection(defs), seedByCat, blockedByCat, dismissHints),
       {
         // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
         // allowedTools = 그 도구들을 무프롬프트 허용.
@@ -593,6 +623,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
         const items = enriched
           .filter((x) => !isBlocked(x.channel, x.channelHandle, meta.key))
           .filter((x) => !isWatched(x.videoId)) // '본영상' 체크된 영상은 수집 제외
+          .filter((x) => !isDismissed(x.videoId)) // 사용자가 [제외]한 영상은 영구 수집 제외
           .filter((x) => !matchesExclude(x, meta.excludeKeywords))
           .filter((x) => !isForeignForKr(x, meta.region));
 

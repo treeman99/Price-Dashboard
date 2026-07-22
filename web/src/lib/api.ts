@@ -12,6 +12,7 @@ import type {
   YoutubeCategoryDef,
   BlockedChannel,
   WatchedVideo,
+  DismissedVideo,
   ProductSource,
   UpsertProductSourceInput,
   ResolveResult,
@@ -355,6 +356,44 @@ export const api = {
   /** 본영상 체크 OFF(해제). 다시 검색에 노출될 수 있다. */
   unmarkYoutubeWatched: (videoId: string) =>
     fetch(`/api/youtube/watched/${encodeURIComponent(videoId)}`, { method: "DELETE" }).then((r) =>
+      j<{ ok: boolean }>(r)
+    ),
+
+  // ── 유튜브 '이 영상 제외'(영구 제외) ──
+  youtubeDismissed: () => fetch("/api/youtube/dismissed").then((r) => j<DismissedVideo[]>(r)),
+
+  /**
+   * 영상 1건을 영구 제외. 사유는 선택이라 원클릭 제외 시엔 보내지 않는다.
+   * 서버는 기존 항목이 있으면 truthy 한 값만 덮어쓰므로 재호출해도 안전하다(멱등).
+   */
+  dismissYoutubeVideo: (input: {
+    videoId: string;
+    title?: string | null;
+    channel?: string | null;
+    url?: string | null;
+    categoryKey?: string | null;
+    reason?: string | null;
+  }) =>
+    fetch("/api/youtube/dismissed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<DismissedVideo>(r)),
+
+  /**
+   * 제외 사유만 수정. null 을 보내면 사유가 지워진다
+   * (제외 자체는 유지 — 사유 삭제는 이 경로로만 가능하다).
+   */
+  updateYoutubeDismissReason: (videoId: string, reason: string | null) =>
+    fetch(`/api/youtube/dismissed/${encodeURIComponent(videoId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    }).then((r) => j<DismissedVideo>(r)),
+
+  /** 제외 해제(영구 제외이므로 이게 유일한 복구 경로다). */
+  undismissYoutubeVideo: (videoId: string) =>
+    fetch(`/api/youtube/dismissed/${encodeURIComponent(videoId)}`, { method: "DELETE" }).then((r) =>
       j<{ ok: boolean }>(r)
     ),
 

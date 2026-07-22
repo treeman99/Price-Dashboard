@@ -11,7 +11,12 @@ import {
   applyYoutubeDedup,
 } from "./curate.ts";
 import { parseHandle, extractUploadIso, isLiveOrUpcomingHtml } from "./oembed.ts";
-import type { YoutubeCategoryDef, YoutubeSnapshot, BlockedChannel } from "../../shared/types.ts";
+import type {
+  YoutubeCategoryDef,
+  YoutubeSnapshot,
+  BlockedChannel,
+  DismissedVideo,
+} from "../../shared/types.ts";
 
 const defs: YoutubeCategoryDef[] = [
   { key: "ai", label: "AI · LLM", emoji: "🤖", color: "#000", region: "global" },
@@ -57,6 +62,75 @@ test("buildPrompt: 추천 채널이 있으면 ⭐ 취향 프로필 섹션 포함
   assert.match(p, /신선도·다양성·검색범위·🚫제외 채널·👁본영상/);
   // 채널 페이지 WebFetch 가 빈 결과일 수 있음을 알리고 검색 폴백을 지시한다(실행 불가 지시 방지).
   assert.match(p, /빈 결과를 "새 영상 없음"으로\s*\n?\s*단정하지 말고/);
+});
+
+// 제외 영상은 buildPrompt 의 **마지막**(11번째) 위치 인자라, 앞의 기본값 인자들을 전부 채워 호출한다.
+const promptWithDismissed = (
+  items: DismissedVideo[],
+  catDefs: YoutubeCategoryDef[] = defs
+): string =>
+  buildPrompt(catDefs, "2026-06-28", "2026-06-21", 7, "2026-06-28 12:00", [], [], "", new Map(), new Map(), items);
+
+const dis = (over: Partial<DismissedVideo> = {}): DismissedVideo => ({
+  videoId: "dQw4w9WgXcQ",
+  title: "요즘 뜨는 AI 툴 15개 몰아보기",
+  channel: "떠먹여주는AI",
+  url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  categoryKey: null,
+  reason: null,
+  dismissedAt: "2026-06-27T00:00:00.000Z",
+  ...over,
+});
+
+test("buildPrompt: 제외 영상이 없으면 🙅 섹션이 아예 안 생긴다(프롬프트 팽창 방지)", () => {
+  const p = promptWithDismissed([]);
+  assert.doesNotMatch(p, /🙅/);
+  assert.doesNotMatch(p, /제외한 영상/);
+});
+
+test("buildPrompt: 제외 영상은 \"제목\" — 채널 형태로 나열되고 하드/소프트 두 층위를 모두 지시한다", () => {
+  const p = promptWithDismissed([dis()]);
+  assert.match(p, /🙅 제외한 영상/);
+  assert.match(p, /"요즘 뜨는 AI 툴 15개 몰아보기" — 떠먹여주는AI/);
+  // (1) 하드 규칙: 그 영상 자체는 재수집 금지
+  assert.match(p, /\*\*하드 규칙\*\*.*어떤 카테고리에도 다시 넣지 마라/);
+  // (2) 소프트 학습 신호: 비슷한 '종류'를 후순위로
+  assert.match(p, /\*\*학습 신호\*\*/);
+  assert.match(p, /비슷한 성격의 다른 영상도 우선순위를 낮춰라/);
+  // 채널 배제와 종류 회피를 혼동하지 않도록 못박는다(제외 채널 섹션과의 역할 분리).
+  assert.match(p, /채널 자체를 배제하지는 마라/);
+});
+
+test("buildPrompt: 사유가 있으면 (사유: ...)로 붙고 명시적 지시로 취급하라고 지시한다", () => {
+  const p = promptWithDismissed([dis({ reason: "얕은 나열식 요약 영상은 싫다" })]);
+  assert.match(p, /"요즘 뜨는 AI 툴 15개 몰아보기" — 떠먹여주는AI \(사유: 얕은 나열식 요약 영상은 싫다\)/);
+  assert.match(p, /명시적 지시\*\*로 취급해 반드시 준수하라/);
+  // 사유 없는 항목에는 (사유: ...) 가 붙지 않는다(규칙 설명문에도 같은 문구가 상수로 들어 있으므로
+  // 전체 프롬프트가 아니라 "— 채널명" 뒤를 좁혀서 본다).
+  assert.doesNotMatch(promptWithDismissed([dis()]), /떠먹여주는AI \(사유:/);
+});
+
+test("buildPrompt: categoryKey 가 있으면 어느 카테고리에서 거부됐는지 드러낸다", () => {
+  const p = promptWithDismissed([dis({ categoryKey: "ai" })]);
+  assert.match(p, /— 떠먹여주는AI \[ai 카테고리에서 거부\]/);
+  // categoryKey 가 없으면 항목 줄에 표기가 붙지 않는다(규칙 설명문에는 같은 문구가 상수로 들어 있으므로
+  // 전체 프롬프트가 아니라 "— 채널명" 뒤를 좁혀서 본다).
+  assert.doesNotMatch(promptWithDismissed([dis()]), /— 떠먹여주는AI \[/);
+});
+
+test("buildPrompt: 제목이 비어 있으면(원클릭 제외) videoId 로 대체 표기한다", () => {
+  const p = promptWithDismissed([dis({ title: "", channel: "" })]);
+  assert.match(p, /"dQw4w9WgXcQ" — \(채널 미상\)/);
+});
+
+test("buildPrompt: 취향 신호 우선순위 문장에 🙅제외 영상이 포함된다(추천 채널이 제외 규칙을 이기지 못하게)", () => {
+  const withRec: YoutubeCategoryDef[] = [
+    { ...defs[0], recommendedChannels: ["테크몽 (@techmong)"] },
+    defs[1],
+  ];
+  const p = promptWithDismissed([dis()], withRec);
+  assert.match(p, /신선도·다양성·검색범위·🚫제외 채널·👁본영상·🙅제외 영상 규칙이/);
+  assert.match(p, /추천 채널의 영상이라도 🙅제외한 영상과 같은 종류면 넣지 마라/);
 });
 
 const blk = (channel: string, handle: string | null, categoryKey: string | null = null): BlockedChannel => ({

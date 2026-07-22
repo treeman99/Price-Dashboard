@@ -412,6 +412,29 @@ export interface WatchedVideo {
 }
 
 /**
+ * 사용자가 카드에서 '제외'한 영상(영구 제외 원장 1건). videoId 기준.
+ * '본영상'(WatchedVideo)이 N일 만료되는 기간제인 것과 달리, 이쪽은 만료가 없다 —
+ * "이 영상은 내가 원하는 종류가 아니다"라는 취향 신호이므로 시간이 지나도 유효하기 때문이다.
+ * 해제는 관리 다이얼로그의 [해제]로만 가능하며, 다음 수집 프롬프트에 부정 예시로 주입된다.
+ */
+export interface DismissedVideo {
+  /** YouTube 11자 videoId(안정 식별자). */
+  videoId: string;
+  /** 표시/디버그용 제목(제외 시점). 프롬프트 부정 예시의 핵심 신호. */
+  title: string;
+  /** 표시/디버그용 채널명(제외 시점). */
+  channel: string;
+  /** 원본 watch URL. 관리 다이얼로그에서 원본 확인용. 모르면 null. */
+  url?: string | null;
+  /** 어느 카테고리 카드에서 제외했는지(맥락 — 프롬프트 힌트에 활용). 모르면 null. */
+  categoryKey?: string | null;
+  /** 선택적 사유. 원클릭 제외 시엔 비어 있고, 나중에 관리 화면에서 붙일 수 있다. */
+  reason?: string | null;
+  /** 제외 시각(ISO). 만료는 없고 정렬(최근 우선)에만 쓴다. */
+  dismissedAt: string;
+}
+
+/**
  * 사용자가 카드를 다른 카테고리로 옮긴 사례(재분류 피드백).
  * 다음 수집 프롬프트에 few-shot 규칙으로 주입해 큐레이터의 분류를 교정한다.
  */

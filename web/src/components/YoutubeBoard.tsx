@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   Circle,
   Star,
+  EyeOff,
 } from "lucide-react";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategoryDef } from "@shared/types";
 import { safeHref } from "@shared/url";
@@ -33,6 +34,7 @@ import { Tip } from "@/components/ui/tooltip";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 import { BlockedChannelsDialog } from "@/components/BlockedChannelsDialog";
+import { DismissedVideosDialog } from "@/components/DismissedVideosDialog";
 
 /** 프론트 낙관적 제거용 채널 동일성 판정(백엔드 buildBlockMatcher와 동일 규칙). */
 function sameChannel(a: YoutubeVideo, b: YoutubeVideo): boolean {
@@ -180,6 +182,35 @@ function WatchedToggle({
   );
 }
 
+/**
+ * 카드 우상단 '이 영상 제외' — 한 번 누르면 확인 없이 바로 사라진다(사유는 선택, 나중에 붙임).
+ * 좌상단 '본영상 체크'(emerald·기간제)와 같은 오버레이 줄이지만 반대편·붉은색으로 두어,
+ * "잠깐 숨김"과 "영구 제외"를 색과 위치로 구분한다.
+ */
+function DismissButton({
+  video,
+  onDismiss,
+}: {
+  video: YoutubeVideo;
+  onDismiss: (video: YoutubeVideo) => void;
+}) {
+  return (
+    <button
+      onClick={() => onDismiss(video)}
+      disabled={!video.videoId}
+      title={
+        video.videoId
+          ? "이 영상 제외 — 만료 없이 영구히 숨기고, 다음 수집 때 비슷한 영상도 피합니다('제외 영상'에서 되돌릴 수 있어요)"
+          : "영상 식별자가 없어 제외할 수 없습니다"
+      }
+      className="absolute right-3.5 top-3.5 z-10 inline-flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[11px] font-medium text-white shadow-sm backdrop-blur transition-colors hover:bg-destructive disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-black/55"
+    >
+      <EyeOff className="h-3.5 w-3.5" />
+      이 영상 제외
+    </button>
+  );
+}
+
 function VideoCard({
   video,
   color,
@@ -191,6 +222,7 @@ function VideoCard({
   onBlock,
   onMove,
   onToggleWatched,
+  onDismiss,
 }: {
   video: YoutubeVideo;
   color: string;
@@ -203,6 +235,7 @@ function VideoCard({
   onBlock: (video: YoutubeVideo, categoryKey: string) => void;
   onMove: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
   onToggleWatched: (video: YoutubeVideo) => void;
+  onDismiss: (video: YoutubeVideo) => void;
 }) {
   const canRecommend = !!recommendedChannelValue(video.channel, video.channelHandle);
   const videoHref = safeHref(video.url);
@@ -218,6 +251,7 @@ function VideoCard({
       <div className="relative isolate shrink-0 p-2 pb-0">
         <Thumbnail video={video} />
         <WatchedToggle video={video} onToggleWatched={onToggleWatched} />
+        <DismissButton video={video} onDismiss={onDismiss} />
       </div>
       <div className="flex min-h-0 flex-1 flex-col p-3 pt-2">
         {/* 제목 — 2줄 고정 */}
@@ -320,6 +354,7 @@ function Section({
   onMoveVideo,
   onToggleWatched,
   onToggleRecommend,
+  onDismiss,
 }: {
   def: YoutubeCategoryDef;
   items: YoutubeVideo[];
@@ -335,6 +370,7 @@ function Section({
   onMoveVideo: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
   onToggleWatched: (video: YoutubeVideo) => void;
   onToggleRecommend: (video: YoutubeVideo, categoryKey: string) => void;
+  onDismiss: (video: YoutubeVideo, categoryKey: string) => void;
 }) {
   const ctrl =
     "rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
@@ -402,6 +438,7 @@ function Section({
               onBlock={onBlock}
               onMove={onMoveVideo}
               onToggleWatched={onToggleWatched}
+              onDismiss={(v) => onDismiss(v, def.key)}
             />
           ))}
         </div>
@@ -423,6 +460,8 @@ export function YoutubeBoard() {
   const [dialog, setDialog] = useState<CategoryDialogState | null>(null);
   const [blockCount, setBlockCount] = useState(0);
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
+  const [dismissCount, setDismissCount] = useState(0);
+  const [dismissDialogOpen, setDismissDialogOpen] = useState(false);
 
   async function load() {
     try {
@@ -443,6 +482,13 @@ export function YoutubeBoard() {
       /* 차단 수 표시는 부가 정보라 실패해도 무시 */
     }
   }
+  async function loadDismissCount() {
+    try {
+      setDismissCount((await api.youtubeDismissed()).length);
+    } catch {
+      /* 제외 영상 수 표시도 부가 정보라 실패해도 무시 */
+    }
+  }
   async function checkStatus() {
     try {
       setCollecting((await api.youtubeStatus()).collecting);
@@ -453,6 +499,7 @@ export function YoutubeBoard() {
   useEffect(() => {
     load();
     loadBlockCount();
+    loadDismissCount();
     checkStatus(); // 진입 시 (예: 정시 수집이 돌고 있으면) '수집 중'을 즉시 반영
   }, []);
 
@@ -470,6 +517,7 @@ export function YoutubeBoard() {
         setCollecting(false);
         await load(); // 완료 → 새 결과 반영
         loadBlockCount();
+        loadDismissCount();
       }
     }, 5000);
     return () => clearInterval(id);
@@ -559,6 +607,45 @@ export function YoutubeBoard() {
       setErr(null);
     } catch (e) {
       setSnap(prev ?? null); // 실패 시 롤백
+      setErr((e as Error).message);
+    }
+  }
+
+  /**
+   * 카드 '이 영상 제외': 확인 창도 사유 입력도 없이 즉시 제외한다(사유는 관리 다이얼로그에서 나중에).
+   * 되돌리기는 '제외 영상' 관리의 [해제]뿐이라, 실수해도 복구 경로가 있음을 버튼 툴팁에 적어 두었다.
+   */
+  async function dismissVideo(video: YoutubeVideo, categoryKey: string) {
+    const videoId = video.videoId;
+    if (!videoId) {
+      setErr("영상 식별자가 없어 제외할 수 없습니다.");
+      return;
+    }
+    const prev = snap;
+    // 낙관적 제거: 제외 원장은 videoId 기준 전역이라 모든 카테고리에서 함께 빠진다(서버 필터와 동일).
+    setSnap((s) =>
+      s
+        ? {
+            ...s,
+            categories: s.categories.map((c) => ({
+              ...c,
+              items: c.items.filter((it) => it.videoId !== videoId),
+            })),
+          }
+        : s
+    );
+    try {
+      await api.dismissYoutubeVideo({
+        videoId,
+        title: video.title,
+        channel: video.channel,
+        url: video.url ?? null,
+        categoryKey,
+      });
+      loadDismissCount();
+      setErr(null);
+    } catch (e) {
+      setSnap(prev ?? null); // 실패 시 롤백 → 카드가 다시 나타난다
       setErr((e as Error).message);
     }
   }
@@ -680,6 +767,9 @@ export function YoutubeBoard() {
           <Button variant="outline" onClick={() => setBlockDialogOpen(true)}>
             <Ban className="h-4 w-4" /> 제외 채널{blockCount > 0 ? ` (${blockCount})` : ""}
           </Button>
+          <Button variant="outline" onClick={() => setDismissDialogOpen(true)}>
+            <EyeOff className="h-4 w-4" /> 제외 영상{dismissCount > 0 ? ` (${dismissCount})` : ""}
+          </Button>
           <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
             <Plus className="h-4 w-4" /> 카테고리 추가
           </Button>
@@ -727,6 +817,7 @@ export function YoutubeBoard() {
             onMoveVideo={moveVideo}
             onToggleWatched={toggleWatched}
             onToggleRecommend={toggleRecommend}
+            onDismiss={dismissVideo}
           />
         ))
       )}
@@ -739,6 +830,15 @@ export function YoutubeBoard() {
         onChanged={() => {
           load();
           loadBlockCount();
+        }}
+      />
+      <DismissedVideosDialog
+        open={dismissDialogOpen}
+        defs={defs}
+        onClose={() => setDismissDialogOpen(false)}
+        onChanged={() => {
+          load(); // 해제된 영상이 스냅샷에 다시 나타나도록
+          loadDismissCount();
         }}
       />
     </div>

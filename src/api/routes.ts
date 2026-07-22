@@ -56,6 +56,13 @@ import {
 } from "../youtube/blocklist.ts";
 import { addRecommendedChannel, removeRecommendedChannel } from "../../shared/youtube.ts";
 import { markWatched, unmarkWatched, activeWatched, annotateWatched } from "../youtube/watched.ts";
+import {
+  loadDismissed,
+  addDismiss,
+  setDismissReason,
+  removeDismiss,
+  applyDismissed,
+} from "../youtube/dismissed.ts";
 import { applyRegionFilter, applyYoutubeDedup } from "../youtube/curate.ts";
 import { getStockSnapshot, refreshStock, isStockCollecting } from "../stock/stock.ts";
 import {
@@ -563,10 +570,11 @@ api.delete("/news/categories/:key", (req, res) => {
 
 /**
  * 최신 유튜브 스냅샷. 읽기 시점 필터: 차단 채널 제외(해제 시 즉시 복원) +
+ * 제외한 개별 영상 제외(카드의 [제외] 버튼, 해제 시 즉시 복원) +
  * kr 카테고리의 해외 영상 제외(카테고리 검색범위 반영 → 재수집 없이 즉시 정리).
  */
 api.get("/youtube", (_req, res) => {
-  const snap = applyBlocklist(getYoutubeSnapshot());
+  const snap = applyDismissed(applyBlocklist(getYoutubeSnapshot()));
   res.json(annotateWatched(applyYoutubeDedup(applyRegionFilter(snap, ytLoadCategories()))));
 });
 
@@ -594,7 +602,7 @@ api.get("/youtube/status", (_req, res) => {
 
 /**
  * 카드(영상)를 다른 카테고리로 이동. 스냅샷을 즉시 갱신하고, 이동 사례를 재분류 기록에 남겨
- * 다음 수집 프롬프트가 학습하게 한다. 응답은 읽기 필터(차단/지역)를 적용한 최신 스냅샷.
+ * 다음 수집 프롬프트가 학습하게 한다. 응답은 읽기 필터(차단/제외 영상/지역)를 적용한 최신 스냅샷.
  */
 api.post("/youtube/move", (req, res) => {
   try {
@@ -610,7 +618,11 @@ api.post("/youtube/move", (req, res) => {
     }
     const snap = moveYoutubeVideo(String(videoId), String(fromKey), String(toKey));
     res.json(
-      annotateWatched(applyYoutubeDedup(applyRegionFilter(applyBlocklist(snap), ytLoadCategories())))
+      annotateWatched(
+        applyYoutubeDedup(
+          applyRegionFilter(applyDismissed(applyBlocklist(snap)), ytLoadCategories())
+        )
+      )
     );
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
@@ -792,6 +804,52 @@ api.post("/youtube/watched", (req, res) => {
 api.delete("/youtube/watched/:videoId", (req, res) => {
   const ok = unmarkWatched(req.params.videoId);
   if (!ok) return res.status(404).json({ error: "본영상 목록에 없습니다." });
+  res.json({ ok: true });
+});
+
+// ── 유튜브 영상 제외 목록(영구) ──
+// 본영상(위)은 "이미 봤으니 당분간 빼줘"라 기간이 지나면 만료되지만, 이쪽은 "이런 영상은 원치 않는다"는
+// 취향 신호라 만료가 없다. 해제는 관리 다이얼로그의 DELETE 로만 한다.
+
+/** 제외 영상 목록 (최근 제외 먼저) */
+api.get("/youtube/dismissed", (_req, res) => {
+  const list = [...loadDismissed()].sort((a, b) => b.dismissedAt.localeCompare(a.dismissedAt));
+  res.json(list);
+});
+
+/** 영상 제외(카드의 '제외' 버튼). 사유는 선택 — 원클릭 제외면 비워 둔다. videoId 기준 멱등. */
+api.post("/youtube/dismissed", (req, res) => {
+  try {
+    const { videoId, title, channel, url, categoryKey, reason } = req.body ?? {};
+    const entry = addDismiss({
+      videoId: String(videoId ?? ""),
+      title: title != null ? String(title) : null,
+      channel: channel != null ? String(channel) : null,
+      url: url != null ? String(url) : null,
+      categoryKey: categoryKey != null ? String(categoryKey) : null,
+      reason: reason != null ? String(reason) : null,
+    });
+    res.json(entry);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * 사유 붙이기/지우기(관리 다이얼로그). 빈 문자열이나 null 을 주면 사유가 지워진다.
+ * addDismiss 는 기존 값을 보강만 하므로 삭제는 반드시 이 경로로 와야 한다.
+ */
+api.patch("/youtube/dismissed/:videoId", (req, res) => {
+  const { reason } = req.body ?? {};
+  const entry = setDismissReason(req.params.videoId, reason != null ? String(reason) : null);
+  if (!entry) return res.status(404).json({ error: "제외 목록에 없습니다." });
+  res.json(entry);
+});
+
+/** 제외 해제(되돌리기). 다음 조회부터 다시 카드로 보인다. */
+api.delete("/youtube/dismissed/:videoId", (req, res) => {
+  const ok = removeDismiss(req.params.videoId);
+  if (!ok) return res.status(404).json({ error: "제외 목록에 없습니다." });
   res.json({ ok: true });
 });
 
