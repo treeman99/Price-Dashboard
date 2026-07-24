@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   RefreshCw,
   Loader2,
@@ -26,6 +26,8 @@ import {
   recommendedChannelValue,
   addRecommendedChannel,
   removeRecommendedChannel,
+  autoWatchedNotice,
+  shouldAutoMarkWatched,
 } from "@shared/youtube";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -51,7 +53,7 @@ function canBlockChannel(v: YoutubeVideo): boolean {
   return !!(v.channelHandle && v.channelHandle.trim()) || (!!v.channel && v.channel !== UNKNOWN_CHANNEL);
 }
 
-function Thumbnail({ video }: { video: YoutubeVideo }) {
+function Thumbnail({ video, onOpen }: { video: YoutubeVideo; onOpen: () => void }) {
   const [errored, setErrored] = useState(false);
   const href = safeHref(video.url);
   const thumbSrc = safeHref(video.thumbnail);
@@ -93,8 +95,9 @@ function Thumbnail({ video }: { video: YoutubeVideo }) {
       href={href}
       target="_blank"
       rel="noreferrer"
+      onClick={onOpen}
       className="group relative block aspect-video w-full overflow-hidden rounded-md bg-muted"
-      title="유튜브에서 보기"
+      title="유튜브에서 보기 — 보고 돌아오면 자동으로 '본영상' 체크됩니다"
     >
       {inner}
     </a>
@@ -223,6 +226,7 @@ function VideoCard({
   onMove,
   onToggleWatched,
   onDismiss,
+  onOpenVideo,
 }: {
   video: YoutubeVideo;
   color: string;
@@ -236,6 +240,8 @@ function VideoCard({
   onMove: (video: YoutubeVideo, fromKey: string, toKey: string) => void;
   onToggleWatched: (video: YoutubeVideo) => void;
   onDismiss: (video: YoutubeVideo) => void;
+  /** 썸네일·'영상 보기'로 유튜브를 연 순간(복귀 시 자동 본영상 체크 대상 등록) */
+  onOpenVideo: (video: YoutubeVideo) => void;
 }) {
   const canRecommend = !!recommendedChannelValue(video.channel, video.channelHandle);
   const videoHref = safeHref(video.url);
@@ -249,7 +255,7 @@ function VideoCard({
       {/* isolate: '본영상' 버튼(z-10)이 카드 밖으로 튀어나와 sticky 탭 헤더(z-10) 위에 겹치지
           않도록 독립 스태킹 컨텍스트를 만든다 → 버튼도 카드처럼 헤더 아래로 스크롤된다. */}
       <div className="relative isolate shrink-0 p-2 pb-0">
-        <Thumbnail video={video} />
+        <Thumbnail video={video} onOpen={() => onOpenVideo(video)} />
         <WatchedToggle video={video} onToggleWatched={onToggleWatched} />
         <DismissButton video={video} onDismiss={onDismiss} />
       </div>
@@ -284,6 +290,8 @@ function VideoCard({
               href={videoHref}
               target="_blank"
               rel="noreferrer"
+              onClick={() => onOpenVideo(video)}
+              title="유튜브에서 보기 — 보고 돌아오면 자동으로 '본영상' 체크됩니다"
               className="inline-flex items-center gap-1 font-medium text-[#ff0000] hover:underline"
             >
               <PlayCircle className="h-3.5 w-3.5" /> 영상 보기
@@ -355,6 +363,7 @@ function Section({
   onToggleWatched,
   onToggleRecommend,
   onDismiss,
+  onOpenVideo,
 }: {
   def: YoutubeCategoryDef;
   items: YoutubeVideo[];
@@ -371,6 +380,7 @@ function Section({
   onToggleWatched: (video: YoutubeVideo) => void;
   onToggleRecommend: (video: YoutubeVideo, categoryKey: string) => void;
   onDismiss: (video: YoutubeVideo, categoryKey: string) => void;
+  onOpenVideo: (video: YoutubeVideo) => void;
 }) {
   const ctrl =
     "rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
@@ -439,6 +449,7 @@ function Section({
               onMove={onMoveVideo}
               onToggleWatched={onToggleWatched}
               onDismiss={(v) => onDismiss(v, def.key)}
+              onOpenVideo={onOpenVideo}
             />
           ))}
         </div>
@@ -462,6 +473,12 @@ export function YoutubeBoard() {
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
   const [dismissCount, setDismissCount] = useState(0);
   const [dismissDialogOpen, setDismissDialogOpen] = useState(false);
+  /** 자동 체크 결과 알림(되돌리기 제공). ids 는 방금 자동 체크된 videoId 들. */
+  const [autoNotice, setAutoNotice] = useState<{ ids: string[]; text: string } | null>(null);
+  /** 유튜브로 연 뒤 아직 복귀 처리되지 않은 영상들: videoId → 마킹에 쓸 메타 */
+  const pendingRef = useRef(new Map<string, { title: string; channel: string }>());
+  /** 영상을 연 뒤 이 탭이 숨겨진 시각(ms). 복귀 시 이탈 시간을 재는 기준. */
+  const hiddenAtRef = useRef<number | null>(null);
 
   async function load() {
     try {
@@ -523,6 +540,36 @@ export function YoutubeBoard() {
     return () => clearInterval(id);
   }, [collecting]);
 
+  /**
+   * '보고 돌아오면 자동 본영상 체크'. 카드에서 유튜브를 열면 새 탭이 뜨면서 이 탭은 hidden 이 되고,
+   * 돌아오면 visible 이 된다 → 그 사이 이탈 시간이 충분하면 열어 둔 영상들을 본영상으로 체크한다.
+   * 곧바로 돌아온 경우(오클릭)는 체크하지 않지만 대기열은 남겨 둔다 — 탭을 띄워 두고 나중에 보는
+   * 흐름에서도 그때 돌아오면 체크되도록. (cmd+클릭 등 배경 탭으로 열면 hidden 이 없어 체크되지 않는다.)
+   */
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        if (pendingRef.current.size && hiddenAtRef.current == null) hiddenAtRef.current = Date.now();
+        return;
+      }
+      const hiddenAt = hiddenAtRef.current;
+      hiddenAtRef.current = null; // 복귀했으니 다음 이탈부터 다시 잰다
+      if (!shouldAutoMarkWatched(hiddenAt, Date.now(), pendingRef.current.size)) return;
+      const entries = [...pendingRef.current.entries()];
+      pendingRef.current.clear();
+      autoMarkWatched(entries);
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
+  // 자동 체크 알림은 되돌릴 시간을 준 뒤 스스로 사라진다.
+  useEffect(() => {
+    if (!autoNotice) return;
+    const id = setTimeout(() => setAutoNotice(null), 12000);
+    return () => clearTimeout(id);
+  }, [autoNotice]);
+
   async function blockChannel(v: YoutubeVideo, categoryKey: string) {
     const label = v.channelHandle ? `${v.channel} (${v.channelHandle})` : v.channel;
     const catLabel = defs.find((d) => d.key === categoryKey)?.label ?? categoryKey;
@@ -581,6 +628,24 @@ export function YoutubeBoard() {
     }
   }
 
+  /** 여러 카드의 watched 플래그를 한 번에 반영(수동 토글·자동 체크·롤백 공용). */
+  function applyWatchedFlag(ids: Set<string>, value: boolean) {
+    if (!ids.size) return;
+    setSnap((s) =>
+      s
+        ? {
+            ...s,
+            categories: s.categories.map((c) => ({
+              ...c,
+              items: c.items.map((it) =>
+                it.videoId && ids.has(it.videoId) ? { ...it, watched: value } : it
+              ),
+            })),
+          }
+        : s
+    );
+  }
+
   async function toggleWatched(video: YoutubeVideo) {
     const videoId = video.videoId;
     if (!videoId) {
@@ -588,26 +653,57 @@ export function YoutubeBoard() {
       return;
     }
     const next = !video.watched;
-    const prev = snap;
+    const ids = new Set([videoId]);
+    // 사용자가 직접 정한 상태가 우선 — 자동 체크 대기열에서 빼서 복귀 시 되덮이지 않게 한다.
+    pendingRef.current.delete(videoId);
     // 낙관적 업데이트: 카드를 제거하지 않고 watched 상태만 토글(되돌리기 가능).
-    setSnap((s) =>
-      s
-        ? {
-            ...s,
-            categories: s.categories.map((c) => ({
-              ...c,
-              items: c.items.map((it) => (it.videoId === videoId ? { ...it, watched: next } : it)),
-            })),
-          }
-        : s
-    );
+    applyWatchedFlag(ids, next);
     try {
       if (next) await api.markYoutubeWatched({ videoId, title: video.title, channel: video.channel });
       else await api.unmarkYoutubeWatched(videoId);
       setErr(null);
     } catch (e) {
-      setSnap(prev ?? null); // 실패 시 롤백
+      applyWatchedFlag(ids, !next); // 실패 시 이 카드만 롤백
       setErr((e as Error).message);
+    }
+  }
+
+  /**
+   * 카드에서 유튜브를 연 순간(썸네일·'영상 보기' 클릭). 여기서 바로 체크하지 않고 대기열에만 넣는다 —
+   * 실제 체크는 사용자가 영상을 보고 이 탭으로 돌아왔을 때(visibilitychange) 이뤄진다.
+   */
+  function openVideo(video: YoutubeVideo) {
+    const videoId = video.videoId;
+    if (!videoId || video.watched) return; // 식별 불가·이미 체크된 영상은 대상 아님
+    pendingRef.current.set(videoId, { title: video.title, channel: video.channel });
+  }
+
+  /** 복귀 시점의 자동 체크. 실패한 항목만 되돌리고, 성공분은 '되돌리기' 알림으로 안내한다. */
+  async function autoMarkWatched(entries: [string, { title: string; channel: string }][]) {
+    applyWatchedFlag(new Set(entries.map(([id]) => id)), true); // 낙관적
+    const results = await Promise.allSettled(
+      entries.map(([videoId, meta]) =>
+        api.markYoutubeWatched({ videoId, title: meta.title, channel: meta.channel })
+      )
+    );
+    const ok = entries.filter((_, i) => results[i].status === "fulfilled");
+    const failed = entries.filter((_, i) => results[i].status === "rejected");
+    if (failed.length) applyWatchedFlag(new Set(failed.map(([id]) => id)), false);
+    if (!ok.length) return;
+    setAutoNotice({ ids: ok.map(([id]) => id), text: autoWatchedNotice(ok.map(([, m]) => m.title)) });
+  }
+
+  /** 자동 체크 되돌리기 — 방금 체크된 영상만 해제한다(수동 체크분은 건드리지 않음). */
+  async function undoAutoWatched() {
+    const notice = autoNotice;
+    if (!notice) return;
+    setAutoNotice(null);
+    applyWatchedFlag(new Set(notice.ids), false);
+    const results = await Promise.allSettled(notice.ids.map((id) => api.unmarkYoutubeWatched(id)));
+    const failed = notice.ids.filter((_, i) => results[i].status === "rejected");
+    if (failed.length) {
+      applyWatchedFlag(new Set(failed), true);
+      setErr("일부 영상의 본영상 체크를 되돌리지 못했습니다.");
     }
   }
 
@@ -759,6 +855,7 @@ export function YoutubeBoard() {
           <ScheduleControl kind="youtube" />
           <span>
             · 최근 {freshDays}일 이내 영상 · AI·LLM/신제품 리뷰 전문 조사 · 수집 시 이메일 발송(지금 갱신 포함)
+            {" · 영상을 보고 돌아오면 자동 본영상 체크"}
             {updated && ` · 최종 갱신 ${updated}`}
             {snap && ` · 총 ${total}건`}
           </span>
@@ -818,6 +915,7 @@ export function YoutubeBoard() {
             onToggleWatched={toggleWatched}
             onToggleRecommend={toggleRecommend}
             onDismiss={dismissVideo}
+            onOpenVideo={openVideo}
           />
         ))
       )}
@@ -841,6 +939,30 @@ export function YoutubeBoard() {
           loadDismissCount();
         }}
       />
+
+      {/* 자동 체크 알림 — 우하단 '맨 위로' 버튼과 겹치지 않게 화면 하단 중앙에 띄운다. */}
+      {autoNotice && (
+        <div
+          role="status"
+          className="fixed bottom-6 left-1/2 z-50 flex max-w-[min(92vw,34rem)] -translate-x-1/2 items-center gap-3 rounded-full border bg-card px-4 py-2 text-sm shadow-lg"
+        >
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+          <span className="truncate">{autoNotice.text}</span>
+          <button
+            onClick={undoAutoWatched}
+            className="shrink-0 font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            되돌리기
+          </button>
+          <button
+            onClick={() => setAutoNotice(null)}
+            aria-label="알림 닫기"
+            className="shrink-0 rounded p-0.5 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

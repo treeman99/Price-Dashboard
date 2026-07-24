@@ -94,6 +94,41 @@ export function removeRecommendedChannel(
   return (list ?? []).filter((e) => !entryMatches(e, name, h));
 }
 
+// ── 카드에서 영상을 열고 돌아왔을 때의 자동 '본영상' 체크 ──
+// 카드의 썸네일/'영상 보기'를 누르면 새 탭에서 유튜브가 열리고 대시보드 탭은 hidden 이 된다.
+// 다시 돌아온(visible) 시점에 "봤다"고 보고 자동 체크한다. 다만 잘못 눌러 곧바로 닫고 돌아온
+// 경우까지 체크되면 곤란하므로, 떠나 있던 시간이 아래 최소치를 넘을 때만 체크한다.
+
+/** 자동 '본영상' 체크로 인정하는 최소 이탈 시간(ms). 이보다 짧게 다녀오면 오클릭으로 본다. */
+export const AUTO_WATCH_MIN_AWAY_MS = 5000;
+
+/**
+ * 탭 복귀 시 자동 '본영상' 체크를 할지 판정한다(순수 함수).
+ * @param hiddenAt   영상을 연 뒤 탭이 숨겨진 시각(ms). 숨겨진 적이 없으면 null → 체크 안 함.
+ * @param returnedAt 탭이 다시 보이게 된 시각(ms).
+ * @param pendingCount 복귀 대기 중인(=열어 둔) 영상 수. 0이면 체크할 대상이 없다.
+ */
+export function shouldAutoMarkWatched(
+  hiddenAt: number | null,
+  returnedAt: number,
+  pendingCount: number,
+  minAwayMs: number = AUTO_WATCH_MIN_AWAY_MS
+): boolean {
+  if (pendingCount <= 0 || hiddenAt == null) return false;
+  const away = returnedAt - hiddenAt;
+  return Number.isFinite(away) && away >= minAwayMs;
+}
+
+/** 자동 체크 알림 문구: 1건이면 제목, 여러 건이면 "제목 외 N건". */
+export function autoWatchedNotice(titles: string[]): string {
+  if (!titles.length) return "";
+  const head = titles[0].length > 40 ? `${titles[0].slice(0, 40)}…` : titles[0];
+  const rest = titles.length - 1;
+  return rest > 0
+    ? `'${head}' 외 ${rest}건을 본영상으로 체크했어요`
+    : `'${head}'을(를) 본영상으로 체크했어요`;
+}
+
 /**
  * 유튜브 소식 기본 카테고리 시드(최초 1회 저장, 이후 사용자가 추가/삭제 가능).
  * AI/LLM·신제품 리뷰를 중심으로 전문 조사하도록 description에 추천 채널/키워드를 담는다.
