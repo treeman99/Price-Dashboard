@@ -58,12 +58,27 @@ function toneClass(pct: number | null): string {
   return "text-muted-foreground";
 }
 
-function IndexCard({ idx }: { idx: StockIndex }) {
+/**
+ * 지수 시계열의 마지막 거래일. 휴장 배너·기준일 표기의 근거다.
+ *
+ * ⚠️ 휴장일에 `snap.sessionDate` 를 지수 기준일로 쓰면 안 된다 — 한국장 휴장의 sessionDate 는
+ * '다음 거래일'(미래)이라 "07-27 종가" 같은 존재하지 않는 값을 표시하게 된다.
+ * 지수 값은 언제나 history 마지막 점에서 왔으므로 기준일도 거기서 읽는다.
+ */
+function indexAsOf(idx: StockIndex): string | null {
+  return idx.history.length ? (idx.history[idx.history.length - 1]?.date ?? null) : null;
+}
+
+/** asOf: 휴장일에만 넘긴다 — 값이 '오늘'이 아니라 최종 거래일 종가임을 카드 단위로 못박는다. */
+function IndexCard({ idx, asOf }: { idx: StockIndex; asOf?: string | null }) {
   return (
     <Card className="p-4">
       <div className="flex items-end justify-between gap-2">
         <div>
-          <div className="text-xs text-muted-foreground">{idx.name}</div>
+          <div className="text-xs text-muted-foreground">
+            {idx.name}
+            {asOf && <span className="ml-1.5 opacity-70">· {asOf} 종가</span>}
+          </div>
           <div className="text-2xl font-bold">
             {idx.value != null ? idx.value.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : "-"}
           </div>
@@ -425,13 +440,23 @@ export function StockBoard() {
         </div>
       ) : (
         <>
-          {/* 지수 */}
+          {/* 지수 — 휴장일에도 최종 거래일 종가로 계속 보인다(서술만 비어 있다). */}
           {!!snap?.indices.length && (
             <section className="mt-8">
               <SectionTitle count={snap.indices.length}>📊 지수</SectionTitle>
+              {snap.closed && (
+                <p className="mb-3 rounded-md bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
+                  휴장 중이라 {indexAsOf(snap.indices[0]) ?? "최종 거래일"} 종가 기준입니다. 값과
+                  추이는 그대로 보이고, 시황 서술은 다음 거래일 브리핑에서 붙습니다.
+                </p>
+              )}
               <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
                 {snap.indices.map((idx, i) => (
-                  <IndexCard key={`${idx.name}-${i}`} idx={idx} />
+                  <IndexCard
+                    key={`${idx.name}-${i}`}
+                    idx={idx}
+                    asOf={snap.closed ? indexAsOf(idx) : null}
+                  />
                 ))}
               </div>
             </section>

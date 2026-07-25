@@ -587,13 +587,26 @@ export function emptySnapshot(
   };
 }
 
-/** 휴장 스냅샷. LLM 호출 없이 만들어지는 **정상 결과**라 source="holiday". */
+/**
+ * 휴장 스냅샷. LLM 호출 없이 만들어지는 **정상 결과**라 source="holiday".
+ *
+ * `indices` 는 **최종 거래일 종가 기준의 지수 카드**다(기본값 없음 = 빈 배열, 조회 실패 시의 현행 동작).
+ * 휴장이어도 지수 흐름은 계속 보여야 한다는 요구 때문에 싣는다 — 휴장 스냅샷이 최신본으로 뜨면서
+ * 화면에서 지수 섹션이 통째로 사라지고 등록 종목만 남던 증상이 여기서 비롯됐다.
+ * 서술(comment/outlook/rationale)은 전부 null 이다: 휴장 런은 LLM 을 호출하지 않으므로
+ * 값·차트만 채운다. 지어낸 서술을 붙이는 것보다 비워 두는 편이 정직하다.
+ *
+ * ⚠️ 지수의 기준일은 **sessionDate 와 다를 수 있다.** 한국장 휴장의 sessionDate 는 '다음 거래일'
+ *    (미래)이고 지수는 '직전 거래일'(과거) 종가다. 렌더 계층은 반드시 history 마지막 점의
+ *    date 를 기준일로 표기해야 한다 — sessionDate 를 지수 기준일처럼 쓰면 날짜가 뒤집힌다.
+ */
 export function holidaySnapshot(
   market: StockMarket,
   date: string,
   sessionDate: string | null,
   reason: string | null,
-  meta: SnapshotRoleMeta = {}
+  meta: SnapshotRoleMeta = {},
+  indices: StockIndex[] = []
 ): StockSnapshot {
   return {
     market,
@@ -604,7 +617,7 @@ export function holidaySnapshot(
     source: "holiday",
     closed: true,
     closedReason: reason,
-    indices: [],
+    indices,
     news: [],
     analyses: [],
     watchlist: [],

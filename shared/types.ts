@@ -187,9 +187,9 @@ export interface ScheduleSettings {
 
 /** 선택 가능한 Agent SDK 모델 1건. */
 export interface AgentModelOption {
-  /** SDK `options.model` 에 그대로 넘기는 모델 ID (예: "claude-opus-4-8"). */
+  /** SDK `options.model` 에 그대로 넘기는 모델 ID (예: "claude-opus-5"). */
   id: string;
-  /** UI 표시명 (예: "Opus 4.8"). */
+  /** UI 표시명 (예: "Opus 5"). */
   label: string;
   /** 선택 화면 보조 설명. */
   description?: string;

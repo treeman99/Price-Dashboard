@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pickWatchCandidate, resolveSession } from "./stock.ts";
+import { indexCards, pickWatchCandidate, resolveSession } from "./stock.ts";
+import { holidaySnapshot } from "./curate.ts";
 import { isMarketClosed } from "./calendar.ts";
 import type { StockSearchCandidate } from "../../shared/types.ts";
 
@@ -236,3 +237,63 @@ test("한국장 휴장(제헌절)은 다음 거래일을 sessionDate 로 돌려�
 // 구현에서 슬롯 검사를 통째로 제거해도 초록으로 통과했다(회귀 방어력 0).
 // 그 계층은 config.dbPath 기반 디스크 I/O 를 타므로, import 전에 DB_PATH 를 임시 디렉터리로
 // 돌릴 수 있는 별도 파일이 필요하다(이 파일은 stock.ts 를 정적 import 해 그럴 수 없다).
+
+// ── 휴장일 지수 유지 ──────────────────────────────────────────────────
+//
+// 휴장이어도 지수 흐름은 계속 보여야 한다. 예전에는 holidaySnapshot 이 indices 를 무조건
+// 빈 배열로 만들어서, 휴장 스냅샷이 최신본으로 뜨는 순간 화면에서 지수 섹션이 통째로 사라지고
+// 등록 종목(원장 기반이라 placeholder 로 항상 그려진다)만 남았다.
+
+test("indexCards: 값·등락률을 시계열 마지막 점에서 뽑고 서술은 비운다", () => {
+  const cards = indexCards([
+    {
+      name: "코스피",
+      points: [
+        { date: "2026-07-23", close: 6000, prevClose: 5940, changePct: 1, volume: null, currency: "KRW" },
+        { date: "2026-07-24", close: 6690.62, prevClose: 7096.6, changePct: -5.72, volume: null, currency: "KRW" },
+      ],
+    },
+  ]);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].value, 6690.62, "마지막 거래일 종가가 아니다");
+  assert.equal(cards[0].changePct, -5.72);
+  assert.equal(cards[0].history.length, 2, "스파크라인용 시계열이 보존돼야 한다");
+  // 휴장 런은 LLM 을 호출하지 않는다 — 없는 서술을 지어내지 않고 null 로 둔다.
+  assert.equal(cards[0].comment, null);
+  assert.equal(cards[0].outlook, null);
+  assert.equal(cards[0].rationale, null);
+});
+
+test("indexCards: 빈 시계열은 값을 null 로 둔다(0 으로 채우면 '보합'처럼 보이는 가짜 시세)", () => {
+  const cards = indexCards([{ name: "코스닥", points: [] }]);
+  assert.equal(cards[0].value, null);
+  assert.equal(cards[0].changePct, null);
+  assert.deepEqual(cards[0].history, []);
+});
+
+test("holidaySnapshot: 지수를 실어도 휴장 표식(source/closed)은 그대로다", () => {
+  const indices = indexCards([
+    {
+      name: "코스피",
+      points: [
+        { date: "2026-07-24", close: 6690.62, prevClose: 7096.6, changePct: -5.72, volume: null, currency: "KRW" },
+      ],
+    },
+  ]);
+  const snap = holidaySnapshot("kr", "2026-07-25", "2026-07-27", "주말", { role: "both" }, indices);
+  assert.equal(snap.source, "holiday", "후퇴 방지 가드가 보는 값이라 'empty' 로 바뀌면 안 된다");
+  assert.equal(snap.closed, true);
+  assert.equal(snap.indices.length, 1);
+  assert.equal(snap.indices[0].value, 6690.62);
+  // 지수 기준일(07-24)과 sessionDate(07-27, 다음 거래일)는 다르다. 렌더는 history 에서 읽어야 한다.
+  assert.equal(snap.indices[0].history[0].date, "2026-07-24");
+  assert.equal(snap.sessionDate, "2026-07-27");
+  // 뉴스·분석은 여전히 비어 있다 — 휴장에 채우는 것은 지수뿐이다.
+  assert.deepEqual(snap.news, []);
+  assert.deepEqual(snap.analyses, []);
+});
+
+test("holidaySnapshot: 지수 인자를 생략하면 기존 동작(빈 배열) — 조회 실패 시의 폴백", () => {
+  const snap = holidaySnapshot("us", "2026-07-25", "2026-07-24", "주말");
+  assert.deepEqual(snap.indices, []);
+});

@@ -34,6 +34,7 @@ import type {
   StockMarket,
   StockSlotRole,
   StockSnapshot,
+  StockIndex,
   StockPoint,
   StockWatchItem,
   StockSearchCandidate,
@@ -208,6 +209,49 @@ function weekChange(points: StockPoint[]): number | null {
 
 function lastPoint(points: StockPoint[]): StockPoint | null {
   return points.length ? points[points.length - 1] : null;
+}
+
+/**
+ * 시계열 → 지수 카드. **서술 없이 값·차트만** 채운다(comment/outlook/rationale = null).
+ * 휴장 스냅샷 전용 경로다 — 정상 브리핑의 지수는 curate.toSnapshot 이 LLM 서술과 합쳐 만든다.
+ *
+ * export 하는 이유는 pickWatchCandidate·resolveSession 과 같다: 휴장 경로는 주말·공휴일에만
+ * 실행돼 회귀를 눈으로 발견할 기회가 주 1~2회뿐이라, 값 매핑을 테스트로 못박아야 한다.
+ */
+export function indexCards(rows: Array<{ name: string; points: StockPoint[] }>): StockIndex[] {
+  return rows.map((r) => {
+    const last = lastPoint(r.points);
+    return {
+      name: r.name,
+      value: last?.close ?? null,
+      changePct: last?.changePct ?? null,
+      history: r.points,
+      comment: null,
+      outlook: null,
+      rationale: null,
+    };
+  });
+}
+
+/**
+ * 휴장일에 실을 지수 시세만 조회한다(등록 종목·환율·LLM 미포함 — 토큰은 여전히 0).
+ *
+ * 휴장이라도 지수 흐름은 보여야 하는데, 그 값을 어디서도 되살릴 수 없어서 **매번 새로 조회한다**:
+ *  · 지수는 stock_points 에 저장되지 않는다(그 테이블의 FK 는 등록 종목 id 다).
+ *  · 직전 스냅샷에서 베껴 올 수도 없다 — 한국장은 role="both" 라 휴장 스냅샷이 같은 파일에
+ *    덮어써서, 토요일 아침이면 금요일 브리핑이 디스크에서 이미 사라져 있다(HOLIDAY_STORAGE_ROLE 주석).
+ * 네이버가 휴장일에 돌려주는 마지막 점이 곧 '최종 거래일 종가'라 이 조회 하나로 요구가 충족된다.
+ *
+ * 실패는 빈 배열이다. 휴장 스냅샷 저장과 슬롯 종료 처리는 **어떤 경우에도** 진행돼야 한다 —
+ * 여기서 throw 하면 catch-up 이 30분마다 휴장 수집을 무한 재시도한다.
+ */
+async function gatherHolidayIndices(market: StockMarket): Promise<StockIndex[]> {
+  try {
+    return indexCards(await fetchIndexHistory(market, HISTORY_DAYS));
+  } catch (e) {
+    log.warn(`휴장일 지수 조회 실패 [${market}]: ${(e as Error).message} → 지수 없이 휴장 스냅샷 저장`);
+    return [];
+  }
 }
 
 interface Gathered {
@@ -544,11 +588,16 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
       // catch-up 게이트가 계속 '오늘 것 없음'으로 보고 30분마다 무한 재시도한다.
       // slot 도 싣는다(슬롯이 1개인 구성에서는 이것만으로 게이트가 닫힌다). 슬롯이 2개면
       // 파일이 하나뿐이라 뒤 런이 앞 런의 slot 을 덮어쓰므로, 최종 방어선은 아래 SLOT_HANDLED 원장이다.
-      const snap = holidaySnapshot(market, today, closed.sessionDate, closed.reason, {
-        role,
-        roleReason,
-        slot,
-      });
+      // 휴장이어도 지수는 싣는다 — 최종 거래일 종가 기준(gatherHolidayIndices 주석).
+      const holidayIndices = await gatherHolidayIndices(market);
+      const snap = holidaySnapshot(
+        market,
+        today,
+        closed.sessionDate,
+        closed.reason,
+        { role, roleReason, slot },
+        holidayIndices
+      );
       // 휴장은 역할 파일이 아니라 both 경로에 쓴다(HOLIDAY_STORAGE_ROLE 주석).
       store(snap, HOLIDAY_STORAGE_ROLE);
       // 휴장은 보낼 것이 없으므로 이 슬롯을 SLOT_HANDLED 로 '닫는다'. 닫지 않으면
@@ -561,7 +610,10 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
         reason: closed.reason,
         notifiedBySlot: mergeNotified(loadNotifiedMap(today, market), slot, SLOT_HANDLED),
       });
-      log.info(`증시 휴장 [${market}] ${today} — ${closed.reason ?? "사유 미상"} (LLM·알림 생략)`);
+      log.info(
+        `증시 휴장 [${market}] ${today} — ${closed.reason ?? "사유 미상"} ` +
+          `(LLM·알림 생략, 지수 ${holidayIndices.length}건 최종 거래일 기준으로 유지)`
+      );
       return snap;
     }
     const sessionDate = closed.sessionDate;
@@ -580,11 +632,15 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     // close/both 는 sessionDate 가 과거의 마감된 세션이라 판정이 유효하므로 그대로 유지한다.
     if (market === "us" && role !== "preview" && g.indexPoints.length && sessionDate) {
       if (markClosedIfNoSession(market, sessionDate, g.indexPoints)) {
-        const snap = holidaySnapshot(market, today, sessionDate, "휴장(시세 없음)", {
-          role,
-          roleReason,
-          slot,
-        });
+        // 이 경로는 이미 지수를 조회한 뒤다 — 재조회 없이 gather 결과를 그대로 카드로 만든다.
+        const snap = holidaySnapshot(
+          market,
+          today,
+          sessionDate,
+          "휴장(시세 없음)",
+          { role, roleReason, slot },
+          indexCards([...g.indexHistories].map(([name, points]) => ({ name, points })))
+        );
         store(snap, HOLIDAY_STORAGE_ROLE);
         // 위 달력 휴장과 동일 — 이 슬롯만 닫고 앞선 슬롯 기록은 맵 전체로 되쓴다.
         finishStockRun(today, market, true, {
