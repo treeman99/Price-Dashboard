@@ -12,14 +12,14 @@ process.env.DB_PATH = path.join(tmpDir, "price.db");
 const { AGENT_MODEL_OPTIONS, DEFAULT_AGENT_MODEL, getAgentModel, getModelSettings, saveAgentModel } =
   await import("./model-store.ts");
 
-test("기본 모델은 목록 첫 항목(Opus 4.8)", () => {
-  assert.equal(DEFAULT_AGENT_MODEL, "claude-opus-4-8");
+test("기본 모델은 목록 첫 항목(Opus 5)", () => {
+  assert.equal(DEFAULT_AGENT_MODEL, "claude-opus-5");
   assert.equal(AGENT_MODEL_OPTIONS[0].id, DEFAULT_AGENT_MODEL);
 });
 
-test("선택지에 Opus 4.8 과 Fable 5 가 모두 있다", () => {
+test("선택지에 Opus 5 와 Fable 5 가 모두 있다", () => {
   const ids = AGENT_MODEL_OPTIONS.map((o) => o.id);
-  assert.ok(ids.includes("claude-opus-4-8"));
+  assert.ok(ids.includes("claude-opus-5"));
   assert.ok(ids.includes("claude-fable-5"));
 });
 

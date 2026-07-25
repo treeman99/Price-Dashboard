@@ -11,15 +11,18 @@ const STORE_PATH = path.join(path.dirname(config.dbPath), "model.json");
  * 수집/큐레이션 Agent SDK 가 쓸 수 있는 모델 목록.
  *
  * id 는 SDK `options.model` 에 **그대로** 전달된다. 별칭("opus"/"sonnet")이 아니라 풀 모델 ID 를 쓰는
- * 이유: 설치된 SDK 버전의 별칭은 그 시점에 번들된 (구)모델로 해석돼, 우리가 원하는 최신 모델(Opus 4.8 등)이
+ * 이유: 설치된 SDK 버전의 별칭은 그 시점에 번들된 (구)모델로 해석돼, 우리가 원하는 최신 모델(Opus 5 등)이
  * 아닐 수 있다. 풀 ID 를 주면 CLI 가 그 문자열을 API 로 그대로 전달한다.
  *
  * ⚠️ 목록 **첫 항목이 기본값**이다(DEFAULT_AGENT_MODEL). 순서를 바꾸면 기본값도 바뀐다.
+ *
+ * 목록에서 뺀 모델 ID 가 data/model.json 에 남아 있어도 안전하다 — validModel 이 걸러
+ * 기본값으로 fail-open 한다(= Opus 4.8 을 쓰던 사용자는 다음 수집부터 Opus 5 로 올라온다).
  */
 export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
   {
-    id: "claude-opus-4-8",
-    label: "Opus 4.8",
+    id: "claude-opus-5",
+    label: "Opus 5",
     description: "기본값 — 가장 높은 수집·큐레이션 품질",
   },
   {
@@ -29,7 +32,7 @@ export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
   },
 ];
 
-/** 기본 모델 = 목록 첫 항목(Opus 4.8). */
+/** 기본 모델 = 목록 첫 항목(Opus 5). */
 export const DEFAULT_AGENT_MODEL = AGENT_MODEL_OPTIONS[0].id;
 
 /** id 가 허용 목록에 있으면 그대로, 아니면 null. */
