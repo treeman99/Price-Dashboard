@@ -8,11 +8,10 @@ import type { AgentModelOption, AgentModelSettings } from "../../shared/types.ts
 const STORE_PATH = path.join(path.dirname(config.dbPath), "model.json");
 
 /**
- * 수집/큐레이션 Agent SDK 가 쓸 수 있는 모델 목록.
+ * 수집/큐레이션 에이전트가 쓸 수 있는 모델 목록.
  *
- * id 는 SDK `options.model` 에 **그대로** 전달된다. 별칭("opus"/"sonnet")이 아니라 풀 모델 ID 를 쓰는
- * 이유: 설치된 SDK 버전의 별칭은 그 시점에 번들된 (구)모델로 해석돼, 우리가 원하는 최신 모델(Opus 5 등)이
- * 아닐 수 있다. 풀 ID 를 주면 CLI 가 그 문자열을 API 로 그대로 전달한다.
+ * `claude-*`는 Claude Agent SDK, `gpt-*`는 Codex CLI로 라우팅한다.
+ * id 는 각 실행기의 모델 옵션에 그대로 전달하므로 풀 모델 ID를 쓴다.
  *
  * ⚠️ 목록 **첫 항목이 기본값**이다(DEFAULT_AGENT_MODEL). 순서를 바꾸면 기본값도 바뀐다.
  *
@@ -26,9 +25,9 @@ export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
     description: "기본값 — 가장 높은 수집·큐레이션 품질",
   },
   {
-    id: "claude-fable-5",
-    label: "Fable 5",
-    description: "Claude 5 계열 모델",
+    id: "gpt-5.6-terra",
+    label: "Codex 5.6 Terra",
+    description: "ChatGPT 정액제 Codex — medium 추론, 일상 수집용 균형 모델",
   },
 ];
 
@@ -78,6 +77,6 @@ export function saveAgentModel(id: unknown): AgentModelSettings {
   }
   fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
   fs.writeFileSync(STORE_PATH, JSON.stringify({ model }, null, 2), "utf8");
-  log.info(`Agent SDK 모델 변경: ${model}`);
+  log.info(`수집·큐레이션 에이전트 변경: ${model}`);
   return getModelSettings();
 }

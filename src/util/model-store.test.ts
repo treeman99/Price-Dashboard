@@ -17,10 +17,10 @@ test("기본 모델은 목록 첫 항목(Opus 5)", () => {
   assert.equal(AGENT_MODEL_OPTIONS[0].id, DEFAULT_AGENT_MODEL);
 });
 
-test("선택지에 Opus 5 와 Fable 5 가 모두 있다", () => {
+test("선택지에는 Opus 5와 Codex 5.6 Terra만 있다", () => {
   const ids = AGENT_MODEL_OPTIONS.map((o) => o.id);
-  assert.ok(ids.includes("claude-opus-5"));
-  assert.ok(ids.includes("claude-fable-5"));
+  assert.deepEqual(ids, ["claude-opus-5", "gpt-5.6-terra"]);
+  assert.equal(ids.includes("claude-fable-5"), false);
 });
 
 test("저장 전에는 기본값을 반환", () => {
@@ -29,14 +29,14 @@ test("저장 전에는 기본값을 반환", () => {
 });
 
 test("허용된 모델 저장 후 그 값을 반환", () => {
-  const updated = saveAgentModel("claude-fable-5");
-  assert.equal(updated.model, "claude-fable-5");
-  assert.equal(getAgentModel(), "claude-fable-5");
+  const updated = saveAgentModel("gpt-5.6-terra");
+  assert.equal(updated.model, "gpt-5.6-terra");
+  assert.equal(getAgentModel(), "gpt-5.6-terra");
 });
 
 test("허용 목록 밖 모델은 거부(throw)하고 저장값은 불변", () => {
   assert.throws(() => saveAgentModel("gpt-4o"), /허용되지 않은/);
   assert.throws(() => saveAgentModel(""), /허용되지 않은/);
   assert.throws(() => saveAgentModel(123), /허용되지 않은/);
-  assert.equal(getAgentModel(), "claude-fable-5"); // 직전 유효 저장 유지
+  assert.equal(getAgentModel(), "gpt-5.6-terra"); // 직전 유효 저장 유지
 });

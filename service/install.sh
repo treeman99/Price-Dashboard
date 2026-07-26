@@ -6,6 +6,7 @@ set -euo pipefail
 LABEL="com.daegun.dailyprice"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 NODE="$(command -v node || true)"
+CODEX="$(command -v codex || true)"
 TSX_CLI="$REPO/node_modules/tsx/dist/cli.mjs"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 TEMPLATE="$REPO/service/$LABEL.plist.template"
@@ -13,6 +14,9 @@ TEMPLATE="$REPO/service/$LABEL.plist.template"
 if [ -z "$NODE" ]; then
   echo "✖ node 를 찾을 수 없습니다. Node 18+ 설치 후 다시 실행하세요." >&2
   exit 1
+fi
+if [ -z "$CODEX" ]; then
+  echo "⚠ codex CLI를 찾을 수 없습니다. Opus 5는 동작하지만 Codex 에이전트는 선택할 수 없습니다."
 fi
 if [ ! -f "$TSX_CLI" ]; then
   echo "✖ tsx 가 없습니다. 먼저 'npm install' 을 실행하세요. ($TSX_CLI)" >&2
@@ -23,6 +27,7 @@ if [ ! -f "$REPO/.env" ]; then
 fi
 
 NODE_DIR="$(dirname "$NODE")"
+CODEX_DIR="$(dirname "${CODEX:-$NODE}")"
 mkdir -p "$REPO/logs" "$HOME/Library/LaunchAgents"
 
 # 프론트 빌드물 없으면 빌드
@@ -36,6 +41,7 @@ sed -e "s#__NODE__#$NODE#g" \
     -e "s#__TSX_CLI__#$TSX_CLI#g" \
     -e "s#__REPO__#$REPO#g" \
     -e "s#__NODE_DIR__#$NODE_DIR#g" \
+    -e "s#__CODEX_DIR__#$CODEX_DIR#g" \
     "$TEMPLATE" > "$PLIST_DST"
 
 UID_NUM="$(id -u)"

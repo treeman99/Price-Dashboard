@@ -38,7 +38,7 @@ export interface AppConfig {
   eventsNewGapDays: number;
   /** 팝업/전시 '신규' 배지 유지 일수(재등장일로부터) */
   eventsNewShowDays: number;
-  /** Agent SDK 큐레이션 1회 최대 대기(ms). 초과 시 중단(hang 방지). */
+  /** 에이전트 큐레이션 1회 최대 대기(ms). 초과 시 중단(hang 방지). */
   agentQueryTimeoutMs: number;
   dbPath: string;
   legacyHistoryJson: string;
@@ -149,7 +149,7 @@ function parseCollectTimes(s: string, label: string): string[] {
 /**
  * 필수 자격증명 검증.
  * - 수집에 반드시 필요한 값(네이버)이 없으면 throw (fail-fast).
- * - 선택 기능(Agent SDK, 알림) 미설정은 경고 목록으로만 반환.
+ * - 선택 기능(에이전트, 알림) 미설정은 경고 목록으로만 반환.
  */
 export function validateConfig(opts: { forCollect?: boolean } = {}): {
   warnings: string[];
@@ -173,7 +173,7 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
     }
     if (!config.anthropicApiKey) {
       warnings.push(
-        "ANTHROPIC_API_KEY 미설정 → Agent SDK 웹리서치(비교가/쿠팡/리뷰)를 건너뛰고 네이버 결과만으로 수집합니다."
+        "ANTHROPIC_API_KEY 미설정 → Opus 5 선택 시 가격 웹리서치는 건너뜁니다. Codex 선택에는 이 키가 필요 없습니다."
       );
     }
   }

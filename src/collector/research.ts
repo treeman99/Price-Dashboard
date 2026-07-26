@@ -1,4 +1,5 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { runAgentQueryText } from "../util/agent-query.ts";
+import { isCodexModel } from "../util/codex-query.ts";
 import { getAgentModel } from "../util/model-store.ts";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
@@ -58,34 +59,31 @@ function sanitizePrice(v: unknown, minPrice: number): number | null {
 }
 
 /**
- * Agent SDK 웹리서치. ANTHROPIC_API_KEY 없거나 실패 시 EMPTY 반환(네이버 결과만으로 진행).
+ * 선택된 에이전트의 웹리서치. Claude를 골랐는데 ANTHROPIC_API_KEY가 없거나,
+ * 에이전트 실행이 실패하면 EMPTY 반환(네이버 결과만으로 진행).
  * 결정적 작업(네이버/필터/저장)은 호출하지 않으며, 오직 비교가/쿠팡/리뷰 리서치만 담당.
  */
 export async function researchProduct(product: Product): Promise<ResearchResult> {
-  if (!config.anthropicApiKey) return EMPTY;
+  const model = getAgentModel();
+  if (!isCodexModel(model) && !config.anthropicApiKey) return EMPTY;
 
   try {
-    const q = query({
-      prompt: buildPrompt(product),
-      options: {
+    const finalText = await runAgentQueryText(
+      buildPrompt(product),
+      {
         // tools = 가용 도구 제한(웹 검색 외 차단 — 외부 콘텐츠 프롬프트 인젝션 방어), allowedTools = 무프롬프트 허용
         tools: ["WebSearch"],
         allowedTools: ["WebSearch"],
         permissionMode: "bypassPermissions",
         settingSources: [], // 로컬 CLAUDE.md/설정 로드 방지
-        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
+        model, // 대시보드에서 고른 수집·큐레이션 공통 모델
         maxTurns: 8,
         systemPrompt:
           "너는 가격비교 리서처다. 반드시 마지막에 지정된 JSON 한 개만 출력한다.",
       },
-    });
-
-    let finalText = "";
-    for await (const msg of q) {
-      if (msg.type === "result") {
-        if (msg.subtype === "success") finalText = msg.result;
-      }
-    }
+      config.agentQueryTimeoutMs,
+      `가격 웹리서치(${product.name})`
+    );
     if (!finalText) return EMPTY;
 
     const parsed = extractJson(finalText) as Record<string, unknown>;

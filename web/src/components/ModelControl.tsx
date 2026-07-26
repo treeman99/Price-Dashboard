@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import type { AgentModelSettings } from "@shared/types";
 
 /**
- * 수집·큐레이션 Agent SDK 가 쓸 AI 모델을 고르는 전역 컨트롤(헤더 배치).
+ * 수집·큐레이션 에이전트를 고르는 전역 컨트롤(헤더 배치).
  * 가격·뉴스·유튜브·팝업/전시·증시 등 모든 자동 수집·큐레이션에 공통 적용되며,
  * 변경은 다음 수집부터 반영된다(서버 재시작 불필요).
  */
@@ -74,7 +74,7 @@ export function ModelControl() {
         <DialogHeader>
           <DialogTitle>수집·큐레이션 AI 모델</DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
-            가격·뉴스·유튜브·팝업/전시·증시 등 모든 자동 수집과 큐레이션에 쓰는 Agent SDK 모델입니다.
+            가격·뉴스·유튜브·팝업/전시·증시 등 모든 자동 수집과 큐레이션에 쓸 에이전트입니다.
             변경하면 다음 수집부터 적용됩니다.
           </DialogDescription>
         </DialogHeader>

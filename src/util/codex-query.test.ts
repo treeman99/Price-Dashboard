@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import {
+  buildCodexArgs,
+  buildCodexPrompt,
+  codexSubscriptionEnv,
+  isChatGptAuthStatus,
+  isCodexModel,
+  parseCodexJsonl,
+} from "./codex-query.ts";
+
+test("Codex 모델만 별도 실행 경로로 분류한다", () => {
+  assert.equal(isCodexModel("gpt-5.6-terra"), true);
+  assert.equal(isCodexModel("claude-opus-5"), false);
+  assert.equal(isCodexModel(undefined), false);
+});
+
+test("Codex 환경은 앱/API 비밀값을 전달하지 않는다", () => {
+  const env = codexSubscriptionEnv({
+    HOME: "/Users/test",
+    PATH: "/usr/bin:/bin",
+    LANG: "ko_KR.UTF-8",
+    OPENAI_API_KEY: "openai-secret",
+    CODEX_API_KEY: "codex-secret",
+    ANTHROPIC_API_KEY: "anthropic-secret",
+    NAVER_CLIENT_SECRET: "naver-secret",
+    GMAIL_APP_PASSWORD: "gmail-secret",
+  });
+  assert.deepEqual(env, {
+    HOME: "/Users/test",
+    PATH: "/usr/bin:/bin",
+    LANG: "ko_KR.UTF-8",
+  });
+});
+
+test("Codex 인자는 ChatGPT 로그인·Terra medium·최소 권한을 강제한다", () => {
+  const webArgs = buildCodexArgs("gpt-5.6-terra", true);
+  const joined = webArgs.join(" ");
+  assert.ok(webArgs.includes("--search"));
+  assert.match(joined, /forced_login_method="chatgpt"/);
+  assert.match(joined, /model_reasoning_effort="medium"/);
+  assert.match(joined, /agents\.enabled=false/);
+  assert.match(joined, /default_permissions="daily_price_agent"/);
+  assert.match(joined, /network=\{ enabled = false \}/);
+  assert.ok(webArgs.includes("--ignore-user-config"));
+  assert.ok(webArgs.includes("--ephemeral"));
+  assert.ok(webArgs.includes("--json"));
+  assert.equal(webArgs.includes("--dangerously-bypass-approvals-and-sandbox"), false);
+
+  const offlineArgs = buildCodexArgs("gpt-5.6-terra", false);
+  assert.equal(offlineArgs.includes("--search"), false);
+  assert.ok(offlineArgs.includes('web_search="disabled"'));
+});
+
+test("Codex 프롬프트는 기존 역할·작업·안전 규칙을 보존한다", () => {
+  const text = buildCodexPrompt("JSON으로 답하라", {
+    systemPrompt: "너는 뉴스 큐레이터다.",
+    tools: ["WebSearch", "WebFetch"],
+  });
+  assert.match(text, /너는 뉴스 큐레이터다/);
+  assert.match(text, /최신 정보가 필요하면/);
+  assert.match(text, /로컬 파일을 탐색하거나 수정하지 않는다/);
+  assert.match(text, /JSON으로 답하라/);
+});
+
+test("ChatGPT 로그인 상태만 정액제 인증으로 인정한다", () => {
+  assert.equal(isChatGptAuthStatus("Logged in using ChatGPT"), true);
+  assert.equal(isChatGptAuthStatus("Logged in using an API key"), false);
+  assert.equal(isChatGptAuthStatus("Not logged in"), false);
+});
+
+test("Codex JSONL에서 최종 답변·도구 횟수·토큰 사용량을 읽는다", () => {
+  const parsed = parseCodexJsonl(
+    [
+      '{"type":"thread.started","thread_id":"t1"}',
+      '{"type":"item.completed","item":{"type":"web_search"}}',
+      '{"type":"item.completed","item":{"type":"command_execution"}}',
+      '{"type":"item.completed","item":{"type":"agent_message","text":"중간"}}',
+      '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"ok\\":true}"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":10}}',
+    ].join("\n")
+  );
+  assert.equal(parsed.finalText, '{"ok":true}');
+  assert.equal(parsed.webSearches, 1);
+  assert.equal(parsed.commands, 1);
+  assert.deepEqual(parsed.usage, {
+    inputTokens: 120,
+    cachedInputTokens: 20,
+    outputTokens: 30,
+    reasoningOutputTokens: 10,
+  });
+});

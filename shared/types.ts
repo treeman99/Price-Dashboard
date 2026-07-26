@@ -183,11 +183,11 @@ export interface ScheduleSettings {
   stockUs: string[];
 }
 
-// ── 수집/큐레이션 Agent SDK 모델 설정 ──
+// ── 수집/큐레이션 에이전트 모델 설정 ──
 
-/** 선택 가능한 Agent SDK 모델 1건. */
+/** 선택 가능한 에이전트 모델 1건. */
 export interface AgentModelOption {
-  /** SDK `options.model` 에 그대로 넘기는 모델 ID (예: "claude-opus-5"). */
+  /** 제공자 실행기에 그대로 넘기는 모델 ID (예: "claude-opus-5", "gpt-5.6-terra"). */
   id: string;
   /** UI 표시명 (예: "Opus 5"). */
   label: string;
@@ -196,7 +196,7 @@ export interface AgentModelOption {
 }
 
 /**
- * 가격·뉴스·유튜브·팝업/전시·증시 등 모든 수집·큐레이션이 공통으로 쓰는 Agent SDK 모델.
+ * 가격·뉴스·유튜브·팝업/전시·증시 등 모든 수집·큐레이션이 공통으로 쓰는 에이전트 모델.
  * data/model.json 에 사용자가 고른 값이 저장되고, 없으면 목록 첫 항목(기본값)을 쓴다.
  */
 export interface AgentModelSettings {

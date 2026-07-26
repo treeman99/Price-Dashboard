@@ -1,15 +1,29 @@
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "./log.ts";
+import { isCodexModel, runCodexQueryText } from "./codex-query.ts";
 
 /**
- * Claude Agent SDK `query()`를 실행해 마지막 success 결과 텍스트를 반환한다.
+ * 선택 모델에 따라 Claude Agent SDK 또는 Codex CLI를 실행해 마지막 결과 텍스트를 반환한다.
  *
- * 핵심: **타임아웃/중단 가드**. query 가 응답을 받지 못하고 멈추면(transport 정지 등)
+ * Claude 경로의 핵심: **타임아웃/중단 가드**. query 가 응답을 받지 못하고 멈추면(transport 정지 등)
  * `for await` 루프가 영원히 대기하고, 호출부의 `running` 플래그가 영구히 잠겨
  * 이후 모든 수집(수동 '지금 갱신' 포함)이 막힌다. timeoutMs 초과 시 AbortController 로
  * 하위 프로세스를 중단하고 에러를 던져, 호출부가 정상적으로 실패 처리(+running 해제)하게 한다.
  */
 export async function runAgentQueryText(
+  prompt: string,
+  options: Omit<Options, "abortController">,
+  timeoutMs: number,
+  label = "agent"
+): Promise<string> {
+  if (isCodexModel(options.model)) {
+    return runCodexQueryText(prompt, options, timeoutMs, label);
+  }
+  return runClaudeAgentQueryText(prompt, options, timeoutMs, label);
+}
+
+/** Claude 모델은 기존 Agent SDK 스트리밍 경로를 그대로 사용한다. */
+async function runClaudeAgentQueryText(
   prompt: string,
   options: Omit<Options, "abortController">,
   timeoutMs: number,

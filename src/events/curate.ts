@@ -117,7 +117,7 @@ function rawSnapshot(corpus: RawCorpus, date: string): EventsSnapshot {
     popups,
     exhibitions: { venues },
     festivals,
-    notes: "네이버 검색 결과 원본 (LLM 큐레이션 비활성: ANTHROPIC_API_KEY 미설정)",
+    notes: "네이버 검색 결과 원본 (AI 큐레이션 실패 또는 비활성)",
   };
 }
 

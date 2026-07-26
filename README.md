@@ -9,7 +9,7 @@
 새 게시판은 `web/src/App.tsx`의 `TABS` 배열에 항목을 추가해 확장한다.
 
 ## 구성
-- **collector/** 네이버 쇼핑 API(결정적) + Agent SDK 웹리서치(비교가/쿠팡/리뷰) + 필터링 + 멱등 저장
+- **collector/** 네이버 쇼핑 API(결정적) + 선택형 AI 에이전트 웹리서치(비교가/쿠팡/리뷰) + 필터링 + 멱등 저장
 - **importer/** 기존 `price_history.json` → SQLite 1회 멱등 임포트
 - **scheduler/** in-process 정시 수집 + 잠자기/재시작 누락 catch-up
 - **api/** 상품 CRUD · 히스토리/기간필터 · "지금 수집" · 프론트 정적 서빙
@@ -22,6 +22,7 @@
 - **macOS** (launchd 서비스 등록 기준) / **Node.js 18 이상** (`node -v`로 확인, 권장 20+)
 - 네이버 개발자센터 검색 API 키 (필수) — https://developers.naver.com/
 - (선택) Anthropic Console API 키 — 웹리서치(비교가/리뷰)용
+- (선택) Codex CLI + ChatGPT 로그인 — 정액제 크레딧으로 Codex 5.6 Terra 사용
 - (선택) Python 3 — 팝업/전시 날짜 검증(insane-engine)용. `bash tools/insane-engine/setup.sh` 1회 실행
 - 별도 DB 설치 불필요 (Node 내장 SQLite 사용)
 
@@ -60,7 +61,7 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | 키 | 필수 | 설명 |
 |---|---|---|
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | ✅ | 네이버 쇼핑 검색 API. 없으면 수집 fail-fast |
-| `ANTHROPIC_API_KEY` | 선택 | Agent SDK 웹리서치(가격 비교가/리뷰) + 팝업/전시 LLM 큐레이션. 없으면 가격은 네이버+쿠팡만, 팝업/전시는 검색 원본으로 표시 |
+| `ANTHROPIC_API_KEY` | 선택 | Opus 5 가격 웹리서치용. Codex 선택 시에는 불필요 |
 | `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`. 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
 | `COLLECT_TIME` | 기본 09:00 | 매일 가격 수집 시각(로컬) |
@@ -68,6 +69,10 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | `NOTIFY_EMAIL` / `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | 선택 | 이메일 리포트 알림 |
 
 > 알림 자격증명이 없으면 이메일 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
+>
+> **AI 에이전트 선택**: 대시보드 상단에서 `Opus 5` 또는 `Codex 5.6 Terra`를 고른다.
+> Codex는 `codex login status`가 `Logged in using ChatGPT`일 때만 실행하며,
+> `OPENAI_API_KEY`/`CODEX_API_KEY`를 전달하거나 API 종량 과금으로 자동 전환하지 않는다.
 >
 > **카카오 알림 안내**: 카카오 "나에게 보내기"(PlayMCP MemoChat)는 OAuth 인증이 필요한 MCP라,
 > 무인으로 도는 launchd 백그라운드 서비스에서는 직접 호출할 수 없다. 카카오 알림이 필요하면
@@ -142,7 +147,8 @@ curl -X POST localhost:7777/api/collect   # 지금 수집 (API) — 대시보드
 |---|---|
 | 기동 시 `NAVER_CLIENT_ID ... 없습니다` 오류 | `.env`에 네이버 키 미입력 → 키 입력 후 재시작 |
 | 대시보드에 "프론트가 아직 빌드되지 않았습니다" | `npm run web:build` 실행 후 새로고침 |
-| 카드에 비교가/쿠팡/리뷰가 안 보임 | `ANTHROPIC_API_KEY` 미설정 → 네이버 결과만 표시(정상). 키 넣으면 활성화 |
+| Opus 선택 시 카드에 비교가/쿠팡/리뷰가 안 보임 | `ANTHROPIC_API_KEY` 미설정 → 네이버 결과만 표시. 키를 넣거나 Codex를 선택 |
+| Codex 수집이 로그인 오류로 실패 | `codex login` 실행 후 `codex login status`가 `Logged in using ChatGPT`인지 확인. API 키 로그인은 의도적으로 거부 |
 | 특정 상품 후보 0개(최저가 "-") | 모델 매칭이 엄격하거나 시장 매물 없음 → 상품의 포함/제외/최소가 조정 |
 | `ExperimentalWarning: SQLite ...` | Node 내장 SQLite 경고(무해). 서비스는 `NODE_NO_WARNINGS=1`로 숨김 |
 | 포트 충돌 | `.env`의 `PORT` 변경 후 재시작 |
