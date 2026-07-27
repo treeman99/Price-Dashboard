@@ -35,11 +35,79 @@ export interface ParsedCodexOutput {
   usage: CodexUsage | null;
   webSearches: number;
   commands: number;
+  /** 오류 이벤트 메시지. 실패 원인 진단과 한도 감지의 1차 근거다. */
+  errors: string[];
 }
 
 /** OpenAI 모델 ID면 Codex CLI 실행 경로로 보낸다. */
 export function isCodexModel(model: unknown): model is string {
   return typeof model === "string" && model.startsWith("gpt-");
+}
+
+/**
+ * ChatGPT 정액제 한도 소진 신호.
+ *
+ * Codex CLI가 실제로 내보내는 문구(바이너리 실측)와 프로토콜 오류 코드를 함께 본다:
+ * "You've hit your usage limit", "Usage limit reached", "Quota exceeded",
+ * "You're out of credits", `UsageLimitReached`, `QuotaExceeded`.
+ *
+ * ⚠️ **오류 경로의 원문에만** 적용한다. 성공한 큐레이션 결과 본문에 걸면 '요금제 한도'를 다룬
+ * 정상 기사 요약이 한도 소진으로 오인되어 멀쩡한 모델이 강제 전환된다. 맨 숫자 429 를 넣지
+ * 않은 것도 같은 이유다 — 웹 검색 결과에 흔히 섞인다.
+ */
+const CODEX_USAGE_LIMIT_SIGNALS = new RegExp(
+  [
+    // "hit your usage limit" / "hit your limit · resets 6pm" / "reached your workspace credit limit"
+    // 을 한 규칙으로 덮는다. 사이 낱말을 2개까지 허용하는 이유는 문구가 플랜별로 조금씩 다르기
+    // 때문이다(실측: 짧은 형태와 긴 형태가 모두 나온다).
+    "(?:hit|reached) your (?:\\w+ ){0,2}limit",
+    "usage limit reached",
+    "usage[_-]limit[_-]reached",
+    "usagelimitreached",
+    "quota exceeded",
+    "quota[_-]exceeded",
+    "insufficient[_ ]quota",
+    "out of credits",
+    "rate[_ -]?limit(?:ed|s)? (?:exceeded|reached)",
+    "rate[_-]limit[_-]exceeded",
+    "too many requests",
+    "(?:status|http|code|error)\\W{0,3}429\\b",
+  ].join("|"),
+  "i"
+);
+
+/** 오류 원문이 정액제 한도 소진을 가리키는지. */
+export function isCodexUsageLimitText(text: string): boolean {
+  return CODEX_USAGE_LIMIT_SIGNALS.test(text);
+}
+
+/**
+ * **정상 종료했는데 본문이 한도 통보**인 경우. Claude 쪽 FAILURE_SIGNALS 와 같은 함정으로,
+ * 그대로 통과시키면 호출부에는 "JSON 미발견"으로만 보여 조용히 빈 결과가 저장된다
+ * (실측: `You've hit your limit · resets 6pm (Asia/Seoul)` 47자가 성공 결과로 올라왔다).
+ *
+ * JSON 이 하나도 없고 짧은 안내문일 때만 한도로 승격한다 — 요금제 한도를 **다룬** 정상
+ * 큐레이션 결과(항상 JSON 을 포함한다)를 실패로 오인하지 않기 위한 조건이다.
+ */
+export function isCodexUsageLimitNotice(finalText: string): boolean {
+  if (finalText.includes("{") || finalText.length > 500) return false;
+  return isCodexUsageLimitText(finalText);
+}
+
+/**
+ * 한도 소진 전용 오류 타입. 호출부(agent-query)가 '그냥 실패'와 구분해 대체 모델로
+ * 전환하려면 메시지 문자열 재파싱이 아니라 타입으로 구분되어야 한다.
+ */
+export class UsageLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UsageLimitError";
+  }
+}
+
+/** 잡은 예외가 한도 소진인지. */
+export function isUsageLimitError(e: unknown): e is UsageLimitError {
+  return e instanceof UsageLimitError;
 }
 
 /**
@@ -145,12 +213,20 @@ export function buildCodexPrompt(prompt: string, options: CodexQueryOptions): st
     .join("\n\n");
 }
 
-/** `codex exec --json` JSONL에서 마지막 답변과 사용량을 추출한다. */
+/** 오류 이벤트에서 사람이 읽을 메시지를 뽑는다(모양이 조금씩 다르므로 흔한 자리들을 훑는다). */
+function errorMessageOf(event: any): string | null {
+  const cand = event?.message ?? event?.error?.message ?? event?.error ?? event?.reason;
+  if (typeof cand === "string" && cand.trim()) return cand.trim();
+  return null;
+}
+
+/** `codex exec --json` JSONL에서 마지막 답변·사용량·오류를 추출한다. */
 export function parseCodexJsonl(text: string): ParsedCodexOutput {
   let finalText = "";
   let usage: CodexUsage | null = null;
   let webSearches = 0;
   let commands = 0;
+  const errors: string[] = [];
 
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -159,6 +235,12 @@ export function parseCodexJsonl(text: string): ParsedCodexOutput {
       event = JSON.parse(line);
     } catch {
       continue;
+    }
+    // 오류는 `error` 이벤트로도, `*.failed` 이벤트로도 온다. 한도 소진 메시지가 여기에만
+    // 실리고 종료 코드는 평범한 실패로 보이는 경우가 있어 둘 다 모은다.
+    if (event?.type === "error" || (typeof event?.type === "string" && event.type.endsWith(".failed"))) {
+      const msg = errorMessageOf(event);
+      if (msg) errors.push(msg);
     }
     if (event?.type === "item.completed") {
       const item = event.item;
@@ -179,7 +261,7 @@ export function parseCodexJsonl(text: string): ParsedCodexOutput {
     }
   }
 
-  return { finalText, usage, webSearches, commands };
+  return { finalText, usage, webSearches, commands, errors };
 }
 
 function runCaptured(
@@ -305,15 +387,29 @@ export async function runCodexQueryText(
       timeoutMs
     );
     const parsed = parseCodexJsonl(result.stdout);
+    // 한도 판단은 **실패한 실행의 원문**에만 적용한다(정규식 주석 참고). 오류 이벤트 → stderr →
+    // stdout 순으로 근거를 모은다: 앞쪽일수록 오류 전용 채널이라 오탐이 적다.
+    const failureText = [parsed.errors.join("\n"), result.stderr, result.stdout]
+      .filter(Boolean)
+      .join("\n");
+    const detail = errorPreview(
+      parsed.errors.join(" · ") || result.stderr || result.stdout || "상세 오류 없음"
+    );
+    const fail = (message: string): never => {
+      throw isCodexUsageLimitText(failureText)
+        ? new UsageLimitError(message)
+        : new Error(message);
+    };
+
     if (result.code !== 0) {
-      throw new Error(
-        `Codex 비정상 종료(code=${result.code}, signal=${result.signal ?? "-"}) — ` +
-          errorPreview(result.stderr || result.stdout || "상세 오류 없음")
-      );
+      fail(`Codex 비정상 종료(code=${result.code}, signal=${result.signal ?? "-"}) — ${detail}`);
     }
     if (!parsed.finalText) {
-      throw new Error(
-        `Codex 최종 응답이 없습니다. ${errorPreview(result.stderr || result.stdout || "상세 오류 없음")}`
+      fail(`Codex 최종 응답이 없습니다. ${detail}`);
+    }
+    if (isCodexUsageLimitNotice(parsed.finalText)) {
+      throw new UsageLimitError(
+        `Codex 정액제 한도 소진 통보 — ${errorPreview(parsed.finalText, 300)}`
       );
     }
 

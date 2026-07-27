@@ -195,12 +195,22 @@ export interface ScheduleSettings {
 
 /** 선택 가능한 에이전트 모델 1건. */
 export interface AgentModelOption {
-  /** 제공자 실행기에 그대로 넘기는 모델 ID (예: "claude-opus-5", "gpt-5.6-terra"). */
+  /** 제공자 실행기에 그대로 넘기는 모델 ID (예: "claude-opus-5", "gpt-5.6-sol"). */
   id: string;
   /** UI 표시명 (예: "Opus 5"). */
   label: string;
   /** 선택 화면 보조 설명. */
   description?: string;
+}
+
+/** 한도 소진으로 자동 전환된 상태. 수동 선택이나 주간 복귀가 일어나면 해제된다. */
+export interface AgentModelFallbackState {
+  /** 전환 직전에 쓰던 모델 ID(= 한도가 소진된 쪽). */
+  from: string;
+  /** 전환 시각(ISO). */
+  at: string;
+  /** 한도 판단 근거가 된 오류 원문 요약. */
+  reason: string;
 }
 
 /**
@@ -212,6 +222,14 @@ export interface AgentModelSettings {
   model: string;
   /** 선택 가능한 모델 목록(백엔드가 단일 진실원). */
   options: AgentModelOption[];
+  /** 평상시 기본 모델 ID(주간 복귀가 되돌리는 대상). */
+  primary: string;
+  /** 한도 소진 시 자동으로 넘어갈 모델 ID. */
+  fallbackModel: string;
+  /** 자동 전환 중이면 그 내역, 아니면 null. */
+  fallback: AgentModelFallbackState | null;
+  /** 주간 복귀 시각 설명(예: "일요일 21:00"). UI 안내 문구용. */
+  weeklyResetLabel: string;
 }
 
 // ── 팝업스토어 · 전시회 보드 (이력 저장 없음, 최신 스냅샷만) ──

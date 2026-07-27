@@ -1,6 +1,12 @@
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "./log.ts";
-import { isCodexModel, runCodexQueryText } from "./codex-query.ts";
+import { isCodexModel, isUsageLimitError, runCodexQueryText } from "./codex-query.ts";
+import {
+  FALLBACK_AGENT_MODEL,
+  PRIMARY_AGENT_MODEL,
+  WEEKLY_RESET_LABEL,
+  recordUsageLimitFallback,
+} from "./model-store.ts";
 
 /** 로그용 한 줄 미리보기(개행 제거 + 길이 제한). 원문이 길어도 로그가 터지지 않게. */
 export function preview(text: string, max = 400): string {
@@ -13,9 +19,14 @@ export function preview(text: string, max = 400): string {
  * 이들은 JSON 이 아니라서 호출부에는 "JSON 미발견" 으로만 보이는데, 그 메시지만으로는
  * 원인(한도 소진/인증/크레딧)을 알 수 없어 원인 규명이 막힌다(실측: 실패 원문이 로그에
  * 전혀 남지 않아 반나절을 헤맴). 여기서 실패로 승격해 원문을 에러 메시지에 실어 보낸다.
+ *
+ * `You've hit your limit · resets 6pm (Asia/Seoul)` 은 Claude CLI 의 한도 통보 형태다.
+ * 목록에 없던 동안 이 47자짜리 결과가 '성공'으로 통과해 빈 스냅샷만 남겼다(로그 실측).
+ * 한도 소진 시 자동 전환의 도착지가 Claude 이므로, 이 문구가 조용하면 전환 후 실패가
+ * 그대로 묻힌다.
  */
 const FAILURE_SIGNALS =
-  /^\s*(API Error:|Claude AI usage limit reached|Credit balance is too low|Invalid API key|OAuth token has expired|Please run \/login|Execution error)/i;
+  /^\s*(API Error:|Claude AI usage limit reached|You'?ve hit your limit|Credit balance is too low|Invalid API key|OAuth token has expired|Please run \/login|Execution error)/i;
 
 /** 결과 텍스트가 '성공을 가장한 실패 통보'인지. */
 export function isFailureSignal(text: string): boolean {
@@ -36,11 +47,52 @@ export async function runAgentQueryText(
   timeoutMs: number,
   label = "agent"
 ): Promise<string> {
-  if (isCodexModel(options.model)) {
+  if (!isCodexModel(options.model)) {
+    return runClaudeAgentQueryText(prompt, options, timeoutMs, label);
+  }
+
+  const startedAt = Date.now();
+  try {
     const finalText = await runCodexQueryText(prompt, options, timeoutMs, label);
     return validateFinalText(finalText, label);
+  } catch (e) {
+    if (!isUsageLimitError(e)) throw e;
+    return runUsageLimitFallback(prompt, options, timeoutMs, label, startedAt, e as Error);
   }
-  return runClaudeAgentQueryText(prompt, options, timeoutMs, label);
+}
+
+/**
+ * Codex 정액제 한도 소진 → 대체 모델(Opus 5)로 전환하고 **이번 실행도 그 모델로 살린다.**
+ *
+ * 저장만 하고 던지면 오늘 그 수집은 통째로 빈 스냅샷이 된다 — 한도는 정오에도 소진되므로
+ * "다음 수집부터 정상"은 하루치 결과를 버리는 것과 같다. 남은 시간이 너무 적으면(< 1분)
+ * 재시도가 또 타임아웃으로 죽을 뿐이라 전환만 기록하고 실패시킨다.
+ */
+async function runUsageLimitFallback(
+  prompt: string,
+  options: Omit<Options, "abortController">,
+  timeoutMs: number,
+  label: string,
+  startedAt: number,
+  cause: Error
+): Promise<string> {
+  const from = String(options.model);
+  const switched = recordUsageLimitFallback(from, cause.message);
+  const note = switched
+    ? `${from} 한도 소진 → ${FALLBACK_AGENT_MODEL} 로 전환 (${WEEKLY_RESET_LABEL} 에 ${PRIMARY_AGENT_MODEL} 복귀)`
+    : `${from} 한도 소진 (이미 ${FALLBACK_AGENT_MODEL} 로 전환된 상태)`;
+
+  const remaining = timeoutMs - (Date.now() - startedAt);
+  if (remaining < 60_000) {
+    throw new Error(`${note} — 남은 시간이 부족해 이번 실행은 건너뜀. 원인: ${cause.message}`);
+  }
+  log.warn(`${label}: ${note} — 남은 ${Math.round(remaining / 1000)}초로 즉시 재시도`);
+  return runClaudeAgentQueryText(
+    prompt,
+    { ...options, model: FALLBACK_AGENT_MODEL },
+    remaining,
+    `${label}(한도 대체)`
+  );
 }
 
 /** Claude 모델은 기존 Agent SDK 스트리밍 경로를 그대로 사용한다. */

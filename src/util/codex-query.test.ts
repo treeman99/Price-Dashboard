@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  UsageLimitError,
   buildCodexArgs,
   buildCodexPrompt,
   codexSubscriptionEnv,
   isChatGptAuthStatus,
   isCodexModel,
+  isCodexUsageLimitNotice,
+  isCodexUsageLimitText,
+  isUsageLimitError,
   parseCodexJsonl,
 } from "./codex-query.ts";
 
 test("Codex 모델만 별도 실행 경로로 분류한다", () => {
+  assert.equal(isCodexModel("gpt-5.6-sol"), true);
   assert.equal(isCodexModel("gpt-5.6-terra"), true);
   assert.equal(isCodexModel("claude-opus-5"), false);
   assert.equal(isCodexModel(undefined), false);
@@ -89,4 +94,60 @@ test("Codex JSONL에서 최종 답변·도구 횟수·토큰 사용량을 읽는
     outputTokens: 30,
     reasoningOutputTokens: 10,
   });
+  assert.deepEqual(parsed.errors, []);
+});
+
+test("Codex JSONL의 오류 이벤트를 모은다(한도 감지의 1차 근거)", () => {
+  const parsed = parseCodexJsonl(
+    [
+      '{"type":"thread.started","thread_id":"t1"}',
+      '{"type":"error","message":"You\'ve hit your usage limit."}',
+      '{"type":"thread.failed","error":{"message":"UsageLimitReached"}}',
+      '{"type":"turn.completed","usage":{}}',
+    ].join("\n")
+  );
+  assert.equal(parsed.finalText, "");
+  assert.deepEqual(parsed.errors, ["You've hit your usage limit.", "UsageLimitReached"]);
+  assert.equal(isCodexUsageLimitText(parsed.errors.join("\n")), true);
+});
+
+test("한도 소진 문구를 정액제 신호로 인식한다", () => {
+  // Codex CLI 바이너리에서 실측한 사용자 대면 문구들.
+  assert.equal(isCodexUsageLimitText("You've hit your usage limit for gpt-5.6-sol"), true);
+  assert.equal(
+    isCodexUsageLimitText("Usage limit reached. You've reached your usage limit."),
+    true
+  );
+  assert.equal(isCodexUsageLimitText("Quota exceeded. Check your plan and billing details."), true);
+  assert.equal(isCodexUsageLimitText("You're out of credits. Add credits to continue."), true);
+  assert.equal(isCodexUsageLimitText("stream error: status 429 Too Many Requests"), true);
+  assert.equal(isCodexUsageLimitText("UsageLimitReached"), true);
+  // 짧은 형태(실측: Claude CLI 가 이 형태로 통보한다)도 놓치지 않는다.
+  assert.equal(isCodexUsageLimitText("You've hit your limit · resets 6pm (Asia/Seoul)"), true);
+});
+
+test("성공 종료했지만 본문이 한도 통보면 실패로 승격한다", () => {
+  assert.equal(isCodexUsageLimitNotice("You've hit your limit · resets 6pm (Asia/Seoul)"), true);
+  // JSON 이 있으면 정상 큐레이션 결과다 — 한도를 다룬 기사라도 버리면 안 된다.
+  assert.equal(
+    isCodexUsageLimitNotice('{"news":[{"title":"OpenAI, 사용 한도(usage limit) 상향"}]}'),
+    false
+  );
+  // 길이가 긴 산문은 한도 통보가 아니라 본문이다.
+  assert.equal(isCodexUsageLimitNotice(`요금제 usage limit 설명 ${"가".repeat(600)}`), false);
+  assert.equal(isCodexUsageLimitNotice("정상 응답인데 JSON 이 없음"), false);
+});
+
+test("한도와 무관한 실패·정상 본문은 전환시키지 않는다", () => {
+  assert.equal(isCodexUsageLimitText("Codex 비정상 종료(code=1) — spawn failed"), false);
+  assert.equal(isCodexUsageLimitText("Logged in using an API key"), false);
+  // 맨 숫자 429 는 웹 검색 결과에 흔해서 신호로 쓰지 않는다.
+  assert.equal(isCodexUsageLimitText('{"price":429000,"name":"429 프로젝트"}'), false);
+  assert.equal(isCodexUsageLimitText(""), false);
+});
+
+test("한도 오류는 타입으로 구분된다", () => {
+  assert.equal(isUsageLimitError(new UsageLimitError("한도")), true);
+  assert.equal(isUsageLimitError(new Error("한도")), false);
+  assert.equal(isUsageLimitError("한도"), false);
 });

@@ -19,7 +19,7 @@
 - `briefing` — 일일 리포트(기존 브리핑)
 - `pulse` — 시간당 실시간 취합(신규)
 
-> 모델은 분리하지 않는다. 대시보드에서 고른 공용 모델(Opus 5 / Codex)을 계속 쓴다.
+> 모델은 분리하지 않는다. 대시보드에서 고른 공용 모델(Codex / Opus 5)을 계속 쓴다.
 
 **펄스**는 매시간(기본 하루 18회, 장중·장전후 집중) 보유 종목에 영향을 줄 재료를 취합해 **iMessage**로 알린다.
 
@@ -53,7 +53,7 @@
 - **macOS** (launchd 서비스 등록 기준) / **Node.js 18 이상** (`node -v`로 확인, 권장 20+)
 - 네이버 개발자센터 검색 API 키 (필수) — https://developers.naver.com/
 - (선택) Anthropic Console API 키 — 웹리서치(비교가/리뷰)용
-- (선택) Codex CLI + ChatGPT 로그인 — 정액제 크레딧으로 Codex 5.6 Terra 사용
+- Codex CLI + ChatGPT 로그인 — **기본 모델(Codex 5.6 Sol)** 이 정액제 크레딧을 쓴다
 - (선택) Python 3 — 팝업/전시 날짜 검증(insane-engine)용. `bash tools/insane-engine/setup.sh` 1회 실행
 - 별도 DB 설치 불필요 (Node 내장 SQLite 사용)
 
@@ -101,9 +101,16 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 
 > 알림 자격증명이 없으면 이메일 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
 >
-> **AI 에이전트 선택**: 대시보드 상단에서 `Opus 5` 또는 `Codex 5.6 Terra`를 고른다.
+> **AI 에이전트 선택**: 대시보드 상단에서 `Codex 5.6 Sol`(기본) · `Opus 5` · `Codex 5.6 Terra` 중 고른다.
 > Codex는 `codex login status`가 `Logged in using ChatGPT`일 때만 실행하며,
 > `OPENAI_API_KEY`/`CODEX_API_KEY`를 전달하거나 API 종량 과금으로 자동 전환하지 않는다.
+>
+> **한도 소진 자동 전환 · 주간 복귀**: Codex 정액제 한도가 소진되면(`You've hit your usage limit`,
+> `Quota exceeded`, `429 Too Many Requests` 등) 수집 모델이 자동으로 `Opus 5`로 바뀌고,
+> 그 실행도 남은 시간 안에서 Opus 5로 즉시 재시도해 그날 결과를 살린다. 전환 사실은 대시보드
+> 모델 버튼에 배지로 남는다. 매주 **일요일 21:00** 에 자동으로 `Codex 5.6 Sol`로 되돌아가며,
+> 그 시각에 맥이 꺼져 있었으면 다음 기동 시 1회 보충(catch-up)한다. 언제든 직접 고르면
+> 수동 선택이 우선한다(다음 일요일 21:00 까지).
 >
 > **카카오 알림 안내**: 카카오 "나에게 보내기"(PlayMCP MemoChat)는 OAuth 인증이 필요한 MCP라,
 > 무인으로 도는 launchd 백그라운드 서비스에서는 직접 호출할 수 없다. 카카오 알림이 필요하면
@@ -188,6 +195,7 @@ curl -X POST localhost:7777/api/collect   # 지금 수집 (API) — 대시보드
 | 대시보드에 "프론트가 아직 빌드되지 않았습니다" | `npm run web:build` 실행 후 새로고침 |
 | Opus 선택 시 카드에 비교가/쿠팡/리뷰가 안 보임 | `ANTHROPIC_API_KEY` 미설정 → 네이버 결과만 표시. 키를 넣거나 Codex를 선택 |
 | Codex 수집이 로그인 오류로 실패 | `codex login` 실행 후 `codex login status`가 `Logged in using ChatGPT`인지 확인. API 키 로그인은 의도적으로 거부 |
+| 고르지 않았는데 모델이 `Opus 5`로 바뀌어 있음 | Codex 정액제 한도 소진으로 자동 전환된 상태. 모델 버튼의 "자동 전환" 배지에 사유·시각이 있다. 일요일 21:00 자동 복귀를 기다리거나 직접 다시 고르면 된다 |
 | 특정 상품 후보 0개(최저가 "-") | 모델 매칭이 엄격하거나 시장 매물 없음 → 상품의 포함/제외/최소가 조정 |
 | `ExperimentalWarning: SQLite ...` | Node 내장 SQLite 경고(무해). 서비스는 `NODE_NO_WARNINGS=1`로 숨김 |
 | 포트 충돌 | `.env`의 `PORT` 변경 후 재시작 |

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Cpu, Loader2 } from "lucide-react";
+import { AlertTriangle, Check, Cpu, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -13,10 +13,22 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { AgentModelSettings } from "@shared/types";
 
+/** ISO → "7/27 20:31". 자동 전환 시각은 '언제부터 한도였나'만 알면 되므로 초는 버린다. */
+function shortTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(
+    d.getMinutes()
+  ).padStart(2, "0")}`;
+}
+
 /**
  * 수집·큐레이션 에이전트를 고르는 전역 컨트롤(헤더 배치).
  * 가격·뉴스·유튜브·팝업/전시·증시 등 모든 자동 수집·큐레이션에 공통 적용되며,
  * 변경은 다음 수집부터 반영된다(서버 재시작 불필요).
+ *
+ * 한도 소진 자동 전환은 사용자가 고르지 않은 변경이므로, 왜 바뀌었고 언제 되돌아오는지
+ * 화면에 남긴다 — 그러지 않으면 "내가 고른 모델이 아닌데?"만 남는다.
  */
 export function ModelControl() {
   const [settings, setSettings] = useState<AgentModelSettings | null>(null);
@@ -38,6 +50,9 @@ export function ModelControl() {
 
   const current = settings?.options.find((o) => o.id === settings.model);
   const label = current?.label ?? (loadErr ? "불러오기 실패" : "…");
+  const fallback = settings?.fallback ?? null;
+  const fromLabel =
+    settings?.options.find((o) => o.id === fallback?.from)?.label ?? fallback?.from ?? "";
 
   async function pick(id: string) {
     if (!settings || id === settings.model) {
@@ -64,9 +79,14 @@ export function ModelControl() {
           className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
           title="수집·큐레이션 AI 모델 변경"
         >
-          <Cpu className="h-3.5 w-3.5" />
+          {fallback ? (
+            <AlertTriangle className="h-3.5 w-3.5 text-up" />
+          ) : (
+            <Cpu className="h-3.5 w-3.5" />
+          )}
           <span>
             AI 모델: <span className="text-foreground">{label}</span>
+            {fallback && <span className="ml-1 text-up">자동 전환</span>}
           </span>
         </button>
       </DialogTrigger>
@@ -78,6 +98,23 @@ export function ModelControl() {
             변경하면 다음 수집부터 적용됩니다.
           </DialogDescription>
         </DialogHeader>
+
+        {fallback && settings && (
+          <div className="rounded-md border border-up/40 bg-up/10 px-3 py-2 text-xs text-up">
+            <p className="font-medium">
+              {fromLabel} 한도 소진({shortTime(fallback.at)}) → {label}(으)로 자동 전환됨
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              매주 {settings.weeklyResetLabel}에 자동으로 되돌아갑니다. 지금 바로 되돌리려면 아래에서
+              직접 고르세요.
+            </p>
+            {fallback.reason && (
+              <p className="mt-1 break-words font-mono text-[11px] text-muted-foreground">
+                {fallback.reason}
+              </p>
+            )}
+          </div>
+        )}
 
         {loadErr && !settings ? (
           <div className="flex items-center justify-between gap-2 rounded-md border border-up/40 bg-up/10 px-3 py-2 text-sm text-up">
@@ -116,6 +153,11 @@ export function ModelControl() {
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <span className="font-semibold">{o.label}</span>
                       {selected && <span className="text-xs text-primary">현재</span>}
+                      {o.id === settings.primary && (
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                          기본 · 매주 {settings.weeklyResetLabel} 복귀
+                        </span>
+                      )}
                       <span className="font-mono text-[11px] text-muted-foreground">{o.id}</span>
                     </span>
                     {o.description && (

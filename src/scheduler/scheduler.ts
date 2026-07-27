@@ -14,6 +14,13 @@ import { config } from "../config.ts";
 import { describeSlotRoles } from "../stock/slot-role.ts";
 import { slotHandled, slotNeedsCatchup } from "../stock/notify-ledger.ts";
 import { localDate } from "../util/date.ts";
+import {
+  PRIMARY_AGENT_MODEL,
+  WEEKLY_RESET_CRON,
+  WEEKLY_RESET_LABEL,
+  checkWeeklyResetCatchup,
+  restoreWeeklyPrimary,
+} from "../util/model-store.ts";
 import type { StockMarket } from "../../shared/types.ts";
 
 function today(): string {
@@ -417,6 +424,24 @@ function registerCrons() {
     })
   );
   log.info(`스케줄러: 증시 펄스 야간 보류 묶음 발송 매일 ${flushAt}`);
+
+  // 수집·큐레이션 모델 주간 복귀. 다른 항목과 달리 **주 1회**라 cronExpr(매일)을 쓰지 않는다.
+  // 한도 소진으로 Opus 5 에 눌러앉은 상태를 매주 기본 모델로 되돌리는 유일한 장치다.
+  tasks.push(
+    cron.schedule(WEEKLY_RESET_CRON, () => restoreWeeklyPrimary("schedule"), {
+      name: "dp-model-weekly-reset",
+    })
+  );
+  log.info(`스케줄러: 수집 모델 주간 복귀 매주 ${WEEKLY_RESET_LABEL} → ${PRIMARY_AGENT_MODEL}`);
+}
+
+/** 주간 복귀 catch-up. 파일 판정이라 실패해도 스케줄러가 죽지 않게 감싼다. */
+function safeCheckWeeklyModelReset() {
+  try {
+    checkWeeklyResetCatchup();
+  } catch (e) {
+    log.error(`모델 주간 복귀 점검 오류: ${(e as Error).message}`);
+  }
 }
 
 /**
@@ -446,6 +471,9 @@ export function startScheduler() {
   void checkYoutubeCatchup();
   void checkStockCatchup("kr");
   void checkStockCatchup("us");
+  // 일요일 21:00 에 맥이 꺼져 있거나 자고 있었으면 주간 복귀가 통째로 사라진다 —
+  // 그러면 한도 소진 전환이 영구화되므로 다른 탭과 같은 catch-up 을 붙인다.
+  safeCheckWeeklyModelReset();
   // 펄스 자체는 catch-up 하지 않지만(위 주석) **보류 큐는 다르다.** 큐에 있는 건 이미 판정이
   // 끝나 "아침에 보내겠다"고 약속한 알림이라, 07:00 에 서버가 꺼져 있었다면 반드시 보충해야
   // 한다. 그러지 않으면 밤사이 판정이 디스크에 영원히 갇힌다.
@@ -466,5 +494,6 @@ export function startScheduler() {
     void checkYoutubeCatchup();
     void checkStockCatchup("kr");
     void checkStockCatchup("us");
+    safeCheckWeeklyModelReset();
   }, 30 * 60 * 1000);
 }

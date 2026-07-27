@@ -11,6 +11,8 @@ test("isFailureSignal — '성공을 가장한 실패 통보'를 잡아낸다", 
   assert.equal(isFailureSignal("Invalid API key · Please run /login"), true);
   assert.equal(isFailureSignal("OAuth token has expired"), true);
   assert.equal(isFailureSignal("Execution error"), true);
+  // Claude CLI 의 짧은 한도 통보. 목록에 없던 동안 '성공'으로 통과해 빈 스냅샷만 남았다.
+  assert.equal(isFailureSignal("You've hit your limit · resets 6pm (Asia/Seoul)"), true);
   // 앞쪽 공백/개행이 붙어도 잡아야 한다(스트림 조립 잔여물).
   assert.equal(isFailureSignal("\n  API Error: 500"), true);
 });
