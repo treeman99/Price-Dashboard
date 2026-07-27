@@ -18,7 +18,13 @@ import type {
   StockTicker,
   StockSearchCandidate,
   StockPoint,
+  StockHolding,
+  StockHorizon,
+  PulseAlertRecord,
+  PulseImpact,
+  PulseSeverity,
 } from "../../shared/types.ts";
+import { normalizeHorizon } from "../../shared/holdings.ts";
 import type { SourcePriceResult } from "../collector/sources/types.ts";
 
 function nowIso(): string {
@@ -917,6 +923,422 @@ export function getStockRun(
   return { ok: r.ok === 1, detail };
 }
 
+// ── 보유 종목 ───────────────────────────────────────────
+
+interface HoldingRow {
+  id: number;
+  market: string;
+  symbol: string;
+  name: string;
+  quote_code: string;
+  exchange: string;
+  quantity: number;
+  avg_price: number;
+  target_price: number | null;
+  stop_price: number | null;
+  horizon: string;
+  memo: string;
+  active: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToHolding(r: HoldingRow): StockHolding {
+  return {
+    id: r.id,
+    market: r.market as StockMarket,
+    symbol: r.symbol,
+    name: r.name,
+    quoteCode: r.quote_code,
+    exchange: r.exchange,
+    quantity: r.quantity,
+    avgPrice: r.avg_price,
+    targetPrice: r.target_price,
+    stopPrice: r.stop_price,
+    // 저장값이 깨졌어도(수기 편집·구버전) 조회가 죽지 않게 읽기 경로에서도 정규화한다.
+    horizon: normalizeHorizon(r.horizon),
+    memo: r.memo,
+    sortOrder: r.sort_order,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+/** 활성 보유 종목. market 생략 시 전 시장(펄스는 시장 구분 없이 전체를 본다). */
+export function listHoldings(market?: StockMarket): StockHolding[] {
+  const rows = market
+    ? (db()
+        .prepare(
+          "SELECT * FROM stock_holdings WHERE active = 1 AND market = ? ORDER BY sort_order, id"
+        )
+        .all(market) as unknown as HoldingRow[])
+    : (db()
+        .prepare("SELECT * FROM stock_holdings WHERE active = 1 ORDER BY market, sort_order, id")
+        .all() as unknown as HoldingRow[]);
+  return rows.map(rowToHolding);
+}
+
+export function getHolding(id: number): StockHolding | null {
+  const r = db()
+    .prepare("SELECT * FROM stock_holdings WHERE id = ? AND active = 1")
+    .get(id) as HoldingRow | undefined;
+  return r ? rowToHolding(r) : null;
+}
+
+/** 자연키 조회 — 삭제 흔적(active=0)도 본다. 재등록 시 UNIQUE 충돌을 미리 잡기 위함. */
+function findHoldingRowEver(market: StockMarket, symbol: string): HoldingRow | null {
+  const r = db()
+    .prepare("SELECT * FROM stock_holdings WHERE market = ? AND symbol = ?")
+    .get(market, symbol) as HoldingRow | undefined;
+  return r ?? null;
+}
+
+function nextHoldingOrder(market: StockMarket): number {
+  const r = db()
+    .prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM stock_holdings WHERE market = ?")
+    .get(market) as { m: number };
+  return Number(r.m) + 1;
+}
+
+export interface CreateHoldingRow extends StockSearchCandidate {
+  quantity: number;
+  avgPrice: number;
+  targetPrice?: number | null;
+  stopPrice?: number | null;
+  horizon?: StockHorizon;
+  memo?: string;
+}
+
+/**
+ * 보유 종목 등록. 이미 활성 상태면 throw(수정은 updateHolding).
+ * 삭제 흔적이 남은 종목은 되살린다 — UNIQUE(market,symbol) 때문에 INSERT 가 막히기 때문이다
+ * (createStock 과 같은 패턴).
+ */
+export function createHolding(input: CreateHoldingRow): StockHolding {
+  const symbol = normalizeSymbol(input.symbol, input.market);
+  if (!symbol) throw new Error("종목 코드를 인식할 수 없습니다.");
+  const existing = findHoldingRowEver(input.market, symbol);
+  if (existing?.active === 1)
+    throw new Error(`이미 보유 종목으로 등록되어 있습니다: ${existing.name} (${symbol})`);
+
+  const horizon = normalizeHorizon(input.horizon);
+  const memo = input.memo ?? "";
+  const now = nowIso();
+
+  if (existing) {
+    db()
+      .prepare(
+        `UPDATE stock_holdings SET name = ?, quote_code = ?, exchange = ?, quantity = ?,
+           avg_price = ?, target_price = ?, stop_price = ?, horizon = ?, memo = ?,
+           active = 1, sort_order = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        input.name,
+        input.quoteCode,
+        input.exchange,
+        input.quantity,
+        input.avgPrice,
+        input.targetPrice ?? null,
+        input.stopPrice ?? null,
+        horizon,
+        memo,
+        nextHoldingOrder(input.market),
+        now,
+        existing.id
+      );
+    return getHolding(existing.id)!;
+  }
+
+  const info = db()
+    .prepare(
+      `INSERT INTO stock_holdings
+         (market, symbol, name, quote_code, exchange, quantity, avg_price, target_price,
+          stop_price, horizon, memo, active, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
+    )
+    .run(
+      input.market,
+      symbol,
+      input.name,
+      input.quoteCode,
+      input.exchange,
+      input.quantity,
+      input.avgPrice,
+      input.targetPrice ?? null,
+      input.stopPrice ?? null,
+      horizon,
+      memo,
+      nextHoldingOrder(input.market),
+      now,
+      now
+    );
+  return getHolding(Number(info.lastInsertRowid))!;
+}
+
+export interface UpdateHoldingRow {
+  quantity?: number;
+  avgPrice?: number;
+  targetPrice?: number | null;
+  stopPrice?: number | null;
+  horizon?: StockHorizon;
+  memo?: string;
+}
+
+/**
+ * 부분 수정. market/symbol/quoteCode 는 바꿀 수 없다 — 그건 다른 종목이라는 뜻이다
+ * (updateStock 과 같은 규칙).
+ *
+ * ⚠️ targetPrice/stopPrice 는 `undefined`(미지정, 유지)와 `null`(명시적 해제)을 구분한다.
+ *    `patch.targetPrice ?? existing.targetPrice` 로 쓰면 null 이 undefined 와 같이 취급돼
+ *    사용자가 목표가를 지울 수 없게 된다.
+ */
+export function updateHolding(id: number, patch: UpdateHoldingRow): StockHolding | null {
+  const existing = getHolding(id);
+  if (!existing) return null;
+  const pick = <T>(v: T | undefined, fallback: T): T => (v === undefined ? fallback : v);
+  db()
+    .prepare(
+      `UPDATE stock_holdings SET quantity = ?, avg_price = ?, target_price = ?, stop_price = ?,
+         horizon = ?, memo = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .run(
+      pick(patch.quantity, existing.quantity),
+      pick(patch.avgPrice, existing.avgPrice),
+      pick(patch.targetPrice, existing.targetPrice),
+      pick(patch.stopPrice, existing.stopPrice),
+      normalizeHorizon(pick(patch.horizon, existing.horizon)),
+      pick(patch.memo, existing.memo),
+      nowIso(),
+      id
+    );
+  return getHolding(id)!;
+}
+
+/** soft delete. 되살릴 수 있게 tombstone 을 남긴다(createHolding 이 재활용). */
+export function deleteHolding(id: number): boolean {
+  const info = db()
+    .prepare("UPDATE stock_holdings SET active = 0, updated_at = ? WHERE id = ? AND active = 1")
+    .run(nowIso(), id);
+  return Number(info.changes) > 0;
+}
+
+export function reorderHoldings(market: StockMarket, ids: number[]): StockHolding[] {
+  const current = listHoldings(market);
+  if (!Array.isArray(ids) || ids.length !== current.length)
+    throw new Error("순서 목록이 현재 보유 종목 수와 일치하지 않습니다.");
+  const remaining = new Set(current.map((h) => h.id));
+  for (const id of ids) {
+    if (!remaining.has(id)) throw new Error(`알 수 없거나 중복된 보유 종목 id: ${id}`);
+    remaining.delete(id);
+  }
+  if (remaining.size) throw new Error("일부 보유 종목이 순서 목록에서 누락되었습니다.");
+
+  const conn = db();
+  const update = conn.prepare("UPDATE stock_holdings SET sort_order = ? WHERE id = ?");
+  conn.exec("BEGIN");
+  try {
+    ids.forEach((id, i) => update.run(i, id));
+    conn.exec("COMMIT");
+  } catch (e) {
+    conn.exec("ROLLBACK");
+    throw e;
+  }
+  return listHoldings(market);
+}
+
+// ── 펄스 알림 원장 ──────────────────────────────────────
+
+interface PulseRow {
+  id: number;
+  fingerprint: string;
+  date: string;
+  slot: string;
+  symbol: string | null;
+  market: string | null;
+  severity: string;
+  trigger: string;
+  headline: string;
+  impact_json: string;
+  status: string;
+  created_at: string;
+  sent_at: string | null;
+}
+
+/**
+ * impact_json 파싱 실패는 **행을 버리지 않고** 최소 정보로 복구한다.
+ * 중복 억제·상한 집계는 컬럼(fingerprint/symbol/severity)만으로 성립하므로, JSON 하나가
+ * 깨졌다고 그 행이 사라지면 이미 보낸 알림이 '안 보낸 것'이 되어 재발송된다.
+ */
+function rowToPulse(r: PulseRow): PulseAlertRecord {
+  let impact: PulseImpact;
+  try {
+    impact = JSON.parse(r.impact_json) as PulseImpact;
+  } catch {
+    impact = {
+      symbol: r.symbol,
+      market: (r.market as StockMarket | null) ?? null,
+      name: r.symbol ?? "",
+      direction: "neutral",
+      severity: r.severity as PulseSeverity,
+      headline: r.headline,
+      rationale: "",
+      risks: "",
+      sources: [],
+      trigger: r.trigger as PulseImpact["trigger"],
+    };
+  }
+  return {
+    id: r.id,
+    fingerprint: r.fingerprint,
+    date: r.date,
+    slot: r.slot,
+    impact,
+    status: r.status as PulseAlertRecord["status"],
+    createdAt: r.created_at,
+    sentAt: r.sent_at,
+  };
+}
+
+export interface InsertPulseAlertInput {
+  fingerprint: string;
+  date: string;
+  slot: string;
+  impact: PulseImpact;
+  status: PulseAlertRecord["status"];
+  /** 'sent' 로 넣을 때만 채운다. queued→sent 승격은 markPulseAlertsSent 가 한다. */
+  sentAt?: string | null;
+}
+
+export function insertPulseAlert(input: InsertPulseAlertInput): PulseAlertRecord {
+  const i = input.impact;
+  const info = db()
+    .prepare(
+      `INSERT INTO stock_pulse_alerts
+         (fingerprint, date, slot, symbol, market, severity, trigger, headline,
+          impact_json, status, created_at, sent_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.fingerprint,
+      input.date,
+      input.slot,
+      i.symbol,
+      i.market,
+      i.severity,
+      i.trigger,
+      i.headline,
+      JSON.stringify(i),
+      input.status,
+      nowIso(),
+      input.sentAt ?? null
+    );
+  const r = db()
+    .prepare("SELECT * FROM stock_pulse_alerts WHERE id = ?")
+    .get(Number(info.lastInsertRowid)) as unknown as PulseRow;
+  return rowToPulse(r);
+}
+
+/**
+ * 최근 `hours` 시간 내에 **실제로 사용자에게 도달했거나 도달 예정인** 알림.
+ *
+ * ⚠️ status 를 'sent'|'queued' 로 좁히는 것이 핵심이다. 중복 판정의 기준은 "이 사건을 이미
+ * 알렸는가"이지 "이 사건을 이미 봤는가"가 아니다. 상한에 걸려 잘린('capped') 건이나 문턱
+ * 미달('below') 건까지 중복으로 세면, 한 번 잘린 이슈는 **강도가 올라가도 영원히 못 나간다**
+ * — 상한은 그날의 소음을 줄이려는 장치이지 사건을 영구 차단하려는 장치가 아니다.
+ */
+export function recentPulseAlerts(hours: number): PulseAlertRecord[] {
+  const since = new Date(Date.now() - hours * 3600_000).toISOString();
+  const rows = db()
+    .prepare(
+      `SELECT * FROM stock_pulse_alerts
+       WHERE created_at >= ? AND status IN ('sent','queued')
+       ORDER BY created_at DESC`
+    )
+    .all(since) as unknown as PulseRow[];
+  return rows.map(rowToPulse);
+}
+
+/** 최근 `hours` 시간 전체(문턱 미달·상한 절삭 포함). 일일 브리핑의 24시간 요약이 쓴다. */
+export function allRecentPulseAlerts(hours: number): PulseAlertRecord[] {
+  const since = new Date(Date.now() - hours * 3600_000).toISOString();
+  const rows = db()
+    .prepare("SELECT * FROM stock_pulse_alerts WHERE created_at >= ? ORDER BY created_at DESC")
+    .all(since) as unknown as PulseRow[];
+  return rows.map(rowToPulse);
+}
+
+/**
+ * 그날 실제 발송된 건수. 상한 판정의 근거다.
+ *
+ * 'queued'(야간 보류)도 **센다** — 07:00 에 반드시 나가므로 발송 예정 물량이다. 빼고 세면
+ * 새벽 내내 상한이 소진되지 않아 아침 묶음 문자에 20건이 실린다.
+ */
+export function countPulseSentToday(
+  date: string
+): { total: number; bySymbol: Record<string, number>; macro: number } {
+  const rows = db()
+    .prepare(
+      `SELECT symbol, COUNT(*) AS n FROM stock_pulse_alerts
+       WHERE date = ? AND status IN ('sent','queued')
+       GROUP BY symbol`
+    )
+    .all(date) as unknown as Array<{ symbol: string | null; n: number }>;
+  const bySymbol: Record<string, number> = {};
+  let total = 0;
+  let macro = 0;
+  for (const r of rows) {
+    const n = Number(r.n);
+    total += n;
+    if (r.symbol) bySymbol[r.symbol] = n;
+    else macro += n;
+  }
+  return { total, bySymbol, macro };
+}
+
+/** 야간 보류 큐(오래된 것부터). 07:00 플러시가 읽는다. */
+export function listQueuedPulseAlerts(): PulseAlertRecord[] {
+  const rows = db()
+    .prepare("SELECT * FROM stock_pulse_alerts WHERE status = 'queued' ORDER BY created_at")
+    .all() as unknown as PulseRow[];
+  return rows.map(rowToPulse);
+}
+
+/** 큐에서 꺼내 발송한 건들을 'sent' 로 승격. 빈 배열이면 아무것도 하지 않는다. */
+export function markPulseAlertsSent(ids: number[]): void {
+  if (!ids.length) return;
+  const conn = db();
+  const stmt = conn.prepare(
+    "UPDATE stock_pulse_alerts SET status = 'sent', sent_at = ? WHERE id = ?"
+  );
+  const now = nowIso();
+  conn.exec("BEGIN");
+  try {
+    for (const id of ids) stmt.run(now, id);
+    conn.exec("COMMIT");
+  } catch (e) {
+    conn.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+/** 발송 실패 표시. 큐에 영원히 남아 매 플러시마다 재시도하는 것을 막는다. */
+export function markPulseAlertsFailed(ids: number[]): void {
+  if (!ids.length) return;
+  const conn = db();
+  const stmt = conn.prepare("UPDATE stock_pulse_alerts SET status = 'failed' WHERE id = ?");
+  conn.exec("BEGIN");
+  try {
+    for (const id of ids) stmt.run(id);
+    conn.exec("COMMIT");
+  } catch (e) {
+    conn.exec("ROLLBACK");
+    throw e;
+  }
+}
+
 // ── 보존 정책 ───────────────────────────────────────────
 
 export function pruneOldData(retentionDays: number): number {
@@ -932,5 +1354,11 @@ export function pruneOldData(retentionDays: number): number {
   // (stock_points.date 는 거래소 로컬 거래일, cutoff 는 서버 로컬 날짜라 최대 하루 어긋나지만
   //  보존 기간이 수십 일 단위라 무시해도 되는 오차다.)
   conn.prepare("DELETE FROM stock_points WHERE date < ?").run(cutoffStr);
+  // 펄스 원장도 같은 보존창. 하루 16회 × 판정 수라 가장 빨리 불어나는 표다.
+  // ⚠️ 'queued'(야간 보류)는 남긴다 — 아직 사용자에게 도달하지 않은 알림을 보존 정책이
+  //    지우면 그 밤의 문자가 통째로 증발한다. 큐는 07:00 플러시가 비운다.
+  conn
+    .prepare("DELETE FROM stock_pulse_alerts WHERE date < ? AND status != 'queued'")
+    .run(cutoffStr);
   return Number(info.changes);
 }

@@ -14,7 +14,14 @@ import { Input, Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import type { ScheduleSettings } from "@shared/types";
 
-export type ScheduleKind = "price" | "events" | "news" | "youtube" | "stockKr" | "stockUs";
+export type ScheduleKind =
+  | "price"
+  | "events"
+  | "news"
+  | "youtube"
+  | "stockKr"
+  | "stockUs"
+  | "stockPulse";
 
 const KIND_LABEL: Record<ScheduleKind, string> = {
   price: "가격",
@@ -23,6 +30,9 @@ const KIND_LABEL: Record<ScheduleKind, string> = {
   youtube: "유튜브",
   stockKr: "증시(한국)",
   stockUs: "증시(미국)",
+  // 다른 탭은 하루 1~2회지만 펄스는 기본 16회다. 라벨에 성격을 박아 두지 않으면
+  // 시각 목록이 길게 늘어선 것을 보고 오설정으로 오해한다.
+  stockPulse: "실시간 취합(매시)",
 };
 
 // <input type="time"> 는 항상 zero-pad "HH:mm" 을 준다.
@@ -43,6 +53,8 @@ function patchFor(kind: ScheduleKind, times: string[]): Partial<ScheduleSettings
       return { stockKr: times };
     case "stockUs":
       return { stockUs: times };
+    case "stockPulse":
+      return { stockPulse: times };
   }
 }
 

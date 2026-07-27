@@ -23,6 +23,10 @@ import type {
   StockTicker,
   StockSearchCandidate,
   StockPoint,
+  StockHolding,
+  StockHoldingSummary,
+  StockHorizon,
+  PulseRunResult,
 } from "@shared/types";
 
 async function j<T>(res: Response): Promise<T> {
@@ -61,7 +65,7 @@ export const api = {
       body: JSON.stringify(patch),
     }).then((r) => j<ScheduleSettings>(r)),
 
-  /** 수집·큐레이션 Agent SDK 모델 + 선택지 조회. */
+  /** 수집·큐레이션 에이전트 + 선택지 조회. */
   modelSettings: () => fetch("/api/model").then((r) => j<AgentModelSettings>(r)),
 
   /** 모델 선택 변경. 다음 수집부터 적용. 갱신된 설정 반환. */
@@ -248,7 +252,12 @@ export const api = {
 
   youtubeStatus: () =>
     fetch("/api/youtube/status").then((r) =>
-      j<{ collecting: boolean; updatedAt: string | null }>(r)
+      j<{
+        collecting: boolean;
+        updatedAt: string | null;
+        /** 마지막 수집 '시도' 결과. 실패해도 기존 스냅샷을 유지하므로 화면 경고에 필요하다. */
+        lastAttempt: { at: string; ok: boolean; trigger: string; error: string | null } | null;
+      }>(r)
     ),
 
   /** 카드(영상)를 다른 카테고리로 이동. 갱신된 스냅샷을 반환. */
@@ -458,4 +467,95 @@ export const api = {
   /** 종목 일별 종가(차트용). days=거래일 행 수, 오름차순. */
   tickerHistory: (id: number, days = 20) =>
     fetch(`/api/stock/tickers/${id}/history?days=${days}`).then((r) => j<StockPoint[]>(r)),
+
+  // ── 보유 종목 (별도 탭) ──
+
+  /**
+   * 보유 종목 + 현재가·손익률. 서버가 종목마다 네이버 시세를 치므로 **느리다**(수백 ms~수 초).
+   * 화면은 로딩 표시를 반드시 두어야 한다.
+   */
+  holdings: (market?: StockMarket) =>
+    fetch(`/api/stock/holdings${market ? `?market=${market}` : ""}`).then((r) =>
+      j<StockHoldingSummary[]>(r)
+    ),
+
+  /**
+   * 보유 종목 추가. query 는 종목코드·티커·종목명 아무거나(서버가 자동완성으로 해석).
+   * 서버가 등록 종목(관심 종목)에도 자동으로 넣는다 — 여기서 따로 부를 필요 없다.
+   */
+  addHolding: (input: {
+    market: StockMarket;
+    query: string;
+    quantity: number;
+    avgPrice: number;
+    targetPrice?: number | null;
+    stopPrice?: number | null;
+    horizon?: StockHorizon;
+    memo?: string;
+  }) =>
+    fetch(`/api/stock/holdings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<StockHolding>(r)),
+
+  /**
+   * 보유 종목 수정.
+   * ⚠️ targetPrice/stopPrice 에 `null` 을 넘기면 **해제**, 키를 아예 빼면 **유지**다.
+   *    이 구분이 서버까지 그대로 가야 목표가를 지울 수 있다.
+   */
+  updateHolding: (
+    id: number,
+    patch: {
+      quantity?: number;
+      avgPrice?: number;
+      targetPrice?: number | null;
+      stopPrice?: number | null;
+      horizon?: StockHorizon;
+      memo?: string;
+    }
+  ) =>
+    fetch(`/api/stock/holdings/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => j<StockHolding>(r)),
+
+  /** 보유 종목 삭제. 등록 종목(관심 종목)은 남는다 — 다 팔아도 계속 지켜볼 수 있게. */
+  deleteHolding: (id: number, symbol: string) =>
+    fetch(`/api/stock/holdings/${id}?confirm=${encodeURIComponent(symbol)}`, {
+      method: "DELETE",
+    }).then((r) => j<{ ok: boolean; keptTicker: boolean }>(r)),
+
+  // ── 펄스(시간당 실시간 취합) ──
+
+  /** 펄스 상태 + 최근 24시간 판정 목록. 화면에 피드는 없지만 동작 확인 창구는 필요하다. */
+  pulseStatus: () =>
+    fetch(`/api/stock/pulse/status`).then((r) =>
+      j<{
+        running: boolean;
+        lastRun: PulseRunResult | null;
+        notifyEnabled: boolean;
+        schedule: string[];
+        recent: Array<{
+          id: number;
+          at: string;
+          slot: string;
+          status: string;
+          severity: string;
+          direction: string;
+          symbol: string | null;
+          name: string;
+          headline: string;
+        }>;
+      }>(r)
+    ),
+
+  /** 펄스 지금 실행(202). 이미 실행 중이면 409 → { busy: true }. */
+  runPulse: async (): Promise<{ started: boolean; busy: boolean }> => {
+    const res = await fetch(`/api/stock/pulse/run`, { method: "POST" });
+    if (res.status === 409) return { started: false, busy: true };
+    await j<{ started: boolean }>(res);
+    return { started: true, busy: false };
+  },
 };

@@ -20,6 +20,7 @@ function defaults(): ScheduleSettings {
     youtube: normalizeList(config.youtubeCollectTimes),
     stockKr: normalizeList(config.stockKrCollectTimes),
     stockUs: normalizeList(config.stockUsCollectTimes),
+    stockPulse: normalizeList(config.stockPulseTimes),
   };
 }
 
@@ -92,6 +93,7 @@ export function getSchedule(): ScheduleSettings {
     youtube: lenientMulti(raw.youtube, def.youtube),
     stockKr: lenientMulti(raw.stockKr, def.stockKr),
     stockUs: lenientMulti(raw.stockUs, def.stockUs),
+    stockPulse: lenientMulti(raw.stockPulse, def.stockPulse),
   };
 }
 
@@ -109,6 +111,8 @@ export function saveSchedule(patch: Partial<ScheduleSettings>): ScheduleSettings
   if (patch.youtube !== undefined) stored.youtube = strictMulti(patch.youtube, "youtube");
   if (patch.stockKr !== undefined) stored.stockKr = strictMulti(patch.stockKr, "stockKr");
   if (patch.stockUs !== undefined) stored.stockUs = strictMulti(patch.stockUs, "stockUs");
+  if (patch.stockPulse !== undefined)
+    stored.stockPulse = strictMulti(patch.stockPulse, "stockPulse");
 
   fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
   fs.writeFileSync(STORE_PATH, JSON.stringify(stored, null, 2), "utf8");

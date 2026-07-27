@@ -181,6 +181,14 @@ export interface ScheduleSettings {
   stockKr: string[];
   /** 미국장 브리핑(전일 종가 결산 + 당일 밤 개장 프리뷰). 기본 18:00. */
   stockUs: string[];
+  /**
+   * 시간당 펄스(실시간 취합) 시각. 다른 탭과 달리 **하루 10회 이상**이 정상이다.
+   * 기본은 장중·장전후 집중(한국장 08~16시 + 미국장 22~06시).
+   *
+   * ⚠️ 펄스는 **catch-up 하지 않는다.** 지나간 시각의 '실시간' 취합은 보충할 가치가 없고,
+   *    보충하면 서버 재시작 직후 밀린 시각만큼 연쇄 실행되어 토큰을 태운다.
+   */
+  stockPulse: string[];
 }
 
 // ── 수집/큐레이션 에이전트 모델 설정 ──
@@ -709,4 +717,198 @@ export interface StockSnapshot {
   /** 전 채널(화면·메일·iMessage)에 노출되는 면책 문구. */
   disclaimer: string;
   notes: string | null;
+  /**
+   * 내 포지션 점검(보유 종목). 브리핑 맨 앞에 렌더된다.
+   *
+   * 옵셔널인 이유는 StockSnapshot.role 과 같다 — loadFromDisk 가 `as StockSnapshot` 캐스트라
+   * 런타임 검증이 없고, 이 필드 도입 이전 디스크 스냅샷에는 키가 없다. 읽는 쪽은 `?? []`.
+   */
+  positions?: StockPositionReview[];
+}
+
+// ── 보유 종목 (한국장·미국장과 별도 탭) ──
+
+/**
+ * 투자 기간. **종목마다 다르다** — 사용자가 종목별로 지정한다.
+ *
+ * 이 값은 장식이 아니라 영향도 판정의 축이다. 같은 재료도 기간에 따라 판정이 뒤집힌다
+ * (금리 인하 기대 후퇴 → short 는 부정, long 은 중립). 펄스 프롬프트에 그대로 주입된다.
+ */
+export type StockHorizon = "short" | "mid" | "long";
+
+/**
+ * 보유 종목 1건(원장). 자연키는 (market, symbol) — `stocks` 와 같은 규칙이다.
+ *
+ * ⚠️ 이 표에는 **시세가 없다.** 현재가·손익률은 조회 시점마다 quote.ts 로 계산해 붙인다
+ * (StockHoldingSummary). 시세를 원장에 캐시하면 화면과 실제가 언제 갈라졌는지 알 수 없다.
+ */
+export interface StockHolding {
+  id: number;
+  market: StockMarket;
+  /** 정규화된 심볼. KR=6자리 코드, US=대문자 티커. */
+  symbol: string;
+  name: string;
+  /** 네이버 시세 조회용 내부 코드. 등록 종목(stocks)과 같은 값. */
+  quoteCode: string;
+  exchange: string;
+  /** 보유 수량. 해외주식 소수점 매수가 있으므로 정수가 아니다. */
+  quantity: number;
+  /** 평균 매입 단가(현지 통화). 손익률의 기준. */
+  avgPrice: number;
+  /** 목표가. 없으면 null — 알림 트리거가 아니라 브리핑의 '거리 표시'에만 쓴다. */
+  targetPrice: number | null;
+  /** 손절가. 없으면 null. 목표가와 같은 용도. */
+  stopPrice: number | null;
+  horizon: StockHorizon;
+  /** 보유 이유·메모. 판정 프롬프트에 그대로 주입된다(빈 문자열이면 주입하지 않는다). */
+  memo: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 보유 종목 추가 입력. symbol 만 오면 서버가 네이버 자동완성으로 나머지를 채운다. */
+export interface CreateStockHoldingInput {
+  market: StockMarket;
+  /** 종목코드·티커·종목명 아무거나. 서버가 자동완성으로 해석한다. */
+  query: string;
+  quantity: number;
+  avgPrice: number;
+  targetPrice?: number | null;
+  stopPrice?: number | null;
+  horizon?: StockHorizon;
+  memo?: string;
+}
+
+/** 보유 종목 부분 수정. market/symbol 은 바꿀 수 없다(= 다른 종목이라는 뜻). */
+export interface UpdateStockHoldingInput {
+  quantity?: number;
+  avgPrice?: number;
+  targetPrice?: number | null;
+  stopPrice?: number | null;
+  horizon?: StockHorizon;
+  memo?: string;
+}
+
+/**
+ * 보유 종목 + 시세 파생값. **숫자는 전부 서버가 계산한다 — LLM 미개입.**
+ * 시세 조회 실패 시 close 이하가 전부 null 이 된다(항목을 감추지는 않는다 —
+ * 보유 사실 자체는 유효하고, 조회 실패를 '보유 없음'으로 표시하면 더 나쁘다).
+ */
+export interface StockHoldingSummary extends StockHolding {
+  close: number | null;
+  changePct: number | null;
+  currency: string;
+  /** 평가손익률 %. (close - avgPrice) / avgPrice * 100 */
+  pnlPct: number | null;
+  /** 평가손익 금액(현지 통화). (close - avgPrice) * quantity */
+  pnlAmount: number | null;
+  /** 평가금액(현지 통화). close * quantity */
+  marketValue: number | null;
+  /** 목표가까지 남은 거리 %. 목표가 미입력이면 null. */
+  toTargetPct: number | null;
+  /** 손절가까지 남은 거리 %. 손절가 미입력이면 null. 음수면 이미 이탈했다는 뜻. */
+  toStopPct: number | null;
+  history: StockPoint[];
+}
+
+/**
+ * 일일 브리핑의 '내 포지션 점검' 1건 = 보유 요약(서버 숫자) + 오늘의 영향 요인(LLM 서술).
+ * LLM 은 `factors`·`pulseSummary` 만 채운다. 나머지는 전부 서버 계산값이다.
+ */
+export interface StockPositionReview extends StockHoldingSummary {
+  /** 오늘 이 종목에 작용하는 요인. 투자 권유 금지 — 관측된 사실과 그 영향 방향만. */
+  factors: string;
+  /** 지난 24시간 펄스 요약. 문자 문턱을 넘지 못한 건이 회수되는 유일한 경로. */
+  pulseSummary: string | null;
+}
+
+// ── 시간당 펄스 (실시간 취합 → 문자 알림) ──
+
+/**
+ * 영향 강도. **정렬 가능한 값**이라는 점이 중요하다 —
+ * 중복 억제가 '같은 지문이라도 강도가 오르면 재발송'이라 대소 비교가 필요하다.
+ * (비교는 shared/pulse.ts 의 severityRank 로만 할 것. 문자열 비교는 사전순이라 틀린다.)
+ */
+export type PulseSeverity = "urgent" | "important" | "info";
+
+/** 영향 방향. 투자 권유가 아니라 '재료의 부호'다. */
+export type PulseDirection = "positive" | "negative" | "neutral";
+
+/** 펄스가 인용한 출처 1건. */
+export interface PulseSource {
+  title: string;
+  /** 매체명 또는 인물명("도널드 트럼프 / Truth Social"). */
+  origin: string;
+  url: string | null;
+  /** 발행·게시 시각 표기(원문 그대로). 불명확하면 null. */
+  publishedAt: string | null;
+}
+
+/**
+ * 영향도 판정 1건.
+ *
+ * ⚠️ **액션 의견이 아니다.** 사용자가 인터뷰에서 '영향도 판정까지만'을 선택했으므로
+ * 매수/매도/비중조절 표현은 이 타입 어디에도 실리면 안 된다(pulse-prompt.ts 가 검열한다).
+ */
+export interface PulseImpact {
+  /**
+   * 영향받는 보유 종목 심볼. 거시·섹터 충격처럼 특정 종목에 귀속되지 않으면 null.
+   * null 항목은 별도 상한(macro cap)을 탄다.
+   */
+  symbol: string | null;
+  market: StockMarket | null;
+  /** 표시용 종목명. symbol 이 null 이면 섹터·테마명("반도체 섹터"). */
+  name: string;
+  direction: PulseDirection;
+  severity: PulseSeverity;
+  /** 한 줄 요지. 문자 본문의 제목이 된다. */
+  headline: string;
+  /** 판정 근거 — 필수. 비면 항목을 폐기한다(브리핑의 rationale 정책과 동일). */
+  rationale: string;
+  /** 이 판정이 틀릴 수 있는 조건. 필수. */
+  risks: string;
+  /** 출처 — 최소 1건 필수. 없으면 폐기한다(지어낸 발언 차단의 유일한 방어선). */
+  sources: PulseSource[];
+  /** 트리거 분류. 상한 집계와 문자 머리말에 쓴다. */
+  trigger: "person" | "company" | "macro";
+}
+
+/** 펄스 원장 1행. 지문 중복·상한·야간 큐·일일 요약이 전부 이 표 하나를 본다. */
+export interface PulseAlertRecord {
+  id: number;
+  /** 이슈 지문(24시간 중복 차단 키). */
+  fingerprint: string;
+  /** 로컬 발생일 YYYY-MM-DD (상한 집계 단위). */
+  date: string;
+  /** 이 판정을 만든 펄스 실행 시각 "HH:mm". */
+  slot: string;
+  impact: PulseImpact;
+  /**
+   * 처리 결과.
+   * - 'sent'        문자 발송 완료
+   * - 'queued'      야간 보류 큐에 대기(07:00 묶음 발송 대상)
+   * - 'dup'         24시간 내 같은 지문이 이미 나감
+   * - 'capped'      상한 초과로 잘림
+   * - 'below'       문턱(중요) 미달 — 일일 브리핑 요약에서만 회수된다
+   * - 'failed'      발송 시도했으나 실패
+   */
+  status: "sent" | "queued" | "dup" | "capped" | "below" | "failed";
+  createdAt: string;
+  sentAt: string | null;
+}
+
+/** 펄스 1회 실행 결과(로그·상태 API용). */
+export interface PulseRunResult {
+  slot: string;
+  date: string;
+  startedAt: string;
+  finishedAt: string;
+  ok: boolean;
+  /** LLM 이 낸 판정 수(정규화 통과분). */
+  impacts: number;
+  sent: number;
+  queued: number;
+  suppressed: number;
+  error: string | null;
 }

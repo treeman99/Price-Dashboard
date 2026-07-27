@@ -17,6 +17,7 @@ import {
   Circle,
   Star,
   EyeOff,
+  AlertTriangle,
 } from "lucide-react";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategoryDef } from "@shared/types";
 import { safeHref } from "@shared/url";
@@ -468,6 +469,11 @@ export function YoutubeBoard() {
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * 마지막 수집 시도가 실패했을 때의 사유. 수집이 실패하면 서버가 기존 스냅샷을 유지하므로
+   * 화면은 그대로고, 안내가 없으면 '갱신 버튼이 먹통'으로만 보인다(실측: 반나절 방치).
+   */
+  const [failure, setFailure] = useState<{ at: string; error: string } | null>(null);
   const [dialog, setDialog] = useState<CategoryDialogState | null>(null);
   const [blockCount, setBlockCount] = useState(0);
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
@@ -508,10 +514,16 @@ export function YoutubeBoard() {
   }
   async function checkStatus() {
     try {
-      setCollecting((await api.youtubeStatus()).collecting);
+      applyStatus(await api.youtubeStatus());
     } catch {
       /* 상태 폴링 실패는 무시 */
     }
+  }
+  /** status 응답을 '수집 중' 표시와 실패 안내에 함께 반영한다. */
+  function applyStatus(s: Awaited<ReturnType<typeof api.youtubeStatus>>) {
+    setCollecting(s.collecting);
+    const a = s.lastAttempt;
+    setFailure(a && !a.ok ? { at: a.at, error: a.error ?? "원인 미상" } : null);
   }
   useEffect(() => {
     load();
@@ -526,12 +538,13 @@ export function YoutubeBoard() {
     const id = setInterval(async () => {
       let done = false;
       try {
-        done = !(await api.youtubeStatus()).collecting;
+        const s = await api.youtubeStatus();
+        applyStatus(s); // 끝났으면 실패 사유도 함께 반영(실패 시 화면이 그대로라 안내가 필요)
+        done = !s.collecting;
       } catch {
         return; // 일시 오류는 다음 주기에 재시도
       }
       if (done) {
-        setCollecting(false);
         await load(); // 완료 → 새 결과 반영
         loadBlockCount();
         loadDismissCount();
@@ -885,6 +898,20 @@ export function YoutubeBoard() {
         <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
           유튜브 소식을 수집하는 중입니다… 카테고리가 많으면 수 분~수십 분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
+        </div>
+      )}
+
+      {/* 수집이 실패하면 서버가 기존 스냅샷을 유지한다 → 화면이 그대로라 실패를 알 수 없다. 명시한다. */}
+      {!collecting && failure && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <div className="font-medium">
+              마지막 수집이 실패해 아래 목록은 이전 결과입니다 (
+              {new Date(failure.at).toLocaleString("ko-KR")} 시도)
+            </div>
+            <div className="mt-0.5 break-all text-amber-800">{failure.error}</div>
+          </div>
         </div>
       )}
 

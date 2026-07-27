@@ -15,6 +15,25 @@ function int(v: string | undefined, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
+/**
+ * 0~23 로 자른다. 야간 창(quiet hours) 전용.
+ * 범위 밖 값이 그대로 흘러가면 `hour >= 25` 같은 조건이 **영원히 거짓**이 되어 야간 억제가
+ * 조용히 꺼진다 — 새벽 3시에 문자가 쏟아지고 나서야 알게 되는 종류의 실패라 입구에서 막는다.
+ */
+function clampHour(n: number): number {
+  return Math.min(23, Math.max(0, Math.trunc(n)));
+}
+
+/**
+ * 펄스 문자 문턱. 오타·미지정은 'important'(인터뷰에서 확정한 '중요 이상')로 접는다.
+ * 조용히 'info' 로 떨어지면 참고 등급까지 전부 문자로 나가 알림 피로가 폭발한다 —
+ * fail-open 방향을 **덜 보내는 쪽**으로 잡는다.
+ */
+function pulseThreshold(v: string | undefined): "urgent" | "important" | "info" {
+  const s = (v ?? "").trim().toLowerCase();
+  return s === "urgent" || s === "info" ? s : "important";
+}
+
 export interface AppConfig {
   port: number;
   collectTime: string; // HH:mm (가격 수집)
@@ -31,6 +50,33 @@ export interface AppConfig {
   stockUsCollectTimes: string[];
   /** 종목 시세 조회 간 간격(ms). 네이버에 대한 매너 — 연타 금지. */
   stockFetchDelayMs: number;
+  /**
+   * 시간당 펄스(실시간 취합) 실행 시각. 기본은 장중·장전후 집중
+   * (한국장 08~16시 + 미국장 22~06시). 06~08시·16~22시는 비운다.
+   */
+  stockPulseTimes: string[];
+  /**
+   * 펄스 1회 최대 대기(ms). **공용 타임아웃과 별개여야 한다** — 매시간 도는 작업에
+   * 60분을 물리면 실행이 다음 정시를 넘겨 겹친다(src/stock/agent.ts timeoutFor 주석).
+   */
+  stockPulseTimeoutMs: number;
+  /** 펄스 알림 정책. 인터뷰에서 확정한 값들 — docs/stock-agent-v2.md §6 참고. */
+  stockPulse: {
+    /** 종목 1개당 하루 최대 문자 건수. */
+    perSymbolCap: number;
+    /** 하루 전체 최대 문자 건수(종목 알림 합계). */
+    dailyCap: number;
+    /** 거시·섹터 충격은 종목 상한과 **별도**로 하루 이만큼. */
+    macroCap: number;
+    /** 같은 이슈 재발송 차단 시간(시간). 강도가 오르면 이 창 안에서도 다시 보낸다. */
+    dedupHours: number;
+    /** 문자 발송 문턱. 이 강도 미만은 원장에만 남는다(일일 브리핑 요약에서 회수). */
+    threshold: "urgent" | "important" | "info";
+    /** 야간 시작 시각(이 시각부터 긴급만 즉시 발송). 예: 23 */
+    quietStartHour: number;
+    /** 야간 종료 = 보류분 묶음 발송 시각. 예: 7 */
+    quietEndHour: number;
+  };
   youtubeFreshDays: number; // 최근 N일 이내 게시 영상만 채택
   /** '본영상' 체크된 유튜브 영상을 이만큼(일) 동안 수집·검색에서 제외 */
   youtubeWatchedExcludeDays: number;
@@ -90,12 +136,32 @@ export const config: AppConfig = {
     "STOCK_US_COLLECT_TIMES"
   ),
   stockFetchDelayMs: Math.max(0, int(process.env.STOCK_FETCH_DELAY_MS, 300)),
+  stockPulseTimes: parseCollectTimes(
+    process.env.STOCK_PULSE_TIMES?.trim() ||
+      // 한국장(08~16) + 미국장(22~06). 06~08·16~22 는 새 재료가 거의 없는 구간이라 비운다.
+      "08:00,09:00,10:00,11:00,12:00,13:00,14:00,15:00,16:00," +
+        "22:00,23:00,00:00,01:00,02:00,03:00,04:00,05:00,06:00",
+    "STOCK_PULSE_TIMES"
+  ),
+  // 기본 10분. 정시 간격(60분)의 1/6 이라 실행이 밀려도 다음 정시를 침범하지 않는다.
+  stockPulseTimeoutMs: Math.max(60_000, int(process.env.STOCK_PULSE_TIMEOUT_MS, 600_000)),
+  stockPulse: {
+    perSymbolCap: Math.max(0, int(process.env.STOCK_PULSE_PER_SYMBOL_CAP, 3)),
+    dailyCap: Math.max(0, int(process.env.STOCK_PULSE_DAILY_CAP, 10)),
+    macroCap: Math.max(0, int(process.env.STOCK_PULSE_MACRO_CAP, 2)),
+    dedupHours: Math.max(1, int(process.env.STOCK_PULSE_DEDUP_HOURS, 24)),
+    threshold: pulseThreshold(process.env.STOCK_PULSE_THRESHOLD),
+    quietStartHour: clampHour(int(process.env.STOCK_PULSE_QUIET_START, 23)),
+    quietEndHour: clampHour(int(process.env.STOCK_PULSE_QUIET_END, 7)),
+  },
   youtubeFreshDays: Math.max(1, int(process.env.YOUTUBE_FRESH_DAYS, 7)),
   youtubeWatchedExcludeDays: Math.max(1, int(process.env.YOUTUBE_WATCHED_EXCLUDE_DAYS, 7)),
   eventsNewGapDays: Math.max(1, int(process.env.EVENTS_NEW_GAP_DAYS, 7)),
   eventsNewShowDays: Math.max(1, int(process.env.EVENTS_NEW_SHOW_DAYS, 3)),
-  // 기본 30분: 카테고리가 많으면 정상 수집도 20분 넘게 걸릴 수 있어 넉넉히 두되, 무한 hang 은 차단
-  agentQueryTimeoutMs: Math.max(60_000, int(process.env.AGENT_QUERY_TIMEOUT_MS, 1_800_000)),
+  // 기본 60분: 카테고리가 많으면 정상 수집도 오래 걸린다. 30분이던 값은 실제로 부족해져
+  // (실측 2026-07-26: 정상 소요가 9~17분에서 30분 초과로 늘어 큐레이션이 연속 5회 잘림)
+  // 매번 결과를 통째로 버리고 있었다. 무한 hang 차단이라는 원래 목적은 유지하되 여유를 준다.
+  agentQueryTimeoutMs: Math.max(60_000, int(process.env.AGENT_QUERY_TIMEOUT_MS, 3_600_000)),
   dbPath: process.env.DB_PATH?.trim() || path.join(repoRoot, "data", "price.db"),
   legacyHistoryJson:
     process.env.LEGACY_HISTORY_JSON?.trim() ||
@@ -163,6 +229,7 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
   config.youtubeCollectTimes.forEach((t) => parseCollectTime(t));
   config.stockKrCollectTimes.forEach((t) => parseCollectTime(t));
   config.stockUsCollectTimes.forEach((t) => parseCollectTime(t));
+  config.stockPulseTimes.forEach((t) => parseCollectTime(t));
 
   if (opts.forCollect) {
     if (!config.naver.clientId || !config.naver.clientSecret) {

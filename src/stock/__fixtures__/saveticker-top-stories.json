@@ -1,0 +1,325 @@
+{
+  "news_list": [
+    {
+      "id": "177349",
+      "title": "[내용 추가] 이란 \"오만과의 호르무즈 협상 유익, 계속 이어갈 것\"",
+      "content": "이란 외무부는 미국이 전쟁 시점을 결정하도록 결코 내버려 두지 않겠다며, 국익 보호를 위해 필요할 경우 자위권을 행사하는 것은 물론 외교적 수단...",
+      "thumbnail": null,
+      "source": null,
+      "author_name": "알 수 없음",
+      "author_profile_image_url": null,
+      "author_points": 0,
+      "author_role": null,
+      "created_at": "2026-07-27T16:56:45.052243+09:00",
+      "view_count": 23329,
+      "tag_names": [
+        "속보"
+      ],
+      "comment_count": 0,
+      "like_stats": {
+        "target_id": "177349",
+        "like_count": 0,
+        "user_liked": false
+      },
+      "vote_stats": {
+        "target_id": "",
+        "vote_counts": {},
+        "total_count": 0,
+        "user_vote": null,
+        "vote_setting": null
+      },
+      "is_bookmarked": false,
+      "is_deleted": false,
+      "is_headline_only": false,
+      "is_top_story": true,
+      "hide_comments": false,
+      "translations": null,
+      "extra": null,
+      "news_group_id": null,
+      "similar_count": 0,
+      "group_summary": null
+    },
+    {
+      "id": "177299",
+      "title": "(카더라) 엔비디아, 오픈AI 데이터센터에 2,500억 달러 금융보증 추진",
+      "content": "월스트리트저널은 소식통을 인용해,\n엔비디아가 오픈AI를 위해 약 2,500억 달러 규모의 자금 조달 보증을 제공하는 방안을 논의 중이라고 보도함...",
+      "thumbnail": null,
+      "source": "월스트리트저널",
+      "author_name": "알 수 없음",
+      "author_profile_image_url": null,
+      "author_points": 0,
+      "author_role": null,
+      "created_at": "2026-07-27T15:44:40.839106+09:00",
+      "view_count": 17349,
+      "tag_names": [
+        "정보",
+        "$NVDA"
+      ],
+      "comment_count": 0,
+      "like_stats": {
+        "target_id": "177299",
+        "like_count": 0,
+        "user_liked": false
+      },
+      "vote_stats": {
+        "target_id": "",
+        "vote_counts": {},
+        "total_count": 0,
+        "user_vote": null,
+        "vote_setting": null
+      },
+      "is_bookmarked": false,
+      "is_deleted": false,
+      "is_headline_only": false,
+      "is_top_story": true,
+      "hide_comments": false,
+      "translations": null,
+      "extra": null,
+      "news_group_id": null,
+      "similar_count": 0,
+      "group_summary": null
+    },
+    {
+      "id": "177295",
+      "title": "[종합] 미국, 이란 공습 이틀째 중단…오만 중재 호르무즈 협상 진행",
+      "content": "미국이 이란을 겨냥한 야간 공습을 이틀째 중단하고 이란 역시 보복 공격을 멈춘 가운데, 호르무즈 해협의 선박 통항 문제를 해결하기 위한 이란과 ...",
+      "thumbnail": null,
+      "source": "블룸버그",
+      "author_name": "알 수 없음",
+      "author_profile_image_url": null,
+      "author_points": 0,
+      "author_role": null,
+      "created_at": "2026-07-27T15:36:47.616782+09:00",
+      "view_count": 10242,
+      "tag_names": [
+        "정보",
+        "에너지"
+      ],
+      "comment_count": 0,
+      "like_stats": {
+        "target_id": "177295",
+        "like_count": 0,
+        "user_liked": false
+      },
+      "vote_stats": {
+        "target_id": "",
+        "vote_counts": {},
+        "total_count": 0,
+        "user_vote": null,
+        "vote_setting": null
+      },
+      "is_bookmarked": false,
+      "is_deleted": false,
+      "is_headline_only": false,
+      "is_top_story": true,
+      "hide_comments": false,
+      "translations": null,
+      "extra": null,
+      "news_group_id": null,
+      "similar_count": 0,
+      "group_summary": null
+    },
+    {
+      "id": "177294",
+      "title": "창신메모리, 상장 첫날 535% 폭등…A주 시가총액 1위 등극",
+      "content": "중국의 메모리 반도체 기업 CXMT(창신메모리)가 상하이 증시 상장 첫날 장중 한때 535% 폭등하며 시가총액 약 3조 7,000억 위안(약 5...",
+      "thumbnail": null,
+      "source": "블룸버그",
+      "author_name": "알 수 없음",
+      "author_profile_image_url": null,
+      "author_points": 0,
+      "author_role": null,
+      "created_at": "2026-07-27T15:30:41.449502+09:00",
+      "view_count": 18353,
+      "tag_names": [
+        "정보"
+      ],
+      "comment_count": 0,
+      "like_stats": {
+        "target_id": "177294",
+        "like_count": 0,
+        "user_liked": false
+      },
+      "vote_stats": {
+        "target_id": "",
+        "vote_counts": {},
+        "total_count": 0,
+        "user_vote": null,
+        "vote_setting": null
+      },
+      "is_bookmarked": false,
+      "is_deleted": false,
+      "is_headline_only": false,
+      "is_top_story": true,
+      "hide_comments": false,
+      "translations": null,
+      "extra": null,
+      "news_group_id": null,
+      "similar_count": 0,
+      "group_summary": null
+    },
+    {
+      "id": "177134",
+      "title": "이란 외무부 \"미국과 메시지 교환·중재 활동 계속\"",
+      "content": "보도시간: 26년 07월 27일 (월) 04시 03분 - 한국시간\n\n\n이란 외무부 대변인은 이란과 미국이 계속해서 메시지를 주고받고 있으며, 중...",
+      "thumbnail": null,
+      "source": "로이터 ",
+      "author_name": "알 수 없음",
+      "author_profile_image_url": null,
+      "author_points": 0,
+      "author_role": null,
+      "created_at": "2026-07-27T04:16:15.194438+09:00",
+      "view_count": 35639,
+      "tag_names": [
+        "정보"
+      ],
+      "comment_count": 0,
+      "like_stats": {
+        "target_id": "177134",
+        "like_count": 0,
+        "user_liked": false
+      },
+      "vote_stats": {
+        "target_id": "",
+        "vote_counts": {},
+        "total_count": 0,
+        "user_vote": null,
+        "vote_setting": null
+      },
+      "is_bookmarked": false,
+      "is_deleted": false,
+      "is_headline_only": false,
+      "is_top_story": true,
+      "hide_comments": false,
+      "translations": null,
+      "extra": null,
+      "news_group_id": null,
+      "similar_count": 0,
+      "group_summary": null
+    },
+    {
+      "id": "177112",
+      "title": "[종합] 미국·이란, 공격 중단 이틀째 이어가…오만 중재로 호르무즈 협상 재개",
+      "content": "미국이 이틀째 이란 공습을 보류한 가운데 이란도 대응 공격을 중단했으며, 오만과 호르무즈 해협의 선박 운항 문제를 놓고 협상을 진행 중임\n\n\n-...",
+      "thumbnail": null,
+      "source": "블룸버그",
+      "author_name": "알 수 없음",
+      "author_profile_image_url": null,
+      "author_points": 0,
+      "author_role": null,
+      "created_at": "2026-07-26T23:22:28.043142+09:00",
+      "view_count": 28492,
+      "tag_names": [
+        "정보"
+      ],
+      "comment_count": 0,
+      "like_stats": {
+        "target_id": "177112",
+        "like_count": 0,
+        "user_liked": false
+      },
+      "vote_stats": {
+        "target_id": "",
+        "vote_counts": {},
+        "total_count": 0,
+        "user_vote": null,
+        "vote_setting": null
+      },
+      "is_bookmarked": false,
+      "is_deleted": false,
+      "is_headline_only": false,
+      "is_top_story": true,
+      "hide_comments": false,
+      "translations": null,
+      "extra": null,
+      "news_group_id": null,
+      "similar_count": 0,
+      "group_summary": null
+    },
+    {
+      "id": "177092",
+      "title": "SAVE Weekly | 지난주 미국 증시 & 다음 주 일정",
+      "content": "\n",
+      "thumbnail": "/api/uploads/images/6a65c3b6c9eb7173ca55a481",
+      "source": null,
+      "author_name": "알 수 없음",
+      "author_profile_image_url": null,
+      "author_points": 0,
+      "author_role": null,
+      "created_at": "2026-07-26T17:22:34.229964+09:00",
+      "view_count": 21722,
+      "tag_names": [
+        "종합"
+      ],
+      "comment_count": 0,
+      "like_stats": {
+        "target_id": "177092",
+        "like_count": 0,
+        "user_liked": false
+      },
+      "vote_stats": {
+        "target_id": "",
+        "vote_counts": {},
+        "total_count": 0,
+        "user_vote": null,
+        "vote_setting": null
+      },
+      "is_bookmarked": false,
+      "is_deleted": false,
+      "is_headline_only": false,
+      "is_top_story": true,
+      "hide_comments": false,
+      "translations": null,
+      "extra": null,
+      "news_group_id": null,
+      "similar_count": 0,
+      "group_summary": null
+    },
+    {
+      "id": "177044",
+      "title": "(카더라) 미국, 이란 공습 하루 중단…호르무즈 협상 진전 주목",
+      "content": "Axios는 소식통을 인용해,\n트럼프 대통령이 지난 13일 동안 매일 이어지던 미군의 이란 공습을 금요일에는 새로 실시하지 말라고 지시했다고 보...",
+      "thumbnail": null,
+      "source": "Axios",
+      "author_name": "알 수 없음",
+      "author_profile_image_url": null,
+      "author_points": 0,
+      "author_role": null,
+      "created_at": "2026-07-26T02:06:28.261974+09:00",
+      "view_count": 55705,
+      "tag_names": [
+        "속보"
+      ],
+      "comment_count": 0,
+      "like_stats": {
+        "target_id": "177044",
+        "like_count": 0,
+        "user_liked": false
+      },
+      "vote_stats": {
+        "target_id": "",
+        "vote_counts": {},
+        "total_count": 0,
+        "user_vote": null,
+        "vote_setting": null
+      },
+      "is_bookmarked": false,
+      "is_deleted": false,
+      "is_headline_only": false,
+      "is_top_story": true,
+      "hide_comments": false,
+      "translations": null,
+      "extra": null,
+      "news_group_id": null,
+      "similar_count": 0,
+      "group_summary": null
+    }
+  ],
+  "total_count": 18,
+  "page": 1,
+  "page_size": 18,
+  "window": null,
+  "next_window": null,
+  "has_older": false,
+  "from_cache": false
+}

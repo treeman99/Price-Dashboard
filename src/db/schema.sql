@@ -135,3 +135,59 @@ CREATE TABLE IF NOT EXISTS stock_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_points_date ON stock_points(date);
+
+-- ── 보유 종목 (한국장·미국장과 별도 탭) ──
+--
+-- stocks 와 분리한 이유: stocks 는 '지켜보는 종목'이고 여기는 '실제 포지션'이라 수명이 다르다.
+-- 다 팔아도 계속 지켜보고 싶은 종목이 있고, 그때 stocks 행까지 지워지면 시계열이 끊긴다.
+-- 대신 보유 등록 시 stocks 에 자동으로 행을 만든다(src/stock/holdings.ts) — 중복 입력 제거.
+--
+-- ⚠️ 시세는 이 표에 저장하지 않는다. 현재가·손익률은 조회 시점마다 계산한다
+--    (캐시하면 화면과 실제가 언제 갈라졌는지 알 수 없다).
+CREATE TABLE IF NOT EXISTS stock_holdings (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  market       TEXT NOT NULL,              -- 'kr' | 'us'
+  symbol       TEXT NOT NULL,              -- 정규화 후 저장 (stocks 와 같은 규칙)
+  name         TEXT NOT NULL,
+  quote_code   TEXT NOT NULL,
+  exchange     TEXT NOT NULL DEFAULT '',
+  quantity     REAL NOT NULL,              -- 소수점 매수가 있으므로 REAL
+  avg_price    REAL NOT NULL,
+  target_price REAL,                       -- null = 미입력 (0 과 반드시 구분할 것)
+  stop_price   REAL,
+  horizon      TEXT NOT NULL DEFAULT 'mid',-- 'short' | 'mid' | 'long'
+  memo         TEXT NOT NULL DEFAULT '',
+  active       INTEGER NOT NULL DEFAULT 1, -- 0/1 (soft delete)
+  sort_order   INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  UNIQUE (market, symbol)
+);
+
+-- ── 펄스 알림 원장 ──
+--
+-- 표 하나가 네 가지 일을 한다. 쪼개지 않은 이유는 넷이 전부 '같은 판정 목록'의 다른 질의라서다:
+--   1) 중복 억제 — fingerprint 로 최근 24시간 조회
+--   2) 상한      — date + status='sent' 로 종목별/전체 집계
+--   3) 야간 큐   — status='queued' 조회 후 07:00 에 묶음 발송
+--   4) 일일 요약 — 최근 24시간 전체(문턱 미달 'below' 포함). 화면·이메일이 없으므로
+--                 문턱 미달 건이 사용자에게 도달하는 **유일한 경로**다.
+CREATE TABLE IF NOT EXISTS stock_pulse_alerts (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  fingerprint TEXT NOT NULL,
+  date        TEXT NOT NULL,              -- YYYY-MM-DD (로컬 발생일 = 상한 집계 단위)
+  slot        TEXT NOT NULL,              -- 'HH:mm' 이 판정을 만든 펄스 실행 시각
+  symbol      TEXT,                       -- null = 거시·섹터 (별도 상한을 탄다)
+  market      TEXT,
+  severity    TEXT NOT NULL,              -- 'urgent' | 'important' | 'info'
+  trigger     TEXT NOT NULL,              -- 'person' | 'company' | 'macro'
+  headline    TEXT NOT NULL,              -- 유사도 판정용으로 컬럼에 꺼내 둔다
+  impact_json TEXT NOT NULL,              -- JSON(PulseImpact) 전문
+  status      TEXT NOT NULL,              -- 'sent'|'queued'|'dup'|'capped'|'below'|'failed'
+  created_at  TEXT NOT NULL,              -- ISO datetime
+  sent_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pulse_fp ON stock_pulse_alerts(fingerprint, created_at);
+CREATE INDEX IF NOT EXISTS idx_pulse_date ON stock_pulse_alerts(date, status);
+CREATE INDEX IF NOT EXISTS idx_pulse_created ON stock_pulse_alerts(created_at);

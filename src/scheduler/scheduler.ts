@@ -6,8 +6,11 @@ import { runCollection } from "../collector/collect.ts";
 import { hasSuccessfulRun } from "../db/repo.ts";
 import { refreshEvents, hasTodaySnapshot } from "../events/events.ts";
 import { refreshNews, getNewsSnapshot } from "../news/news.ts";
-import { refreshYoutube, getYoutubeSnapshot } from "../youtube/youtube.ts";
+import { refreshYoutube, getYoutubeSnapshot, getYoutubeLastAttempt } from "../youtube/youtube.ts";
 import { refreshStock, snapshotForSlot } from "../stock/stock.ts";
+import { runPulse, flushPulseQueue } from "../stock/pulse.ts";
+import { isQuietHour } from "../stock/pulse-gate.ts";
+import { config } from "../config.ts";
 import { describeSlotRoles } from "../stock/slot-role.ts";
 import { slotHandled, slotNeedsCatchup } from "../stock/notify-ledger.ts";
 import { localDate } from "../util/date.ts";
@@ -134,6 +137,21 @@ async function checkNewsCatchup() {
 
 // ── 유튜브 소식 스케줄 ──
 let youtubeRunning = false;
+
+/**
+ * catch-up 재시도 백오프.
+ *
+ * 수집이 실패하면 오늘자 스냅샷이 생기지 않으므로 catch-up 조건은 계속 참이고, 30분마다 무한
+ * 재시도가 돈다. 큐레이션 1회가 최대 30분짜리 LLM 작업이라 실패가 이어지면 하루 종일 같은 실패를
+ * 반복하며 시간·비용만 태운다(실측: 반나절 동안 8회). 연속 실패마다 다음 catch-up 을 미뤄
+ * 재시도 간격을 벌린다. 정시 cron 과 수동 '지금 갱신'은 이 게이트를 타지 않는다 — 사용자가
+ * 직접 누른 갱신까지 막으면 그게 진짜 먹통이다.
+ */
+let youtubeFailStreak = 0;
+let youtubeRetryAfter = 0; // epoch ms. 이 시각 전에는 catch-up 을 건너뛴다.
+const YOUTUBE_BACKOFF_BASE_MS = 30 * 60 * 1000;
+const YOUTUBE_BACKOFF_MAX_MS = 4 * 60 * 60 * 1000;
+
 async function safeRefreshYoutube(trigger: string, notify: boolean) {
   if (youtubeRunning) {
     log.warn(`유튜브 수집 진행 중 → ${trigger} 건너뜀`);
@@ -146,7 +164,28 @@ async function safeRefreshYoutube(trigger: string, notify: boolean) {
     log.error(`유튜브 수집 오류 [${trigger}]: ${(e as Error).message}`);
   } finally {
     youtubeRunning = false;
+    noteYoutubeOutcome();
   }
+}
+
+/** 이번 시도의 성패로 백오프를 갱신한다(성공하면 즉시 해제). */
+function noteYoutubeOutcome() {
+  const attempt = getYoutubeLastAttempt();
+  if (attempt?.ok) {
+    if (youtubeFailStreak > 0) log.info(`유튜브 수집 정상화 — catch-up 백오프 해제`);
+    youtubeFailStreak = 0;
+    youtubeRetryAfter = 0;
+    return;
+  }
+  youtubeFailStreak += 1;
+  const wait = Math.min(
+    YOUTUBE_BACKOFF_BASE_MS * 2 ** (youtubeFailStreak - 1),
+    YOUTUBE_BACKOFF_MAX_MS
+  );
+  youtubeRetryAfter = Date.now() + wait;
+  log.warn(
+    `유튜브 수집 연속 실패 ${youtubeFailStreak}회 → catch-up 재시도를 ${Math.round(wait / 60000)}분 뒤로 미룸`
+  );
 }
 
 /**
@@ -155,6 +194,7 @@ async function safeRefreshYoutube(trigger: string, notify: boolean) {
  */
 async function checkYoutubeCatchup() {
   if (youtubeRunning) return;
+  if (Date.now() < youtubeRetryAfter) return; // 연속 실패 백오프 중
   const snapshot = getYoutubeSnapshot();
   const snapshotDate = snapshot?.date;
   const snapshotTime = snapshot?.updatedAt ? new Date(snapshot.updatedAt) : null;
@@ -284,6 +324,37 @@ async function checkStockCatchup(market: StockMarket) {
   }
 }
 
+// ── 시간당 펄스 (실시간 취합 → 문자) ──
+//
+// ⚠️ 펄스에는 **catch-up 이 없다.** 다른 탭과 다른 유일한 항목이라 여기 이유를 남긴다:
+// 나머지 탭은 '그날의 결과물'이라 놓치면 보충해야 하지만, 펄스는 '그 시각의 감시'다.
+// 세 시간 전 시장 상황을 지금 문자로 받는 것은 가치가 없을 뿐 아니라 해롭다(이미 지나간
+// 재료에 반응하게 만든다). 서버가 4시간 꺼져 있었다면 그 4개 슬롯은 그냥 없던 일이다.
+// 동시 실행 방지·백오프는 runPulse 안에 있으므로 여기서는 래핑만 한다.
+async function safeRunPulse(slot: string, trigger: string) {
+  try {
+    await runPulse({ slot, trigger, notify: true });
+  } catch (e) {
+    // runPulse 는 throw 하지 않도록 만들었지만, 계약이 깨져도 스케줄러는 죽지 않아야 한다.
+    log.error(`펄스 실행 오류 [${trigger}] ${slot}: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * 야간 보류분 묶음 발송. 조용 시간 종료 시각(기본 07:00) 정각 1회.
+ *
+ * 펄스 정시와 **분리된 별도 cron** 인 이유: 07:00 은 기본 펄스 시각 목록에 없다
+ * (06~08시는 비워 둔 구간이다). 펄스 실행에 얹으면 사용자가 시간대를 바꿨을 때
+ * 보류분이 영영 안 나가는 조합이 생긴다.
+ */
+async function safeFlushPulseQueue(trigger: string) {
+  try {
+    await flushPulseQueue(trigger);
+  } catch (e) {
+    log.error(`펄스 보류 플러시 오류 [${trigger}]: ${(e as Error).message}`);
+  }
+}
+
 /** HH:mm → 매일 실행 cron 식. */
 function cronExpr(hhmm: string): string {
   const { hour, minute } = parseCollectTime(hhmm);
@@ -327,6 +398,25 @@ function registerCrons() {
   // 역할 분리 구성을 남긴다. '슬롯을 하나로 줄이거나 같은 밴드에 몰아넣으면 분리가 조용히
   // 꺼진다'는 비자명 동작의 유일한 가시화 수단이라 옵션이 아니다(slot-role.ts 참고).
   log.info(describeSlotRoles("us", s.stockUs));
+
+  // 펄스는 시각이 16개라 scheduleGroup 의 시각별 로그가 로그를 뒤덮는다 → 한 줄로 요약한다.
+  s.stockPulse.forEach((t, i) => {
+    tasks.push(
+      cron.schedule(cronExpr(t), () => void safeRunPulse(t, "schedule"), {
+        name: `dp-stock-pulse-${i}`,
+      })
+    );
+  });
+  log.info(`스케줄러: 증시 펄스 매일 ${s.stockPulse.length}회 (${s.stockPulse.join(", ")})`);
+
+  // 야간 보류분 묶음 발송(조용 시간 종료 정각).
+  const flushAt = `${String(config.stockPulse.quietEndHour).padStart(2, "0")}:00`;
+  tasks.push(
+    cron.schedule(cronExpr(flushAt), () => void safeFlushPulseQueue("schedule"), {
+      name: "dp-stock-pulse-flush",
+    })
+  );
+  log.info(`스케줄러: 증시 펄스 야간 보류 묶음 발송 매일 ${flushAt}`);
 }
 
 /**
@@ -356,6 +446,19 @@ export function startScheduler() {
   void checkYoutubeCatchup();
   void checkStockCatchup("kr");
   void checkStockCatchup("us");
+  // 펄스 자체는 catch-up 하지 않지만(위 주석) **보류 큐는 다르다.** 큐에 있는 건 이미 판정이
+  // 끝나 "아침에 보내겠다"고 약속한 알림이라, 07:00 에 서버가 꺼져 있었다면 반드시 보충해야
+  // 한다. 그러지 않으면 밤사이 판정이 디스크에 영원히 갇힌다.
+  // 조용 시간 중이면 건너뛴다 — 지금 보내면 그게 바로 새벽 문자다.
+  if (
+    !isQuietHour(
+      new Date().getHours(),
+      config.stockPulse.quietStartHour,
+      config.stockPulse.quietEndHour
+    )
+  ) {
+    void safeFlushPulseQueue("startup");
+  }
   setInterval(() => {
     void checkCatchup();
     void checkEventsCatchup();

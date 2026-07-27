@@ -38,6 +38,7 @@ import {
   getYoutubeSnapshot,
   refreshYoutube,
   isYoutubeCollecting,
+  getYoutubeLastAttempt,
   moveYoutubeVideo,
 } from "../youtube/youtube.ts";
 import {
@@ -74,6 +75,18 @@ import {
   reorderStocks,
 } from "../stock/tickers.ts";
 import { searchTicker, fetchHistory } from "../stock/quote.ts";
+import {
+  createHolding,
+  deleteHolding,
+  getHolding,
+  listHoldings,
+  reorderHoldings,
+  summarizeHoldings,
+  updateHolding,
+} from "../stock/holdings.ts";
+import { runPulse, isPulseRunning, getLastPulseRun } from "../stock/pulse.ts";
+import { isPulseNotifyEnabled } from "../notify/pulse-imessage.ts";
+import { allRecentPulseAlerts } from "../db/repo.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
 import { getModelSettings, saveAgentModel } from "../util/model-store.ts";
 import { rescheduleAll } from "../scheduler/scheduler.ts";
@@ -186,6 +199,7 @@ api.put("/schedule", (req, res) => {
     if (body.youtube !== undefined) patch.youtube = body.youtube;
     if (body.stockKr !== undefined) patch.stockKr = body.stockKr;
     if (body.stockUs !== undefined) patch.stockUs = body.stockUs;
+    if (body.stockPulse !== undefined) patch.stockPulse = body.stockPulse;
     const updated = saveSchedule(patch);
     rescheduleAll();
     res.json(updated);
@@ -196,7 +210,7 @@ api.put("/schedule", (req, res) => {
 
 // ── 수집·큐레이션 AI 모델 (Agent SDK) ──
 
-/** 현재 선택된 Agent SDK 모델 + 선택 가능 목록. */
+/** 현재 선택된 수집·큐레이션 에이전트 + 선택 가능 목록. */
 api.get("/model", (_req, res) => {
   res.json(getModelSettings());
 });
@@ -594,10 +608,18 @@ api.post("/youtube/refresh", (_req, res) => {
   res.status(202).json({ started: true, collecting: true });
 });
 
-/** 유튜브 수집 진행 상태(프론트 폴링용). */
+/**
+ * 유튜브 수집 진행 상태(프론트 폴링용).
+ * lastAttempt 는 '갱신을 눌러도 화면이 그대로'인 상황을 설명하기 위한 것 — 수집이 실패하면
+ * 기존 스냅샷을 유지하므로 updatedAt 만으로는 실패를 구분할 수 없다.
+ */
 api.get("/youtube/status", (_req, res) => {
   const snap = getYoutubeSnapshot();
-  res.json({ collecting: isYoutubeCollecting(), updatedAt: snap?.updatedAt ?? null });
+  res.json({
+    collecting: isYoutubeCollecting(),
+    updatedAt: snap?.updatedAt ?? null,
+    lastAttempt: getYoutubeLastAttempt(),
+  });
 });
 
 /**
@@ -880,6 +902,157 @@ api.get("/stock/search", async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: `종목 검색에 실패했습니다: ${(e as Error).message}` });
   }
+});
+
+// ── 보유 종목 (별도 탭) ────────────────────────────────
+//
+// ⚠️ 라우트 등록 순서: `/stock/holdings...` 는 `/stock/:market` 보다 **먼저** 와야 한다.
+//    Express 는 먼저 등록된 것을 쓰므로 뒤에 두면 "holdings" 가 :market 으로 잡혀
+//    "시장은 kr 또는 us" 400 이 난다. (파일 상단 /stock/search 와 같은 함정이다.)
+//    → 이 블록은 반드시 `api.get("/stock/:market")` 위쪽에 등록되어야 하는데, 현재 이 파일은
+//    선언 순서가 곧 등록 순서라 아래 registerHoldingRoutes() 를 상단에서 호출한다.
+
+/** 보유 종목 + 현재가·손익. 시세 조회를 하므로 다른 목록 API 보다 느리다(수백 ms~수 초). */
+api.get("/stock/holdings", async (req, res) => {
+  const market = req.query.market ? parseMarket(String(req.query.market)) : undefined;
+  if (req.query.market && !market)
+    return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  try {
+    res.json(await summarizeHoldings(market ?? undefined));
+  } catch (e) {
+    res.status(500).json({ error: `보유 종목 조회 실패: ${(e as Error).message}` });
+  }
+});
+
+/** 시세 없이 원장만(입력 폼 초기값·순서 변경용). 빠르다. */
+api.get("/stock/holdings/raw", (req, res) => {
+  const market = req.query.market ? parseMarket(String(req.query.market)) : undefined;
+  if (req.query.market && !market)
+    return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  res.json(listHoldings(market ?? undefined));
+});
+
+/**
+ * 보유 종목 추가. body: { market, query, quantity, avgPrice, targetPrice?, stopPrice?, horizon?, memo? }
+ *
+ * 등록 종목(stocks)에도 자동으로 들어간다(holdings.ts mirrorToTickers) — 인터뷰에서 확정한
+ * 정책이다. 그래서 이 API 하나로 "보유 등록 + 일일 브리핑 대상 편입"이 함께 끝난다.
+ */
+api.post("/stock/holdings", async (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const market = parseMarket(String(b.market ?? ""));
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  try {
+    const holding = await createHolding({
+      market,
+      query: String(b.query ?? ""),
+      quantity: Number(b.quantity),
+      avgPrice: Number(b.avgPrice),
+      targetPrice: b.targetPrice as number | null | undefined,
+      stopPrice: b.stopPrice as number | null | undefined,
+      horizon: b.horizon as never,
+      memo: typeof b.memo === "string" ? b.memo : undefined,
+    });
+    res.status(201).json(holding);
+  } catch (e) {
+    const msg = (e as Error).message;
+    // 중복 등록은 409, 나머지 입력 오류는 400. 사용자 입력 문제라 500 이 아니다.
+    res.status(/이미 보유/.test(msg) ? 409 : 400).json({ error: msg });
+  }
+});
+
+/** 보유 종목 수정. market/symbol 은 못 바꾼다(= 다른 종목이라는 뜻). */
+api.patch("/stock/holdings/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (!getHolding(id)) return res.status(404).json({ error: "보유 종목 없음" });
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const patch: Parameters<typeof updateHolding>[1] = {};
+  // `undefined`(미지정)와 `null`(해제)의 구분을 여기서 잃으면 목표가를 지울 수 없게 된다.
+  if (b.quantity !== undefined) patch.quantity = Number(b.quantity);
+  if (b.avgPrice !== undefined) patch.avgPrice = Number(b.avgPrice);
+  if (b.targetPrice !== undefined) patch.targetPrice = b.targetPrice as number | null;
+  if (b.stopPrice !== undefined) patch.stopPrice = b.stopPrice as number | null;
+  if (b.horizon !== undefined) patch.horizon = b.horizon as never;
+  if (b.memo !== undefined) patch.memo = String(b.memo);
+  try {
+    res.json(updateHolding(id, patch));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * 보유 종목 삭제(soft). confirm 에 정확한 심볼이 필요하다 — 종목 삭제와 같은 규칙이다.
+ * 등록 종목(stocks)은 **그대로 둔다**: 다 팔았어도 계속 지켜보고 싶을 수 있고,
+ * 여기서 함께 지우면 그 종목의 시계열이 끊긴다.
+ */
+api.delete("/stock/holdings/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const h = getHolding(id);
+  if (!h) return res.status(404).json({ error: "보유 종목 없음" });
+  if (req.query.confirm !== h.symbol) {
+    return res
+      .status(400)
+      .json({ error: "삭제는 confirm 파라미터에 정확한 종목 심볼이 필요합니다." });
+  }
+  deleteHolding(id);
+  res.json({ ok: true, keptTicker: true });
+});
+
+/** 표시 순서 변경. body: { market, ids } */
+api.put("/stock/holdings/order", (req, res) => {
+  const b = (req.body ?? {}) as { market?: unknown; ids?: unknown };
+  const market = parseMarket(String(b.market ?? ""));
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  try {
+    res.json(reorderHoldings(market, (b.ids as number[]) ?? []));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+// ── 펄스(시간당 실시간 취합) ──────────────────────────
+
+/**
+ * 펄스 상태 — 마지막 실행 결과 + 최근 24시간 판정 목록.
+ *
+ * 화면에 피드를 만들지 않기로 했지만(인터뷰 결정) **상태 확인 창구는 필요하다.**
+ * 이게 없으면 "펄스가 도는지, 왜 문자가 안 오는지"를 로그 파일로만 알 수 있다.
+ */
+api.get("/stock/pulse/status", (_req, res) => {
+  res.json({
+    running: isPulseRunning(),
+    lastRun: getLastPulseRun(),
+    notifyEnabled: isPulseNotifyEnabled(),
+    schedule: getSchedule().stockPulse,
+    recent: allRecentPulseAlerts(24).map((r) => ({
+      id: r.id,
+      at: r.createdAt,
+      slot: r.slot,
+      status: r.status,
+      severity: r.impact.severity,
+      direction: r.impact.direction,
+      symbol: r.impact.symbol,
+      name: r.impact.name,
+      headline: r.impact.headline,
+    })),
+  });
+});
+
+/**
+ * 펄스 지금 실행. 백오프를 무시한다(사용자가 직접 누른 것이므로).
+ * 실행이 수 분 걸리므로 202 로 먼저 응답하고 백그라운드에서 돌린다(증시 수동 갱신과 같은 패턴).
+ */
+api.post("/stock/pulse/run", (req, res) => {
+  if (isPulseRunning()) {
+    return res.status(409).json({ error: "펄스가 이미 실행 중입니다.", running: true });
+  }
+  const notify = req.body?.notify !== false;
+  const slot = new Date().toTimeString().slice(0, 5);
+  void runPulse({ slot, trigger: "manual", notify, force: true }).catch((e) =>
+    log.warn(`펄스 수동 실행 예외: ${(e as Error).message}`)
+  );
+  res.status(202).json({ started: true });
 });
 
 /**

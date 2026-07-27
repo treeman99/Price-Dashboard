@@ -15,9 +15,12 @@ import type {
   StockIndex,
   StockNewsItem,
   StockAnalysis,
+  StockPositionReview,
 } from "@shared/types";
+import { formatPnlPct, horizonLabel } from "@shared/holdings";
 import {
   marketLabel,
+  formatPrice,
   changeTone,
   effectiveRole,
   isPreviewUpcoming,
@@ -163,6 +166,63 @@ function SectionTitle({
         )}
       </h2>
     </div>
+  );
+}
+
+/**
+ * 내 포지션 점검 카드.
+ *
+ * `pulseSummary` 가 이 카드에서 가장 중요한 블록이다 — 시간당 취합은 화면에 피드를 남기지
+ * 않으므로(인터뷰 결정), 문자 문턱을 넘지 못한 판정이 사용자에게 도달하는 **유일한 경로**다.
+ */
+function PositionCard({ p }: { p: StockPositionReview }) {
+  const tone = changeTone(p.pnlPct);
+  const toneCls =
+    tone === "up" ? "text-red-600" : tone === "down" ? "text-blue-600" : "text-muted-foreground";
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex items-baseline gap-2">
+          <span className="font-semibold">{p.name}</span>
+          <span className="text-xs text-muted-foreground">
+            {p.symbol} · {horizonLabel(p.horizon)}
+          </span>
+        </div>
+        <span className={cn("text-lg font-bold", toneCls)}>{formatPnlPct(p.pnlPct)}</span>
+      </div>
+
+      <div className="mt-2 text-[13px] text-muted-foreground">
+        현재가 <span className="font-medium text-foreground">{formatPrice(p.close, p.currency)}</span>
+        {" · "}평단 {formatPrice(p.avgPrice, p.currency)}
+        {" · "}
+        {p.quantity}주
+      </div>
+
+      {(p.targetPrice != null || p.stopPrice != null) && (
+        <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
+          {p.targetPrice != null && (
+            <span>
+              🎯 {formatPrice(p.targetPrice, p.currency)} ({formatPnlPct(p.toTargetPct)})
+            </span>
+          )}
+          {p.stopPrice != null && (
+            <span>
+              🛡 {formatPrice(p.stopPrice, p.currency)} ({formatPnlPct(p.toStopPct)})
+            </span>
+          )}
+        </div>
+      )}
+
+      {p.factors && <p className="mt-3 text-sm leading-relaxed">{p.factors}</p>}
+
+      {p.pulseSummary && (
+        <div className="mt-3 rounded-md bg-muted/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          <strong className="text-foreground">⏱ 지난 24시간 실시간 취합</strong>
+          <br />
+          {p.pulseSummary}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -440,6 +500,22 @@ export function StockBoard() {
         </div>
       ) : (
         <>
+          {/* 내 포지션 점검 — 브리핑 맨 앞. 보유 종목이 없으면 섹션 자체를 렌더하지 않는다
+              (비어 있는 섹션이 매일 뜨면 노이즈다 — 해외 참고 섹션과 같은 판단). */}
+          {!!snap?.positions?.length && (
+            <section className="mt-8">
+              <SectionTitle count={snap.positions.length}>💼 내 포지션 점검</SectionTitle>
+              <p className="mb-3 rounded-md bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
+                손익·거리 수치는 서버가 계산한 값이고 서술은 AI 영향도 판정입니다. 매매 권유가 아닙니다.
+              </p>
+              <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
+                {snap.positions.map((p) => (
+                  <PositionCard key={`${p.market}-${p.symbol}`} p={p} />
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* 지수 — 휴장일에도 최종 거래일 종가로 계속 보인다(서술만 비어 있다). */}
           {!!snap?.indices.length && (
             <section className="mt-8">

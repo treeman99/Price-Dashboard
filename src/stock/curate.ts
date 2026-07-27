@@ -1,8 +1,8 @@
 import { log } from "../util/log.ts";
-import { config } from "../config.ts";
-import { runAgentQueryText } from "../util/agent-query.ts";
-import { getAgentModel } from "../util/model-store.ts";
+import { runStockAgent, extractJson as extractAgentJson } from "./agent.ts";
 import { localDate } from "../util/date.ts";
+import { horizonLabel, formatPnlPct } from "../../shared/holdings.ts";
+import { formatPrice } from "../../shared/stock.ts";
 import type {
   StockMarket,
   StockSnapshot,
@@ -12,6 +12,8 @@ import type {
   StockIndex,
   StockPoint,
   StockSlotRole,
+  StockHoldingSummary,
+  StockPositionReview,
 } from "../../shared/types.ts";
 
 /**
@@ -82,6 +84,19 @@ export interface IndexQuoteRow {
   changePct: number | null;
 }
 
+/**
+ * 브리핑 프롬프트에 주입할 보유 종목 1건 + 지난 24시간 펄스 요약.
+ *
+ * `pulseNotes` 가 이 구조의 존재 이유다. 펄스는 화면도 이메일도 없어서(인터뷰 결정)
+ * 문자 문턱을 넘지 못한 판정은 원장에만 남는다. 그것들이 사용자에게 도달하는 **유일한
+ * 경로**가 일일 브리핑의 이 섹션이다 — 여기가 빠지면 매시간 태운 토큰의 대부분이 증발한다.
+ */
+export interface PositionPromptRow {
+  holding: StockHoldingSummary;
+  /** 지난 24시간 펄스 판정 헤드라인들(문턱 미달 포함). 없으면 빈 배열. */
+  pulseNotes: string[];
+}
+
 export interface StockPromptInput {
   market: StockMarket;
   /** 서버 로컬 수집일(KST) YYYY-MM-DD. */
@@ -100,6 +115,8 @@ export interface StockPromptInput {
   indices: IndexQuoteRow[];
   /** 원달러 환율. 없으면 null. */
   exchangeRate: { value: number; changePct: number | null } | null;
+  /** 이 시장의 보유 종목 + 24시간 펄스 요약. 없으면 포지션 섹션을 통째로 생략한다. */
+  positions?: PositionPromptRow[];
 }
 
 function fmtNum(v: number | null | undefined): string {
@@ -141,6 +158,41 @@ function quoteTable(rows: StockQuoteRow[]): string {
 function indexTable(rows: IndexQuoteRow[]): string {
   if (!rows.length) return "(지수 조회 실패 — indices 는 빈 배열로 출력하라.)";
   return rows.map((r) => `- ${r.name}: ${fmtNum(r.value)} (${fmtPct(r.changePct)})`).join("\n");
+}
+
+/**
+ * 보유 종목 섹션. **손익 숫자는 서버가 계산해 넣고 LLM 은 인용만** 한다
+ * (등록 종목 시세표와 같은 원칙 — 프롬프트 단계에서 막지 않으면 서술문 안의 숫자가 오염된다).
+ */
+function positionSection(rows: PositionPromptRow[]): string {
+  const body = rows
+    .map(({ holding: h, pulseNotes }) => {
+      const target = h.targetPrice != null ? formatPrice(h.targetPrice, h.currency) : "미설정";
+      const stop = h.stopPrice != null ? formatPrice(h.stopPrice, h.currency) : "미설정";
+      const memo = h.memo ? `\n  · 보유 이유(사용자 메모): ${h.memo}` : "";
+      const pulse = pulseNotes.length
+        ? `\n  · 지난 24시간 실시간 취합에서 잡힌 것:\n${pulseNotes.map((n) => `    - ${n}`).join("\n")}`
+        : "\n  · 지난 24시간 실시간 취합: 특이사항 없음";
+      return (
+        `- ${h.name} (${h.symbol}) · 투자기간 ${horizonLabel(h.horizon)}\n` +
+        `  · 현재가 ${formatPrice(h.close, h.currency)} · 평단 ${formatPrice(h.avgPrice, h.currency)} · ` +
+        `평가손익 ${formatPnlPct(h.pnlPct)}\n` +
+        `  · 목표가 ${target} · 손절가 ${stop}${memo}${pulse}`
+      );
+    })
+    .join("\n");
+
+  return `[내 보유 종목] (서버가 계산한 확정 손익. 이 숫자만 인용하라)
+${body}
+
+포지션 점검 작성 지침 — positions[] 에 **위 보유 종목 각각에 대해** 한 항목씩 쓴다:
+- symbol 은 위 목록과 **정확히 동일하게** 적는다(서버가 symbol 로 손익 숫자를 붙인다).
+- factors: 오늘 이 종목에 작용하는 요인을 관측된 사실로 정리한다. 위 '지난 24시간 실시간 취합'에
+  잡힌 것이 있으면 **반드시 반영**하라 — 그 내용은 사용자가 아직 문자로 받지 못한 것이 섞여 있어,
+  이 브리핑이 유일한 전달 경로다.
+- pulseSummary: 지난 24시간 취합 내용을 1~2문장으로 압축한다. 특이사항이 없으면 null.
+- ⛔ **매수·매도·비중조절·익절·손절 같은 행동 지시는 여기서도 금지다.** 목표가·손절가는 사용자가
+  이미 입력해 둔 값이므로 "현재가가 손절가 대비 -4.2%" 처럼 **거리를 사실로 서술**하는 것까지만 하라.`;
 }
 
 /** 한국장(개장 전 프리뷰) 조사 지침. */
@@ -350,6 +402,7 @@ ${quoteTable(input.quotes)}
 [확정 시세 — 지수]
 ${indexTable(input.indices)}
 ${fx}
+${input.positions?.length ? `\n${positionSection(input.positions)}\n` : ""}
 
 작성 지침:
 - indices[]: 위 지수 각각에 대해 comment(관측된 사실 요약) / outlook(전망 서술) / rationale(전망 사유)를 쓴다.
@@ -367,20 +420,24 @@ ${watchSymbolRule}
   · **추천이 아니라 "왜 거론되는지"의 사실 요약**임을 잊지 마라. rationale·risks 는 여기서도 필수다.
 
 출력 형식 — 조사를 마친 뒤 **아래 JSON 한 개만** 출력(다른 텍스트 없이):
-{"indices":[{"name":string,"comment":string,"outlook":string,"rationale":string}],
+{${
+    input.positions?.length
+      ? `"positions":[{"symbol":string,"factors":string,"pulseSummary":string|null}],
+`
+      : ""
+  }"indices":[{"name":string,"comment":string,"outlook":string,"rationale":string}],
 "news":[{"title":string,"source":string,"date":"YYYY-MM-DD","summary":string,"link":string|null,"bucket":string}],
 "analyses":[{"symbol":string,"name":string,"summary":string,"outlook":string,"rationale":string,"risks":string,"verdict":"📈|📉|➡️"}],
 "watchlist":[{"symbol":string,"name":string,"summary":string,"outlook":string,"rationale":string,"risks":string,"verdict":"📈|📉|➡️","attention":"🔥강|⚡중|💧약","levels":string|null}],
 "notes":string|null}`;
 }
 
-/** 응답 텍스트에서 첫 '{' ~ 마지막 '}' 를 잘라 JSON 파싱. (뉴스/유튜브 큐레이터와 동일 관례) */
-export function extractJson(text: string): unknown {
-  const s = text.indexOf("{");
-  const e = text.lastIndexOf("}");
-  if (s === -1 || e <= s) throw new Error("JSON 미발견");
-  return JSON.parse(text.slice(s, e + 1));
-}
+/**
+ * 응답 텍스트에서 첫 '{' ~ 마지막 '}' 를 잘라 JSON 파싱.
+ * 구현은 증시 에이전트(agent.ts)로 옮겼다 — 브리핑과 펄스가 같은 파서를 쓰게 하기 위함이다.
+ * 이 이름은 기존 호출부·테스트를 위해 재노출한다.
+ */
+export const extractJson = extractAgentJson;
 
 function normDate(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -513,12 +570,41 @@ export function normalizeIndexNarrative(r: unknown): IndexNarrative | null {
   };
 }
 
+/** 포지션 점검의 LLM 서술부. 숫자는 전부 서버 계산값이라 여기 없다. */
+export interface PositionNarrative {
+  symbol: string;
+  factors: string;
+  pulseSummary: string | null;
+}
+
+/**
+ * 포지션 서술 정규화.
+ *
+ * ⚠️ **factors 가 비어도 폐기하지 않는다.** 등록 종목 분석(normalizeAnalysisNarrative)과
+ * 정반대의 정책인데, 이유는 폐기의 결과가 다르기 때문이다. 분석 항목이 사라지면 '그 종목
+ * 얘기가 없다'로 끝나지만, **포지션 항목이 사라지면 내가 들고 있는 종목이 포트폴리오
+ * 점검에서 통째로 빠진다** — 손익도 안 보이고, 24시간 펄스 요약도 함께 사라진다.
+ * 손익 숫자는 서버가 이미 갖고 있으므로 서술이 비어도 실을 값이 있다.
+ */
+export function normalizePositionNarrative(r: unknown): PositionNarrative | null {
+  const o = r as Record<string, unknown> | null;
+  const symbol = str(o?.symbol, 20);
+  if (!symbol) return null; // 심볼이 없으면 어느 보유 종목인지 특정할 수 없다
+  const summary = str(o?.pulseSummary, 1000);
+  return {
+    symbol,
+    factors: str(o?.factors, 1500),
+    pulseSummary: summary || null,
+  };
+}
+
 /** LLM 서술을 시세와 합치기 전의 중간 결과. */
 export interface CuratedNarratives {
   indices: IndexNarrative[];
   news: StockNewsItem[];
   analyses: AnalysisNarrative[];
   watchlist: WatchNarrative[];
+  positions: PositionNarrative[];
   notes: string | null;
 }
 
@@ -547,6 +633,9 @@ export function normalizeCurated(
       .map(normalizeWatchNarrative)
       .filter((x): x is WatchNarrative => !!x)
       .filter((w) => !analysisSymbols.has(w.symbol.toUpperCase())),
+    positions: arr(p?.positions)
+      .map(normalizePositionNarrative)
+      .filter((x): x is PositionNarrative => !!x),
     notes: typeof p?.notes === "string" && p.notes.trim() ? p.notes.trim() : null,
   };
 }
@@ -704,6 +793,20 @@ function toSnapshot(
     levels: w.levels,
   }));
 
+  // 포지션은 **보유 원장이 기준**이다. LLM 이 낸 목록이 아니라 input.positions 를 훑으며
+  // 서술을 붙인다 — 반대로 하면 LLM 이 빠뜨린 보유 종목이 포트폴리오에서 조용히 사라진다.
+  const narrativeBySymbol = new Map(n.positions.map((p) => [p.symbol.toUpperCase(), p]));
+  const positions: StockPositionReview[] = (input.positions ?? []).map((row) => {
+    const d = narrativeBySymbol.get(row.holding.symbol.toUpperCase());
+    return {
+      ...row.holding,
+      factors: d?.factors ?? "",
+      // 서술이 없으면 원장에서 뽑아 온 헤드라인을 그대로 쓴다. LLM 이 요약을 빠뜨렸다고
+      // 24시간 취합 결과가 사라지면 안 된다(그게 유일한 회수 경로다).
+      pulseSummary: d?.pulseSummary ?? (row.pulseNotes.length ? row.pulseNotes.join(" / ") : null),
+    };
+  });
+
   return {
     market: input.market,
     date: input.today,
@@ -717,6 +820,7 @@ function toSnapshot(
     news: n.news,
     analyses,
     watchlist,
+    positions,
     disclaimer: STOCK_DISCLAIMER,
     notes: n.notes,
   };
@@ -749,28 +853,13 @@ export async function curateStock(input: CurateStockInput): Promise<StockSnapsho
     slot: input.slot,
   };
   try {
-    const finalText = await runAgentQueryText(
-      buildPrompt({ ...input, now: input.now || nowLabel() }),
-      {
-        // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
-        // allowedTools = 그 도구들을 무프롬프트 허용.
-        tools: ["WebSearch", "WebFetch"],
-        allowedTools: ["WebSearch", "WebFetch"],
-        permissionMode: "bypassPermissions",
-        settingSources: [],
-        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
-        maxTurns: 60,
-        systemPrompt:
-          "도구는 한 번에 하나씩만 호출한다(병렬 도구 호출 금지 — tool_use id 중복으로 API 400 이 난다). " +
-          "너는 한국어 증시 정보 정리 담당이다. 매수·매도·비중확대 등 투자 권유 표현을 절대 쓰지 않고, " +
-          "관측 가능한 사실(뉴스·공시·수급·거래대금·컨센서스 변화)과 그 출처만 정리한다. " +
-          "'오늘의 관심 종목'은 추천이 아니라 '시장에서 왜 거론되는지'의 사실 요약이다. " +
-          "주가·등락률·지수 값은 프롬프트의 [확정 시세] 표에 있는 숫자만 인용하고, " +
-          "추정·계산·기억으로 숫자를 만들지 않는다. 마지막에 지정된 JSON 한 개만 출력한다.",
-      },
-      config.agentQueryTimeoutMs,
-      `증시 큐레이션(${marketName})`
-    );
+    // 도구·시스템 프롬프트·모델·타임아웃은 전부 증시 전용 에이전트가 소유한다(agent.ts).
+    // 여기서는 **무엇을 조사할지**(프롬프트)만 정한다.
+    const finalText = await runStockAgent({
+      mode: "briefing",
+      prompt: buildPrompt({ ...input, now: input.now || nowLabel() }),
+      label: marketName,
+    });
     if (!finalText) {
       return emptySnapshot(
         input.market,

@@ -15,11 +15,13 @@ import {
   watchMarket,
   foreignSectionTitle,
 } from "../../shared/stock.ts";
+import { formatPnlPct, horizonLabel } from "../../shared/holdings.ts";
 import type {
   StockAnalysis,
   StockIndex,
   StockMarket,
   StockNewsItem,
+  StockPositionReview,
   StockSnapshot,
   StockWatchItem,
 } from "../../shared/types.ts";
@@ -313,6 +315,7 @@ export function buildStockEmailHtml(s: StockSnapshot, chartSymbols?: ReadonlySet
     : "";
 
   const body = `
+    ${positionSection(s)}
     <h2 style="color:#4361ee;margin-top:28px;border-bottom:2px solid #eee;padding-bottom:6px">🌍 24시간 뉴스 브리핑</h2>
     ${newsSection(s.news)}
 
@@ -332,6 +335,67 @@ ${foreignSection}
     ${s.notes ? `<p style="color:#888;font-size:12px;margin-top:12px">📝 ${escapeHtml(s.notes)}</p>` : ""}`;
 
   return shellHtml(s, body);
+}
+
+/**
+ * 내 포지션 점검 카드 1건.
+ *
+ * 목표가·손절가는 **거리(%)로만** 표시한다. 도달 알림은 인터뷰에서 트리거로 선택되지
+ * 않았으므로 여기서 "도달!" 같은 행동 신호를 만들면 사용자가 요청하지 않은 알림이 된다.
+ */
+function positionCard(p: StockPositionReview): string {
+  const tone = toneColor(p.pnlPct);
+  const dist = (label: string, price: number | null, pct: number | null): string =>
+    price == null
+      ? ""
+      : `<span style="color:#666;margin-right:10px">${label} ${escapeHtml(
+          formatPrice(price, p.currency)
+        )} <span style="color:#888">(${escapeHtml(formatPnlPct(pct))})</span></span>`;
+
+  return `
+  <div style="border:1px solid #e5e7eb;border-left:4px solid ${tone};border-radius:8px;padding:12px 14px;margin:10px 0;background:#fff">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <strong style="font-size:15px">${escapeHtml(p.name)} <span style="color:#888;font-weight:400;font-size:12px">${escapeHtml(
+        p.symbol
+      )} · ${escapeHtml(horizonLabel(p.horizon))}</span></strong>
+      <span style="color:${tone};font-weight:700;font-size:15px">${escapeHtml(formatPnlPct(p.pnlPct))}</span>
+    </div>
+    <div style="color:#444;font-size:13px;margin-top:6px">
+      현재가 <strong>${escapeHtml(formatPrice(p.close, p.currency))}</strong>
+      <span style="color:#888">· 평단 ${escapeHtml(formatPrice(p.avgPrice, p.currency))} · ${escapeHtml(
+        String(p.quantity)
+      )}주</span>
+      ${pctBadge(p.changePct)}
+    </div>
+    <div style="font-size:12px;margin-top:6px">
+      ${dist("🎯 목표", p.targetPrice, p.toTargetPct)}${dist("🛡 손절", p.stopPrice, p.toStopPct)}
+    </div>
+    ${
+      p.factors
+        ? `<div style="color:#333;font-size:13px;margin-top:8px;line-height:1.6">${escapeHtml(p.factors)}</div>`
+        : ""
+    }
+    ${
+      p.pulseSummary
+        ? `<div style="color:#555;font-size:12px;margin-top:8px;background:#f8f9fa;border-radius:6px;padding:8px 10px">
+             <strong style="color:#666">⏱ 지난 24시간 실시간 취합</strong><br>${escapeHtml(p.pulseSummary)}
+           </div>`
+        : ""
+    }
+  </div>`;
+}
+
+/**
+ * 포지션 점검 섹션. 보유 종목이 없으면 **섹션 자체를 렌더하지 않는다** —
+ * 해외 참고 섹션과 같은 판단이다(비어 있는 섹션이 매일 뜨면 그냥 노이즈다).
+ */
+function positionSection(s: StockSnapshot): string {
+  const positions = s.positions ?? [];
+  if (!positions.length) return "";
+  return `
+    <h2 style="color:#059669;margin-top:28px;border-bottom:2px solid #eee;padding-bottom:6px">💼 내 포지션 점검</h2>
+    ${positions.map(positionCard).join("")}
+    <p style="color:#8a6d3b;font-size:12px;background:#fff3cd;border-radius:6px;padding:8px 10px;margin-top:8px">손익·거리 수치는 서버가 계산한 값이며, 서술은 AI 영향도 판정입니다. 매매 권유가 아닙니다.</p>`;
 }
 
 /** 종목 1건의 20거래일 종가 차트 PNG. 실패는 호출부가 잡는다(그 종목만 차트 없이 렌더). */
@@ -360,6 +424,17 @@ export function stockIMessageText(s: StockSnapshot): string {
   if (s.closed) {
     lines.push(`😴 휴장${s.closedReason ? ` — ${s.closedReason}` : ""}`);
   } else {
+    // 내 포지션을 지수보다 **앞에** 둔다. 잠금화면에서 보이는 몇 줄 안에 들어가야 할 정보의
+    // 우선순위는 '내가 들고 있는 것' > '시장 전체'다. 500자 예산이라 최대 3종목만 싣는다.
+    const positions = s.positions ?? [];
+    if (positions.length) {
+      lines.push(
+        positions
+          .slice(0, 3)
+          .map((p) => `${p.name} ${formatPnlPct(p.pnlPct)}`)
+          .join(" · ") + (positions.length > 3 ? ` 외 ${positions.length - 3}` : "")
+      );
+    }
     const idx = (s.indices ?? [])
       .slice(0, 4)
       .map((i) => `${i.name} ${indexValue(i.value)} ${pctText(i.changePct)}`)

@@ -15,6 +15,25 @@ const SNAPSHOT_PATH = path.join(path.dirname(config.dbPath), "youtube-latest.jso
 let memo: YoutubeSnapshot | null = null;
 let running = false;
 
+/**
+ * 마지막 수집 **시도**의 결과. 수집이 실패해도 기존 스냅샷을 그대로 두는 설계라서(빈 화면 방지)
+ * 화면에는 옛 데이터가 남고, 사용자 눈에는 "갱신을 눌러도 아무 일도 안 일어난다"로만 보인다.
+ * 실제로 그런 상태가 반나절 넘게 방치된 사례가 있어(큐레이션 타임아웃 반복), 시도 시각과 실패
+ * 사유를 남겨 status API 가 화면에 알릴 수 있게 한다. 스냅샷과 달리 프로세스 재시작 시 초기화된다.
+ */
+export interface YoutubeAttempt {
+  at: string;
+  ok: boolean;
+  trigger: string;
+  error: string | null;
+}
+let lastAttempt: YoutubeAttempt | null = null;
+
+/** 마지막 수집 시도 결과(없으면 null — 기동 후 아직 시도 없음). */
+export function getYoutubeLastAttempt(): YoutubeAttempt | null {
+  return lastAttempt;
+}
+
 function loadFromDisk(): YoutubeSnapshot | null {
   try {
     if (fs.existsSync(SNAPSHOT_PATH)) {
@@ -63,6 +82,7 @@ export async function refreshYoutube(
     return getYoutubeSnapshot() ?? emptySnapshot();
   }
   running = true;
+  const startedAt = new Date().toISOString();
   try {
     const date = localDate();
     const prev = getYoutubeSnapshot();
@@ -71,6 +91,12 @@ export async function refreshYoutube(
     // 수집 실패/시간초과(source=empty)면 기존 정상 스냅샷을 빈 데이터로 덮어쓰지 않는다.
     if (snapshot.source === "empty" && prev && prev.source === "llm") {
       log.warn(`유튜브 수집 실패 → 기존 스냅샷 유지 (${snapshot.notes ?? "원인 미상"})`);
+      lastAttempt = {
+        at: startedAt,
+        ok: false,
+        trigger: opts.trigger,
+        error: snapshot.notes ?? "원인 미상",
+      };
       return prev;
     }
 
@@ -88,7 +114,15 @@ export async function refreshYoutube(
       log.info("유튜브 0건 → 이메일 발송 생략");
     }
     log.info(`유튜브 수집 완료 [${opts.trigger}] ${date} (총 ${total}건, source=${snapshot.source})`);
+    // 여기까지 왔어도 source=empty 면(이전 스냅샷이 없어 빈 결과를 그대로 저장한 경우) 실패다.
+    lastAttempt =
+      snapshot.source === "empty"
+        ? { at: startedAt, ok: false, trigger: opts.trigger, error: snapshot.notes ?? "원인 미상" }
+        : { at: startedAt, ok: true, trigger: opts.trigger, error: null };
     return snapshot;
+  } catch (e) {
+    lastAttempt = { at: startedAt, ok: false, trigger: opts.trigger, error: (e as Error).message };
+    throw e;
   } finally {
     running = false;
   }

@@ -4,7 +4,14 @@ import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
 import { ensureSeedTickers, listStocks } from "./tickers.ts";
-import { upsertStockPoints, startStockRun, finishStockRun } from "../db/repo.ts";
+import {
+  upsertStockPoints,
+  startStockRun,
+  finishStockRun,
+  listHoldings,
+  allRecentPulseAlerts,
+} from "../db/repo.ts";
+import { summarizeHolding } from "../../shared/holdings.ts";
 import {
   loadNotifiedMap,
   slotNotified,
@@ -26,6 +33,7 @@ import {
   holidaySnapshot,
   type StockQuoteRow,
   type IndexQuoteRow,
+  type PositionPromptRow,
 } from "./curate.ts";
 import { sendStockEmail, sendStockIMessage } from "../notify/stock-email.ts";
 import { stockSlotRoleDetail } from "./slot-role.ts";
@@ -541,6 +549,81 @@ async function verifyWatchlist(
   return { items: kept, lookupFailures };
 }
 
+/** 포지션 점검에 실을 '지난 24시간' 창. 브리핑이 하루 1~2회라 24시간이면 빈틈이 없다. */
+const PULSE_LOOKBACK_HOURS = 24;
+
+/**
+ * 심볼 → 지난 24시간 펄스 헤드라인. **문턱 미달('below')·상한 절삭('capped') 건도 포함**한다.
+ *
+ * 그게 이 함수의 존재 이유다. 펄스는 화면도 이메일도 없어서(인터뷰 결정) 문자로 나가지 못한
+ * 판정은 원장에만 남는다. 여기서 걷어 브리핑에 실어야 사용자에게 도달한다 — 발송된 것만
+ * 모으면 이 경로는 '이미 문자로 본 것을 한 번 더 보여주는' 무의미한 섹션이 된다.
+ */
+function pulseNotesBySymbol(): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  try {
+    for (const r of allRecentPulseAlerts(PULSE_LOOKBACK_HOURS)) {
+      const sym = r.impact.symbol;
+      if (!sym) continue; // 거시·섹터 건은 특정 포지션에 귀속시키지 않는다
+      const key = sym.toUpperCase();
+      const at = r.createdAt.slice(11, 16);
+      const line = `[${at}] ${r.impact.headline}${r.status === "sent" ? " (문자 발송됨)" : ""}`;
+      const list = map.get(key) ?? [];
+      // 종목당 상한. 하루 16회 × 판정이라 무제한이면 프롬프트가 이 섹션으로만 채워진다.
+      if (list.length < 8) list.push(line);
+      map.set(key, list);
+    }
+  } catch (e) {
+    log.warn(`펄스 원장 조회 실패 (포지션 섹션은 취합 요약 없이 진행): ${(e as Error).message}`);
+  }
+  return map;
+}
+
+/**
+ * 이 시장의 보유 종목 + 확정 손익 + 24시간 펄스 요약.
+ *
+ * 시세는 **gather() 가 이미 가져온 값을 재사용**한다. 보유 종목은 등록 시 자동으로 등록
+ * 종목(stocks)에 들어가므로(holdings.ts mirrorToTickers) 대부분 g.quotes 안에 이미 있다.
+ * 여기서 다시 조회하면 같은 종목을 브리핑 1회당 두 번 치게 되고, 네이버에 대한 매너
+ * (stockFetchDelayMs)를 지키는 의미가 없어진다.
+ *
+ * 자동 등록이 실패했던 종목은 g.quotes 에 없어 close=null 로 실린다 — 감추지 않는다
+ * (summarizeHolding 주석: 보유 사실은 시세와 무관하게 유효하다).
+ */
+function buildPositionRows(market: StockMarket, g: Gathered): PositionPromptRow[] {
+  const holdings = listHoldings(market);
+  if (!holdings.length) return [];
+  const quoteBySymbol = new Map(g.quotes.map((q) => [q.symbol.toUpperCase(), q]));
+  const notes = pulseNotesBySymbol();
+  let missing = 0;
+
+  const rows = holdings.map((h) => {
+    const key = h.symbol.toUpperCase();
+    const q = quoteBySymbol.get(key);
+    if (!q) missing++;
+    return {
+      holding: summarizeHolding(
+        h,
+        {
+          close: q?.close ?? null,
+          changePct: q?.changePct ?? null,
+          currency: q?.currency ?? (h.market === "kr" ? "KRW" : "USD"),
+        },
+        g.histories.get(key) ?? []
+      ),
+      pulseNotes: notes.get(key) ?? [],
+    };
+  });
+
+  if (missing) {
+    log.warn(
+      `포지션 점검 [${market}]: 보유 ${holdings.length}건 중 ${missing}건이 등록 종목 시세에 없음 ` +
+        `(등록 종목 자동 추가 실패 가능성 — 시세 없이 실림)`
+    );
+  }
+  return rows;
+}
+
 export interface RefreshStockOptions {
   market: StockMarket;
   trigger: string;
@@ -667,6 +750,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
       exchangeRate: g.exchangeRate,
       histories: g.histories,
       indexHistories: g.indexHistories,
+      positions: buildPositionRows(market, g),
     });
 
     // ── 4. 검증: watchlist 시세 사후 조회 ──
@@ -717,8 +801,14 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     const ok = snapshot.source === "llm" && !quoteOutage;
     const notifiedMap = loadNotifiedMap(today, market);
     let { email: emailed, imessage: imessaged } = slotNotified(notifiedMap, slot);
+    // 포지션 점검도 '내용'으로 친다. 보유 종목만 등록하고 등록 종목·뉴스가 비는 구성에서
+    // 이걸 빼면 매일 '내용 0건'으로 판정돼 브리핑이 영영 발송되지 않는다.
     const hasContent =
-      snapshot.indices.length + snapshot.news.length + snapshot.analyses.length > 0;
+      snapshot.indices.length +
+        snapshot.news.length +
+        snapshot.analyses.length +
+        (snapshot.positions?.length ?? 0) >
+      0;
     // 첫 슬롯 이전의 수동 갱신(MANUAL_SLOT)은 메울 슬롯이 없으므로 발송하지 않는다.
     // 보내면 곧 오는 첫 정시 슬롯이 같은 브리핑을 한 번 더 보낸다(07:30 수동 → 08:00 정시).
     // 수동 갱신은 '지난 슬롯의 누락을 보충'할 뿐 새 알림을 만들지 않는다(notify-ledger 참고).
