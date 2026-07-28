@@ -125,7 +125,13 @@ export async function fetchNaverPrice(
   for (const it of items) {
     const price = Number(it.lprice);
     if (!Number.isFinite(price) || price <= 0) continue;
-    if (!isValidCandidate({ title: it.title, price, mallName: it.mallName }, product)) continue;
+    if (
+      !isValidCandidate(
+        { title: it.title, price, mallName: it.mallName, link: it.link },
+        product
+      )
+    )
+      continue;
     const key = it.productId || it.link;
     if (seen.has(key)) continue;
     seen.add(key);

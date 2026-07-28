@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS price_points (
   product_id     INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   date           TEXT NOT NULL,            -- YYYY-MM-DD
   naver_lowest   INTEGER,
-  coupang_lowest INTEGER,
   danawa_lowest  INTEGER,
   avg_price      INTEGER,
   overall_lowest INTEGER,

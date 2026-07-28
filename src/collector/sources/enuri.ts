@@ -2,14 +2,10 @@
 //
 // 실측 결과(스파이크):
 // - robots 친화적: Allow:/, Crawl-delay 1s, ClaudeBot 허용, ajax 디스얼로우 없음. /detail.jsp 허용.
-// - ⚠️ 에누리는 **쿠팡 개별가/로켓을 깔끔히 노출하지 않는다.** SSR HTML에 "쿠팡" 0회,
-//   쿠팡 토큰은 기획전(coupangexh.jsp)·광고(ad_coupang)뿐 — 다나와 cmpnyc=TP40F 같은
-//   판매처 가격 행이 없다. 따라서 enuri 에서 쿠팡 개별가는 추출 불가 → coupang=null 고정.
-// - 단, **전체 최저가는 매우 안정적으로 노출**: JSON-LD schema.org Product "lowPrice"(1차),
+// - **전체 최저가는 매우 안정적으로 노출**: JSON-LD schema.org Product "lowPrice"(1차),
 //   og:description "최저가 N원"(2차). 상품명은 og:title.
 //
 // 역할: 다나와(1차)가 차단/실패했을 때 **전체 최저가 시계열을 유지**하는 폴백.
-//   쿠팡 개별가가 필요하면 폴백 체인이 llm-websearch 로 이어진다.
 
 import { log } from "../../util/log.ts";
 import {
@@ -34,7 +30,7 @@ function parsePriceNum(s: string): number | null {
 
 export interface EnuriDetail {
   productName: string | null;
-  /** 전체 최저가(원). 쿠팡 개별가가 아니라 에누리 집계 최저가. */
+  /** 전체 최저가(원). 에누리 집계 최저가. */
   overallLowest: number | null;
 }
 
@@ -72,7 +68,7 @@ export function parseEnuriCandidates(html: string): Array<{ refId: string; url: 
   return out;
 }
 
-/** 에누리 PriceSource 인스턴스 생성. 전체최저가 폴백(쿠팡 개별가는 미노출 → null). */
+/** 에누리 PriceSource 인스턴스 생성. 전체최저가 폴백. */
 export function createEnuriSource(deps: EnuriDeps = {}): PriceSource {
   const fetcher = deps.fetcher ?? realFetcher;
   const now = deps.now ?? (() => new Date().toISOString());
@@ -83,7 +79,6 @@ export function createEnuriSource(deps: EnuriDeps = {}): PriceSource {
     fetchedAt: now(),
     productName: null,
     modelName: null,
-    coupang: null,
     overallLowest: null,
     ...extra,
   });
@@ -126,7 +121,6 @@ export function createEnuriSource(deps: EnuriDeps = {}): PriceSource {
             raw: { note: "에누리 최저가 추출 실패" },
           });
         }
-        // 에누리는 쿠팡 개별가/로켓 미노출 → coupang 은 null. 전체최저가만 채운다.
         return base("ok", {
           productName: d.productName,
           overallLowest: { price: d.overallLowest, mall: "에누리최저가", url: ref.url },

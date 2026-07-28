@@ -6,7 +6,6 @@ import { log } from "../util/log.ts";
 import type { Product, Review } from "../../shared/types.ts";
 
 export interface ResearchResult {
-  coupangLowest: number | null;
   danawaLowest: number | null;
   overallLowest: number | null;
   lowestSource: string;
@@ -15,7 +14,6 @@ export interface ResearchResult {
 }
 
 const EMPTY: ResearchResult = {
-  coupangLowest: null,
   danawaLowest: null,
   overallLowest: null,
   lowestSource: "",
@@ -34,14 +32,13 @@ function buildPrompt(product: Product): string {
 다음 검색을 수행하라:
 1. "다나와 ${product.name} 최저가"
 2. "에누리 ${product.name} 최저가"
-3. "${product.name} 쿠팡 가격"
 
 추출 대상:
-- 쿠팡 최저가(원), 다나와 최저가(원), 전체 최저가(원)와 그 판매처, 가격비교 페이지 링크
+- 다나와 최저가(원), 전체 최저가(원)와 그 판매처, 가격비교 페이지 링크
 - 최신 리뷰 3~5개: 출처, 날짜(YYYY-MM-DD 가능하면), 2~3줄 요약, 평점(0~5, 없으면 null), 원문 링크. 최근 3개월·실사용 후기 우선.
 
 반드시 아래 JSON 형식으로만, 다른 텍스트 없이 응답하라(가격은 숫자, 없으면 null):
-{"coupangLowest": number|null, "danawaLowest": number|null, "overallLowest": number|null, "lowestSource": string, "comparisonLink": string|null, "reviews": [{"source": string, "date": string|null, "summary": string, "rating": number|null, "link": string|null}]}`;
+{"danawaLowest": number|null, "overallLowest": number|null, "lowestSource": string, "comparisonLink": string|null, "reviews": [{"source": string, "date": string|null, "summary": string, "rating": number|null, "link": string|null}]}`;
 }
 
 function extractJson(text: string): unknown {
@@ -61,7 +58,7 @@ function sanitizePrice(v: unknown, minPrice: number): number | null {
 /**
  * 선택된 에이전트의 웹리서치. Claude를 골랐는데 ANTHROPIC_API_KEY가 없거나,
  * 에이전트 실행이 실패하면 EMPTY 반환(네이버 결과만으로 진행).
- * 결정적 작업(네이버/필터/저장)은 호출하지 않으며, 오직 비교가/쿠팡/리뷰 리서치만 담당.
+ * 결정적 작업(네이버/필터/저장)은 호출하지 않으며, 오직 비교가/리뷰 리서치만 담당.
  */
 export async function researchProduct(product: Product): Promise<ResearchResult> {
   const model = getAgentModel();
@@ -101,7 +98,6 @@ export async function researchProduct(product: Product): Promise<ResearchResult>
     });
 
     const result: ResearchResult = {
-      coupangLowest: sanitizePrice(parsed.coupangLowest, product.minPrice),
       danawaLowest: sanitizePrice(parsed.danawaLowest, product.minPrice),
       overallLowest: sanitizePrice(parsed.overallLowest, product.minPrice),
       lowestSource: String(parsed.lowestSource ?? ""),
@@ -109,7 +105,7 @@ export async function researchProduct(product: Product): Promise<ResearchResult>
       reviews,
     };
     log.info(
-      `리서치 [${product.name}] 쿠팡=${result.coupangLowest ?? "-"} 다나와=${result.danawaLowest ?? "-"} 리뷰 ${reviews.length}개`
+      `리서치 [${product.name}] 다나와=${result.danawaLowest ?? "-"} 전체최저가=${result.overallLowest ?? "-"} 리뷰 ${reviews.length}개`
     );
     return result;
   } catch (e) {

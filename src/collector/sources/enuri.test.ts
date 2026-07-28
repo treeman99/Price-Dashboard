@@ -6,7 +6,6 @@ import type { SourceRef } from "./types.ts";
 
 // ── 실제 라이브 에누리 상세 앵커(2026-06 실측, modelno 142943178) ──
 // 전체 최저가는 JSON-LD "lowPrice"(1차) / og:description "최저가 N원"(2차)에 노출.
-// 쿠팡 개별가는 노출되지 않는다(광고/기획전만) → coupang=null.
 const DETAIL_LD = `<!doctype html><html><head>
 <meta property="og:title" content="로보락 S10 MaxV Ultra [화이트] - 에누리 가격비교">
 <meta property="og:description" content="최저가 1,689,990원">
@@ -74,11 +73,10 @@ test("parseEnuriCandidates: modelno 후보 추출(중복 제거)", () => {
 
 // ── fetch (주입 Fetcher) ──────────────────────────────
 
-test("fetch: 상세 성공 → status ok + 전체최저가, 쿠팡은 항상 null(에누리 미노출)", async () => {
+test("fetch: 상세 성공 → status ok + 전체최저가", async () => {
   const src = createEnuriSource({ fetcher: fakeFetcher(resp(DETAIL_LD)), now: () => "T" });
   const r = await src.fetch(REF);
   assert.equal(r.status, "ok");
-  assert.equal(r.coupang, null, "에누리는 쿠팡 개별가 미노출 → 반드시 null");
   assert.deepEqual(r.overallLowest, {
     price: 1689990,
     mall: "에누리최저가",

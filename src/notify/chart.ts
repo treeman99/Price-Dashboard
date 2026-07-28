@@ -6,7 +6,8 @@ const H = 200;
 const PAD = { top: 28, right: 14, bottom: 26, left: 56 };
 
 const NAVER = "#4A90D9";
-const COUPANG = "#E8833A";
+/** 종합 최저가 선(구 쿠팡 선 자리). 대시보드 recharts 와 같은 색을 쓴다. */
+const OVERALL = "#E8833A";
 
 /** 기본 y축 라벨. 가격 탭은 원 단위라 "만" 으로 축약해야 눈금이 읽힌다. */
 function manLabel(v: number): string {
@@ -167,15 +168,16 @@ export function renderLineChartPng(opts: {
 }
 
 /**
- * 이메일용 가격 추이 라인 차트 PNG (네이버=파랑, 쿠팡=주황).
+ * 이메일용 가격 추이 라인 차트 PNG (네이버=파랑, 종합 최저가=주황).
  * recharts 대시보드와 동일한 색/구성.
+ * (쿠팡 선은 2026-07-28 쿠팡 수집 제거와 함께 종합 최저가 선으로 대체됐다.)
  */
 export function renderPriceChartPng(points: PricePoint[], title: string): Buffer {
   return renderLineChartPng({
     labels: points.map((p) => p.date.slice(5)),
     series: [
       { label: "네이버", color: NAVER, values: points.map((p) => p.naverLowest) },
-      { label: "쿠팡", color: COUPANG, values: points.map((p) => p.coupangLowest) },
+      { label: "종합 최저가", color: OVERALL, values: points.map((p) => p.overallLowest) },
     ],
     title,
   });

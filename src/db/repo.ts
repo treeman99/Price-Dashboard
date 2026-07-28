@@ -58,13 +58,11 @@ function rowToProduct(r: ProductRow): Product {
 interface PointRow {
   date: string;
   naver_lowest: number | null;
-  coupang_lowest: number | null;
   danawa_lowest: number | null;
   avg_price: number | null;
   overall_lowest: number | null;
   lowest_source: string;
   // 신규 컬럼 (ALTER 로 추가, 기존 행은 null)
-  coupang_is_rocket?: number | null;
   lowest_mall?: string | null;
   source?: string | null;
 }
@@ -73,13 +71,10 @@ function rowToPoint(r: PointRow): PricePoint {
   return {
     date: r.date,
     naverLowest: r.naver_lowest,
-    coupangLowest: r.coupang_lowest,
     danawaLowest: r.danawa_lowest,
     avgPrice: r.avg_price,
     overallLowest: r.overall_lowest,
     lowestSource: r.lowest_source ?? "",
-    coupangIsRocket:
-      r.coupang_is_rocket == null ? null : r.coupang_is_rocket === 1,
     lowestMall: r.lowest_mall ?? null,
     source: r.source ?? null,
   };
@@ -235,17 +230,15 @@ export function upsertPricePoint(
   db()
     .prepare(
       `INSERT INTO price_points
-         (product_id, date, naver_lowest, coupang_lowest, danawa_lowest, avg_price, overall_lowest, lowest_source, collected_at, coupang_is_rocket, lowest_mall, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (product_id, date, naver_lowest, danawa_lowest, avg_price, overall_lowest, lowest_source, collected_at, lowest_mall, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(product_id, date) DO UPDATE SET
          naver_lowest=excluded.naver_lowest,
-         coupang_lowest=excluded.coupang_lowest,
          danawa_lowest=excluded.danawa_lowest,
          avg_price=excluded.avg_price,
          overall_lowest=excluded.overall_lowest,
          lowest_source=excluded.lowest_source,
          collected_at=excluded.collected_at,
-         coupang_is_rocket=excluded.coupang_is_rocket,
          lowest_mall=excluded.lowest_mall,
          source=excluded.source`
     )
@@ -253,13 +246,11 @@ export function upsertPricePoint(
       productId,
       p.date,
       p.naverLowest,
-      p.coupangLowest,
       p.danawaLowest,
       p.avgPrice,
       p.overallLowest,
       p.lowestSource ?? "",
       collectedAt,
-      p.coupangIsRocket == null ? null : p.coupangIsRocket ? 1 : 0,
       p.lowestMall ?? null,
       p.source ?? null
     );

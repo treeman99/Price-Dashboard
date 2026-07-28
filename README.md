@@ -40,7 +40,7 @@
 > 상세 사양: `docs/stock-agent-v2.md`
 
 ## 구성
-- **collector/** 네이버 쇼핑 API(결정적) + 선택형 AI 에이전트 웹리서치(비교가/쿠팡/리뷰) + 필터링 + 멱등 저장
+- **collector/** 네이버 쇼핑 API(결정적) + 가격비교 소스 폴백(다나와 → 에누리 → AI 웹리서치) + 필터링 + 멱등 저장
 - **importer/** 기존 `price_history.json` → SQLite 1회 멱등 임포트
 - **scheduler/** in-process 정시 수집 + 잠자기/재시작 누락 catch-up
 - **api/** 상품 CRUD · 히스토리/기간필터 · "지금 수집" · 프론트 정적 서빙
@@ -193,7 +193,7 @@ curl -X POST localhost:7777/api/collect   # 지금 수집 (API) — 대시보드
 |---|---|
 | 기동 시 `NAVER_CLIENT_ID ... 없습니다` 오류 | `.env`에 네이버 키 미입력 → 키 입력 후 재시작 |
 | 대시보드에 "프론트가 아직 빌드되지 않았습니다" | `npm run web:build` 실행 후 새로고침 |
-| Opus 선택 시 카드에 비교가/쿠팡/리뷰가 안 보임 | `ANTHROPIC_API_KEY` 미설정 → 네이버 결과만 표시. 키를 넣거나 Codex를 선택 |
+| Opus 선택 시 카드에 비교가/리뷰가 안 보임 | `ANTHROPIC_API_KEY` 미설정 → 네이버 결과만 표시. 키를 넣거나 Codex를 선택 |
 | Codex 수집이 로그인 오류로 실패 | `codex login` 실행 후 `codex login status`가 `Logged in using ChatGPT`인지 확인. API 키 로그인은 의도적으로 거부 |
 | 고르지 않았는데 모델이 `Opus 5`로 바뀌어 있음 | Codex 정액제 한도 소진으로 자동 전환된 상태. 모델 버튼의 "자동 전환" 배지에 사유·시각이 있다. 일요일 21:00 자동 복귀를 기다리거나 직접 다시 고르면 된다 |
 | 특정 상품 후보 0개(최저가 "-") | 모델 매칭이 엄격하거나 시장 매물 없음 → 상품의 포함/제외/최소가 조정 |

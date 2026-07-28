@@ -55,7 +55,6 @@ function normalize(
     ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length)
     : null;
 
-  const coupang = chosen?.coupang ?? null;
   const chosenOverall = chosen?.overallLowest ?? null;
   const llmRaw =
     chosen?.source === "llm-websearch" ? (chosen.raw as ResearchResult | undefined) : undefined;
@@ -68,11 +67,10 @@ function normalize(
         ? llmRaw.danawaLowest ?? null
         : null;
 
-  // 종합 최저가 = 네이버 백본 + 채택 소스(쿠팡/전체최저가) 중 최저
+  // 종합 최저가 = 네이버 백본 + 채택 소스(전체최저가) 중 최저
   const cands: Array<{ label: string; mall: string; value: number }> = [];
   if (naver.naverLowest != null)
     cands.push({ label: "네이버", mall: "네이버", value: naver.naverLowest });
-  if (coupang) cands.push({ label: "쿠팡", mall: "쿠팡", value: coupang.price });
   if (chosenOverall)
     cands.push({
       label: chosenOverall.mall || "가격비교",
@@ -95,12 +93,10 @@ function normalize(
     point: {
       date,
       naverLowest: naver.naverLowest,
-      coupangLowest: coupang?.price ?? null,
       danawaLowest,
       avgPrice,
       overallLowest,
       lowestSource,
-      coupangIsRocket: coupang ? coupang.isRocket : null,
       lowestMall,
       source: chosen?.source ?? null,
     },

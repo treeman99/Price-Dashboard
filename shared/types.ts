@@ -22,18 +22,21 @@ export interface Product {
   createdAt: string;
 }
 
-/** 하루치 가격 스냅샷 */
+/**
+ * 하루치 가격 스냅샷.
+ *
+ * ⚠️ 쿠팡 필드(coupangLowest/coupangIsRocket)는 2026-07-28 제거했다. 쿠팡 개별가는 다나와의
+ * robots 금지 경로(`/info/ajax/`)에서만 나왔고, 그 호출을 없애면서 값 자체가 사라진다.
+ * DB 컬럼도 같이 드롭했다(src/db/index.ts migrate).
+ */
 export interface PricePoint {
   date: string; // YYYY-MM-DD
   naverLowest: number | null;
-  coupangLowest: number | null;
   danawaLowest: number | null;
   avgPrice: number | null;
   overallLowest: number | null;
   lowestSource: string;
-  // ── 쿠팡 가격 수집 강화(신규, 기존 코드 호환 위해 옵셔널) ──
-  /** 쿠팡 로켓배송 여부. 미수집/미편입이면 null. */
-  coupangIsRocket?: boolean | null;
+  // ── 소스 계층(신규, 기존 코드 호환 위해 옵셔널) ──
   /** 전체 최저가 판매처 상호. */
   lowestMall?: string | null;
   /** 가격을 채택한 소스: 'danawa' | 'enuri' | 'llm-websearch' (없으면 null). */

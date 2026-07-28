@@ -21,9 +21,10 @@ export interface SourcePriceResult {
   fetchedAt: string;
   productName: string | null;
   modelName: string | null;
-  /** 쿠팡 판매가 + 로켓 여부 (쿠팡 미편입이면 null) */
-  coupang: { price: number; isRocket: boolean; url: string | null } | null;
-  /** 전체 최저가 + 판매처 */
+  /**
+   * 전체 최저가 + 판매처.
+   * (쿠팡 개별가 필드는 2026-07-28 제거 — 다나와 robots 금지 ajax 경로에서만 나오던 값이다.)
+   */
   overallLowest: { price: number; mall: string; url: string | null } | null;
   /** 감사/디버그용 원본(파서 입력 일부, LLM 리서치 결과 등). 저장하지 않을 수 있음. */
   raw?: unknown;

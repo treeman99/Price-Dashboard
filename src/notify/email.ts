@@ -70,7 +70,7 @@ export function renderProduct(s: ProductSummary, chartCid: string): string {
       <tr><td style="padding:2px 12px 2px 0;color:#666">종합 최저가</td><td>${overallHtml}${
         s.latest?.lowestSource ? ` <span style="color:#888">(${escapeHtml(s.latest.lowestSource)})</span>` : ""
       }</td></tr>
-      <tr><td style="padding:2px 12px 2px 0;color:#666">쿠팡 최저가</td><td>${won(s.latest?.coupangLowest ?? null)}</td></tr>
+      <tr><td style="padding:2px 12px 2px 0;color:#666">네이버 최저가</td><td>${won(s.latest?.naverLowest ?? null)}</td></tr>
       <tr><td style="padding:2px 12px 2px 0;color:#666">평균가</td><td>${won(s.latest?.avgPrice ?? null)}</td></tr>
       <tr><td style="padding:2px 12px 2px 0;color:#666">전일 대비</td><td>${changeBadge(s.change)}</td></tr>
     </table>

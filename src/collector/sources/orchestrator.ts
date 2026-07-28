@@ -1,8 +1,8 @@
 // 소스 폴백 오케스트레이션 (문서 §5.2).
 // 확정된 SourceRef 들을 우선순위(danawa → enuri → llm-websearch)대로 시도:
-//   - status === "ok" 이고 coupang/overallLowest 중 하나라도 있으면 채택 후 종료.
+//   - status === "ok" 이고 overallLowest 가 있으면 채택 후 종료.
 //   - status === "blocked" → 로그 + 알림 큐 적재 + 다음 소스로 폴백.
-//   - "not-listed"/"empty"/"parse-error" → 다음 소스. 모두 미편입이면 chosen=null(쿠팡가 null 정상 저장).
+//   - "not-listed"/"empty"/"parse-error" → 다음 소스. 모두 미편입이면 chosen=null(네이버 백본만으로 저장).
 // §11 당일 캐시: cache 훅이 주입되면 ref마다 cache.get 선행 확인 → hit이면 source.fetch 호출 없음.
 
 import { log } from "../../util/log.ts";
@@ -45,7 +45,7 @@ export interface OrchestratorOutput {
 }
 
 function hasPrice(r: SourcePriceResult): boolean {
-  return r.coupang != null || r.overallLowest != null;
+  return r.overallLowest != null;
 }
 
 function processResult(
@@ -60,7 +60,7 @@ function processResult(
 
   if (result.status === "ok" && hasPrice(result)) {
     log.info(
-      `[${label ?? "수집"}] ${ref.source} 채택${fromCache ? "(캐시)" : ""} — 쿠팡=${result.coupang?.price ?? "-"} 최저가=${result.overallLowest?.price ?? "-"}`
+      `[${label ?? "수집"}] ${ref.source} 채택${fromCache ? "(캐시)" : ""} — 최저가=${result.overallLowest?.price ?? "-"}(${result.overallLowest?.mall ?? "-"})`
     );
     return { chosen: result };
   }
@@ -112,7 +112,6 @@ export async function collectFromSources(
         fetchedAt: new Date().toISOString(),
         productName: null,
         modelName: null,
-        coupang: null,
         overallLowest: null,
         raw: { error: (e as Error).message },
       };

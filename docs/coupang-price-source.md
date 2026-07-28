@@ -1,6 +1,24 @@
 # 쿠팡 가격 수집 강화 — 설계 문서 (v0, 검토용)
 
-> 상태: **설계 확정 전.** Phase 0(검증 스파이크) 결과로 "수집 메커니즘"을 최종 결정한다.
+> ## ⛔ 폐기됨 (2026-07-28) — 이 문서는 이력 기록이다
+>
+> 사용자 결정으로 **쿠팡 수집을 제거**했다. 아래 설계 중 살아 있는 것과 사라진 것:
+>
+> | 항목 | 현재 상태 |
+> |---|---|
+> | `PriceSource` 추상화 · product_sources(pcode 확정) · §11 당일 캐시 · 폴백 체인 | **유지** (다나와 → 에누리 → llm-websearch) |
+> | 다나와 SSR 요약 최저가(`/info/?pcode=`, robots 허용) | **유지** — 전체 최저가는 여기서 나온다(판매처 표기 "다나와(요약최저가)") |
+> | 다나와 판매처 목록 ajax(`/info/ajax/getAllPriceCompareMallList.ajax.php`) | **삭제** — robots `Disallow: /info/ajax/` 대상이었고 유일한 용도가 쿠팡 행 추출이었다 |
+> | `SourcePriceResult.coupang` · `parseCoupangRow` · 로켓배송 판정 · 몰 행 파서 | **삭제** |
+> | `price_points.coupang_lowest` / `coupang_is_rocket` 컬럼 + 과거 값 | **드롭** (`src/db/index.ts` migrate) |
+> | 로컬 전용 가드(`detectLocalGuard`) | **삭제** — robots 금지 경로가 없어져 가드할 대상이 사라졌다 |
+> | 대시보드·이메일의 쿠팡 표시 | **삭제** — 차트의 쿠팡 선은 '종합 최저가' 선으로, 카드/메일의 쿠팡가 칸은 '네이버 최저가'로 대체 |
+>
+> 회귀 가드: `src/collector/sources/danawa.test.ts` 의 "robots 금지 경로(/info/ajax/)를 절대 호출하지 않는다".
+>
+> ---
+>
+> (이하 원문 보존) 상태: **설계 확정 전.** Phase 0(검증 스파이크) 결과로 "수집 메커니즘"을 최종 결정한다.
 > 골격(PriceSource 추상화·스키마·watchlist·폴백/알림)은 메커니즘과 무관하게 먼저 확정한다.
 
 ## 1. 배경 / 현재 상태

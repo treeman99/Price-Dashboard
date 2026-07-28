@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronUp, ChevronDown, Minus, Trash2, Star, Rocket } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronUp, ChevronDown, Minus, Trash2, Star } from "lucide-react";
 import type { ProductSummary, ProductHistory, PeriodDays } from "@shared/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -32,19 +32,6 @@ function ChangeBadge({ change }: { change: ProductSummary["change"] }) {
       {isDown ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />}
       {Math.abs(change.amount).toLocaleString("ko-KR")}원
       {change.percent != null && ` (${Math.abs(change.percent).toFixed(1)}%)`}
-    </Badge>
-  );
-}
-
-/** 쿠팡 로켓배송 배지 (쿠팡 톤 블루). coupangIsRocket === true 일 때만 노출. */
-function RocketBadge() {
-  return (
-    <Badge
-      className="border-transparent gap-0.5 px-1.5 py-0 text-[10px] font-semibold text-white"
-      style={{ backgroundColor: "#346aff" }}
-      title="쿠팡 로켓배송"
-    >
-      <Rocket className="h-2.5 w-2.5" /> 로켓
     </Badge>
   );
 }
@@ -200,11 +187,8 @@ export function ProductCard({
 
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="rounded-md bg-muted/50 px-3 py-2">
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span>쿠팡 최저가</span>
-              {latest?.coupangIsRocket === true && <RocketBadge />}
-            </div>
-            <div className="font-medium">{formatWon(latest?.coupangLowest ?? null)}</div>
+            <div className="text-xs text-muted-foreground">네이버 최저가</div>
+            <div className="font-medium">{formatWon(latest?.naverLowest ?? null)}</div>
           </div>
           <div className="rounded-md bg-muted/50 px-3 py-2">
             <div className="text-xs text-muted-foreground">평균가</div>

@@ -18,7 +18,6 @@ export function ensureSeeds(): number {
 
 interface LegacyRecord {
   naver_lowest?: number | null;
-  coupang_lowest?: number | null;
   danawa_lowest?: number | null;
   avg_price?: number | null;
   overall_lowest?: number | null;
@@ -80,7 +79,6 @@ export function importLegacyHistory(filePath = config.legacyHistoryJson): Import
         const point: PricePoint = {
           date,
           naverLowest: numOrNull(rec.naver_lowest),
-          coupangLowest: numOrNull(rec.coupang_lowest),
           danawaLowest: numOrNull(rec.danawa_lowest),
           avgPrice: numOrNull(rec.avg_price),
           overallLowest: numOrNull(rec.overall_lowest),

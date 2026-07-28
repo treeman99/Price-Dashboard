@@ -16,23 +16,17 @@ export function researchToResult(
   productName: string,
   fetchedAt: string
 ): SourcePriceResult {
-  const coupang =
-    r.coupangLowest != null
-      ? { price: r.coupangLowest, isRocket: false, url: r.comparisonLink }
-      : null;
   const overallLowest =
     r.overallLowest != null
       ? { price: r.overallLowest, mall: r.lowestSource || "가격비교", url: r.comparisonLink }
       : null;
 
-  const hasAny = coupang != null || overallLowest != null;
   return {
     source: "llm-websearch",
-    status: hasAny ? "ok" : "empty",
+    status: overallLowest != null ? "ok" : "empty",
     fetchedAt,
     productName,
     modelName: null,
-    coupang,
     overallLowest,
     raw: r, // reviews / danawaLowest 등 부가정보 보존
   };

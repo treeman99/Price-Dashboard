@@ -37,8 +37,7 @@ function summary(over: Partial<ProductSummary> = {}): ProductSummary {
     product: product(),
     latest: {
       date: "2026-07-17",
-      naverLowest: null,
-      coupangLowest: 1250000,
+      naverLowest: 1250000,
       danawaLowest: 1200000,
       avgPrice: 1230000,
       overallLowest: 1200000,

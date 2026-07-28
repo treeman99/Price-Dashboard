@@ -16,7 +16,6 @@ function fakeSource(id: SourceId, result: Partial<SourcePriceResult>): PriceSour
         fetchedAt: "2026-06-27T00:00:00.000Z",
         productName: null,
         modelName: null,
-        coupang: null,
         overallLowest: null,
         ...result,
       };
@@ -36,7 +35,7 @@ test("orchestrator: 첫 소스 ok+가격이면 즉시 채택, 이후 소스 호�
     refs,
     getSource: (id) => {
       if (id === "danawa")
-        return fakeSource("danawa", { status: "ok", coupang: { price: 1000, isRocket: true, url: null } });
+        return fakeSource("danawa", { status: "ok", overallLowest: { price: 1000, mall: "다나와(요약최저가)", url: null } });
       if (id === "enuri") {
         return {
           id: "enuri",
@@ -53,7 +52,7 @@ test("orchestrator: 첫 소스 ok+가격이면 즉시 채택, 이후 소스 호�
     },
   });
   assert.equal(out.chosen?.source, "danawa");
-  assert.equal(out.chosen?.coupang?.price, 1000);
+  assert.equal(out.chosen?.overallLowest?.price, 1000);
   assert.equal(enuriCalled, false);
   assert.equal(out.attempts.length, 1);
 });
@@ -75,13 +74,29 @@ test("orchestrator: blocked → onBlocked 콜백 + 다음 소스 폴백", async 
   assert.equal(out.attempts.length, 2);
 });
 
-test("orchestrator: 모두 not-listed면 chosen=null (쿠팡가 null 정상 저장 경로)", async () => {
+test("orchestrator: 모두 not-listed면 chosen=null (네이버 백본만으로 저장하는 경로)", async () => {
   const out = await collectFromSources({
     refs,
     getSource: (id) => fakeSource(id, { status: "not-listed" }),
   });
   assert.equal(out.chosen, null);
   assert.equal(out.attempts.length, 3);
+});
+
+// 쿠팡 제거(2026-07-28) 이후 '가격 있음'의 유일한 기준은 overallLowest 다.
+// ok 인데 전체최저가가 비어 있으면 채택하지 말고 다음 소스로 넘어가야 한다.
+test("orchestrator: ok 이지만 overallLowest 가 없으면 채택하지 않고 폴백", async () => {
+  const out = await collectFromSources({
+    refs,
+    getSource: (id) => {
+      if (id === "danawa") return fakeSource("danawa", { status: "ok", overallLowest: null });
+      if (id === "enuri")
+        return fakeSource("enuri", { status: "ok", overallLowest: { price: 900, mall: "에누리최저가", url: null } });
+      return null;
+    },
+  });
+  assert.equal(out.chosen?.source, "enuri");
+  assert.equal(out.attempts.length, 2);
 });
 
 test("orchestrator: 소스 fetch 예외는 parse-error로 격리하고 폴백 계속", async () => {
@@ -99,7 +114,7 @@ test("orchestrator: 소스 fetch 예외는 parse-error로 격리하고 폴백 �
           },
         };
       if (id === "llm-websearch")
-        return fakeSource("llm-websearch", { status: "ok", coupang: { price: 500, isRocket: false, url: null } });
+        return fakeSource("llm-websearch", { status: "ok", overallLowest: { price: 500, mall: "가격비교", url: null } });
       return fakeSource(id, { status: "not-listed" });
     },
   });
@@ -134,7 +149,6 @@ function countingSource(id: SourceId, result: Partial<SourcePriceResult>, counte
         fetchedAt: "2026-06-27T00:00:00.000Z",
         productName: null,
         modelName: null,
-        coupang: null,
         overallLowest: null,
         ...result,
       };
@@ -145,7 +159,7 @@ function countingSource(id: SourceId, result: Partial<SourcePriceResult>, counte
 test("캐시: 같은 날 2번째 수집 — 네트워크 호출 0 + 캐시값 반환 (§11)", async () => {
   const counter = { n: 0 };
   const { cache } = makeMemCache();
-  const src = countingSource("danawa", { status: "ok", coupang: { price: 1571700, isRocket: true, url: null } }, counter);
+  const src = countingSource("danawa", { status: "ok", overallLowest: { price: 1571700, mall: "다나와(요약최저가)", url: null } }, counter);
   const testRefs = [{ source: "danawa" as SourceId, refId: "1", url: "u1" }];
 
   // 1회차: 캐시 miss → fetch 호출됨
@@ -156,7 +170,7 @@ test("캐시: 같은 날 2번째 수집 — 네트워크 호출 0 + 캐시값 �
   });
   assert.equal(counter.n, 1, "1회차 fetch 호출 수");
   assert.equal(out1.chosen?.status, "ok");
-  assert.equal(out1.chosen?.coupang?.price, 1571700);
+  assert.equal(out1.chosen?.overallLowest?.price, 1571700);
 
   // 2회차: 캐시 hit → source.fetch 호출 없음
   const out2 = await collectFromSources({
@@ -166,7 +180,7 @@ test("캐시: 같은 날 2번째 수집 — 네트워크 호출 0 + 캐시값 �
   });
   assert.equal(counter.n, 1, "2회차는 캐시 hit → 네트워크 0 추가");
   assert.equal(out2.chosen?.status, "ok");
-  assert.equal(out2.chosen?.coupang?.price, 1571700);
+  assert.equal(out2.chosen?.overallLowest?.price, 1571700);
   assert.equal(out2.attempts[0].status, "ok", "캐시 결과가 attempts에 포함");
 });
 

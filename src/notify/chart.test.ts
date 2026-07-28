@@ -14,17 +14,17 @@ function assertPng(buf: Buffer) {
   assert.deepEqual(buf.subarray(0, 4), PNG_SIG, "PNG 시그니처 불일치");
 }
 
-function point(date: string, naver: number | null, coupang: number | null): PricePoint {
-  const vals = [naver, coupang].filter((v): v is number => v != null);
+/** naver = 네이버 최저가, compare = 가격비교 소스 최저가. 종합 최저가는 둘 중 최저. */
+function point(date: string, naver: number | null, compare: number | null): PricePoint {
+  const vals = [naver, compare].filter((v): v is number => v != null);
   const lowest = vals.length ? Math.min(...vals) : null;
   return {
     date,
     naverLowest: naver,
-    coupangLowest: coupang,
-    danawaLowest: null,
+    danawaLowest: compare,
     avgPrice: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null,
     overallLowest: lowest,
-    lowestSource: lowest == null ? "" : lowest === naver ? "naver" : "coupang",
+    lowestSource: lowest == null ? "" : lowest === naver ? "naver" : "danawa",
   };
 }
 
@@ -67,9 +67,9 @@ test("renderPriceChartPng: 중간 구간 null 이 섞여도 PNG", () => {
   assertPng(renderPriceChartPng(points, "결측 혼재"));
 });
 
-test("renderPriceChartPng: 쿠팡만 있어도 PNG (네이버 전 구간 null)", () => {
+test("renderPriceChartPng: 네이버가 전 구간 null 이어도(종합 최저가만) PNG", () => {
   const points = [point("2026-07-01", null, 2_050_000), point("2026-07-02", null, 1_990_000)];
-  assertPng(renderPriceChartPng(points, "쿠팡 단독"));
+  assertPng(renderPriceChartPng(points, "종합 최저가 단독"));
 });
 
 // ── renderLineChartPng (일반화된 진입점) ──

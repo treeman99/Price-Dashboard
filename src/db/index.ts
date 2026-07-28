@@ -30,19 +30,29 @@ export function db(): DatabaseSync {
  * 없을 때만 1회 ALTER 한다(여러 번 호출해도 안전).
  */
 function migrate(conn: DatabaseSync): void {
-  const cols = new Set(
-    (conn.prepare("PRAGMA table_info(price_points)").all() as Array<{ name: string }>).map(
-      (r) => r.name
-    )
-  );
+  const priceCols = (): Set<string> =>
+    new Set(
+      (conn.prepare("PRAGMA table_info(price_points)").all() as Array<{ name: string }>).map(
+        (r) => r.name
+      )
+    );
+  const cols = priceCols();
   const adds: Array<[string, string]> = [
-    ["coupang_is_rocket", "INTEGER"], // 0/1/null
     ["lowest_mall", "TEXT"], // 전체 최저가 판매처
     ["source", "TEXT"], // 채택된 소스 (danawa|enuri|llm-websearch)
   ];
   for (const [name, type] of adds) {
     if (!cols.has(name)) {
       conn.exec(`ALTER TABLE price_points ADD COLUMN ${name} ${type}`);
+    }
+  }
+
+  // 쿠팡 수집 제거(2026-07-28): 컬럼과 과거 값을 통째로 드롭한다.
+  // DROP COLUMN 은 SQLite 3.35+ (node:sqlite 번들은 3.5x) 지원. PK/인덱스에 포함된 컬럼이
+  // 아니므로 안전하다. ADD 루프와 달리 '있을 때만' 실행해야 두 번째 기동에서 에러가 안 난다.
+  for (const dead of ["coupang_lowest", "coupang_is_rocket"]) {
+    if (priceCols().has(dead)) {
+      conn.exec(`ALTER TABLE price_points DROP COLUMN ${dead}`);
     }
   }
 

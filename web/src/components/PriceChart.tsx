@@ -20,10 +20,11 @@ export function PriceChart({ points }: { points: PricePoint[] }) {
     );
   }
 
+  // 쿠팡 선(2026-07-28 수집 제거)이 있던 자리를 종합 최저가 선이 대신한다.
   const data = points.map((p) => ({
     date: p.date.slice(5), // MM-DD
     naver: p.naverLowest,
-    coupang: p.coupangLowest,
+    overall: p.overallLowest,
   }));
 
   return (
@@ -41,12 +42,12 @@ export function PriceChart({ points }: { points: PricePoint[] }) {
         <Tooltip
           formatter={(v, name) => [
             formatWon(typeof v === "number" ? v : null),
-            name === "naver" ? "네이버" : "쿠팡",
+            name === "naver" ? "네이버" : "종합 최저가",
           ]}
           contentStyle={{ fontSize: 12, borderRadius: 8 }}
         />
         <Legend
-          formatter={(v) => (v === "naver" ? "네이버 최저가" : "쿠팡 최저가")}
+          formatter={(v) => (v === "naver" ? "네이버 최저가" : "종합 최저가")}
           wrapperStyle={{ fontSize: 12 }}
         />
         <Line
@@ -59,7 +60,7 @@ export function PriceChart({ points }: { points: PricePoint[] }) {
         />
         <Line
           type="monotone"
-          dataKey="coupang"
+          dataKey="overall"
           stroke="#E8833A"
           strokeWidth={2}
           dot={{ r: 2 }}
