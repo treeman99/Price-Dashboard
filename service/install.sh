@@ -45,9 +45,30 @@ sed -e "s#__NODE__#$NODE#g" \
     "$TEMPLATE" > "$PLIST_DST"
 
 UID_NUM="$(id -u)"
-# 기존 것이 있으면 내린다
+# 기존 것이 있으면 내린다.
+# ⚠️ bootout 은 비동기다 — 곧바로 bootstrap 하면 아직 언로드 중이라
+#    "Bootstrap failed: 5: Input/output error" 로 죽는다(실측 2026-07-28: 서비스가
+#    내려간 채로 설치가 중단됨). 언로드 완료를 확인한 뒤 재시도까지 건다.
 launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$UID_NUM" "$PLIST_DST"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  launchctl print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1 || break
+  sleep 1
+done
+
+bootstrapped=""
+for attempt in 1 2 3 4 5; do
+  if launchctl bootstrap "gui/$UID_NUM" "$PLIST_DST" 2>/tmp/dailyprice-bootstrap.err; then
+    bootstrapped="yes"
+    break
+  fi
+  echo "⚠ bootstrap 시도 $attempt 실패: $(cat /tmp/dailyprice-bootstrap.err)"
+  sleep 3
+done
+if [ -z "$bootstrapped" ]; then
+  echo "✖ launchd 등록 실패. 'launchctl bootout gui/$UID_NUM/$LABEL' 후 다시 실행하세요." >&2
+  exit 1
+fi
+
 launchctl enable "gui/$UID_NUM/$LABEL"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
