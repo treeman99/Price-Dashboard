@@ -33,6 +33,9 @@ function ScoreTooltip({ active, payload }: TooltipProps<number, string>) {
         <div>회차 점수 {p.score > 0 ? "+" : ""}{p.score}</div>
         <div>누적 {p.cumScore > 0 ? "+" : ""}{p.cumScore}</div>
         <div>이동평균 {p.movingAvg.toFixed(2)}</div>
+        {/* 대조군 차트지만 새 목표 지표도 한 줄 얹어 둔다 — 점수만 보고 "이 회차는 잘 됐다"로
+            오독하지 않도록, 실제 목표 지표(3+ 적중) 결과를 항상 같이 보여준다. */}
+        <div>{p.hit3 ? "🎯 3+ 적중" : "3+ 미적중"} · 최고 {p.bestMatch}개</div>
         <div>세대 v{p.version}</div>
       </div>
     </div>
@@ -61,6 +64,127 @@ function GenerationLines({ strategies }: { strategies: LottoStrategy[] }) {
         />
       ))}
     </>
+  );
+}
+
+/**
+ * 3+ 적중률 차트 전용 툴팁. 회차 점수 툴팁과 데이터 포인트(LottoScorePoint)는 같지만 이 차트의
+ * 주인공 필드(hit3Rate/cumHit3Rate)를 앞세워 보여준다.
+ */
+function Hit3Tooltip({ active, payload }: TooltipProps<number, string>) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0]?.payload as LottoScorePoint | undefined;
+  if (!p) return null;
+  return (
+    <div className="rounded-md border bg-card px-3 py-2 text-xs shadow-md">
+      <div className="font-semibold">
+        {p.round}회차 · {p.drawDate}
+      </div>
+      <div className="mt-1 space-y-0.5 text-muted-foreground">
+        <div>{p.hit3 ? "🎯 이 회차 3+ 적중" : "이 회차 3+ 미적중"} · 최고 {p.bestMatch}개</div>
+        <div>200회차 이동평균 {(p.hit3Rate * 100).toFixed(1)}%</div>
+        <div>누적 {(p.cumHit3Rate * 100).toFixed(1)}%</div>
+        <div>세대 v{p.version}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ⚠️ y축을 [0.25, 0.45] 로 고정한다. 이 실험의 결론은 "무작위 기준선(33.4%)과 도달 가능 천장
+ * (36.4%)의 차이는 겨우 3%p"라는 것이다. recharts 기본 auto 스케일은 데이터 전체 범위(때로는
+ * 0%~40% 이상)에 맞춰 축을 늘리는데, 그러면 이 3%p 차이가 축 전체의 몇 % 밖에 안 되는 눌린
+ * 구간으로 뭉개져 화면에서 안 보인다. 고정 도메인이 실험의 결론을 실제로 눈에 보이게 한다
+ * (팀 리드 지시).
+ */
+const HIT3_Y_DOMAIN: [number, number] = [0.25, 0.45];
+
+/**
+ * **3+ 적중률 추이 — 이 실험의 새 주인공 차트.**
+ * 점수(LottoScoreChart)는 어떤 전략을 써도 기대값이 같다는 게 확인되어 대조군으로 강등됐고,
+ * 이 차트가 그 자리를 대신한다. 계열 2개 + 기준선 2개:
+ *  - hit3Rate: 최근 LOTTO_HIT3_WINDOW(200)회차 이동평균 — 굵은 선, 주인공
+ *  - cumHit3Rate: 1회차부터의 누적 비율 — 가는 선
+ *  - 무작위 기준선(hit3Random)과 도달 가능 천장(hit3Ceiling): 둘 다 수평 점선
+ */
+export function LottoHit3Chart({
+  points,
+  strategies,
+  hit3Random,
+  hit3Ceiling,
+}: {
+  points: LottoScorePoint[];
+  strategies: LottoStrategy[];
+  hit3Random: number;
+  hit3Ceiling: number;
+}) {
+  if (!points.length) {
+    return (
+      <div className="flex h-[300px] items-center justify-center text-sm text-muted-foreground">
+        아직 채점된 회차가 없습니다
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <LineChart data={points} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+        <XAxis
+          dataKey="round"
+          type="number"
+          domain={["dataMin", "dataMax"]}
+          tick={{ fontSize: 11 }}
+          stroke="hsl(var(--muted-foreground))"
+        />
+        <YAxis
+          tick={{ fontSize: 11 }}
+          stroke="hsl(var(--muted-foreground))"
+          width={48}
+          domain={HIT3_Y_DOMAIN}
+          tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+        />
+        <Tooltip content={<Hit3Tooltip />} />
+        <ReferenceLine
+          y={hit3Random}
+          stroke="#94a3b8"
+          strokeDasharray="6 3"
+          label={{
+            value: `무작위 ${(hit3Random * 100).toFixed(1)}%`,
+            position: "insideBottomRight",
+            fontSize: 11,
+            fill: "#64748b",
+          }}
+        />
+        <ReferenceLine
+          y={hit3Ceiling}
+          stroke="#f59e0b"
+          strokeDasharray="6 3"
+          label={{
+            value: `천장 ${(hit3Ceiling * 100).toFixed(1)}%`,
+            position: "insideTopRight",
+            fontSize: 11,
+            fill: "#b45309",
+          }}
+        />
+        <GenerationLines strategies={strategies} />
+        <Line
+          type="monotone"
+          dataKey="cumHit3Rate"
+          stroke="#a7f3d0"
+          strokeWidth={1}
+          dot={false}
+          isAnimationActive={false}
+        />
+        <Line
+          type="monotone"
+          dataKey="hit3Rate"
+          stroke="#059669"
+          strokeWidth={2.5}
+          dot={false}
+          isAnimationActive={false}
+        />
+      </LineChart>
+    </ResponsiveContainer>
   );
 }
 

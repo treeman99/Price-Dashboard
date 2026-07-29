@@ -51,6 +51,10 @@ export interface AppConfig {
  */
 export interface LottoStatusSummary {
   status: LottoStatus;
+  /** 지금 몇 번째 바퀴인지. '실험 반복'을 누르면 폴링 중에 이 값이 바뀌어 새 바퀴 시작을 감지할 수 있다. */
+  run: number;
+  /** 지금까지 완료(+진행중) 바퀴 총 개수. */
+  totalRuns: number;
   pauseReason: LottoPauseReason;
   resumeAt: string | null;
   scoredThrough: number | null;
@@ -606,6 +610,14 @@ export const api = {
   /** 완주 배너 확인 처리. */
   ackLotto: () =>
     fetch("/api/lotto/ack", { method: "POST" }).then((r) => j<{ ok: true; state: LottoState }>(r)),
+
+  /**
+   * 실험 반복 — 초기화 없이 1회차부터 한 바퀴 더 돈다. 전략 세대와 지난 바퀴 기록은 보존된다.
+   * 초기화(resetLotto)와 달리 지우는 게 없어 confirm 이 필요 없다. 완주(status==="done") 상태가
+   * 아니면 백엔드가 409 로 거부한다 — j() 가 body.error 를 그대로 Error 메시지로 던진다.
+   */
+  repeatLotto: () =>
+    fetch("/api/lotto/repeat", { method: "POST" }).then((r) => j<{ ok: true; state: LottoState }>(r)),
 
   /** 동행복권 회차 데이터 동기화. */
   syncLotto: () =>
