@@ -9,6 +9,7 @@ import { NewsBoard } from "@/components/NewsBoard";
 import { YoutubeBoard } from "@/components/YoutubeBoard";
 import { StockBoard } from "@/components/StockBoard";
 import { HoldingsBoard } from "@/components/HoldingsBoard";
+import { LottoBoard } from "@/components/LottoBoard";
 import { ScrollToTop } from "@/components/ScrollToTop";
 import { ModelControl } from "@/components/ModelControl";
 
@@ -29,6 +30,7 @@ const TABS: TabDef[] = [
   { id: "stock", label: "증시", color: "#059669", content: <StockBoard /> },
   // 보유 종목은 증시 탭 안의 한국장/미국장과 **별도 탭**이다(인터뷰 결정).
   { id: "holdings", label: "보유 주식", color: "#0d9488", content: <HoldingsBoard /> },
+  { id: "lotto", label: "로또", color: "#7c3aed", content: <LottoBoard /> },
 ];
 
 export default function App() {

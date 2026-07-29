@@ -24,9 +24,18 @@ export function preview(text: string, max = 400): string {
  * 목록에 없던 동안 이 47자짜리 결과가 '성공'으로 통과해 빈 스냅샷만 남겼다(로그 실측).
  * 한도 소진 시 자동 전환의 도착지가 Claude 이므로, 이 문구가 조용하면 전환 후 실패가
  * 그대로 묻힌다.
+ *
+ * ⚠️ 한도 문구에는 **라벨이 붙는다.** 번들 CLI(`node_modules/@anthropic-ai/claude-agent-sdk/cli.js`)
+ * 는 `You've hit your ${라벨}` 로 문장을 만들고, 라벨은 `limit` / `session limit`(5시간) /
+ * `Opus limit`(주간 Opus) / `weekly limit` / `Sonnet limit` / `usage limit` 6종이다.
+ * 예전 패턴 `You'?ve hit your limit` 은 **그중 첫 번째 하나만** 잡았고 나머지 5종은 전부
+ * 통과했다(2026-07-29 실측: `isFailureSignal("You've hit your Opus limit · resets 3pm")` === false).
+ * 그래서 라벨 자리를 낱말 2개까지 허용한다 — Codex 쪽 패턴과 같은 방식이다.
+ * 이게 조용하면 한도 소진이 "JSON 미발견" 으로 둔갑해, 한도 기반 대기·전환 로직이 통째로
+ * 발화하지 않는다(로또 실험의 4시간 자동 재개가 바로 이 경로에 걸려 있었다).
  */
 const FAILURE_SIGNALS =
-  /^\s*(API Error:|Claude AI usage limit reached|You'?ve hit your limit|Credit balance is too low|Invalid API key|OAuth token has expired|Please run \/login|Execution error)/i;
+  /^\s*(API Error:|Claude AI usage limit reached|You'?ve hit your (?:\w+ ){0,2}limit|Credit balance is too low|Invalid API key|OAuth token has expired|Please run \/login|Execution error)/i;
 
 /** 결과 텍스트가 '성공을 가장한 실패 통보'인지. */
 export function isFailureSignal(text: string): boolean {

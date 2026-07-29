@@ -28,6 +28,7 @@ import type {
   StockHorizon,
   PulseRunResult,
 } from "@shared/types";
+import type { LottoSnapshot, LottoState, LottoStatus, LottoPauseReason } from "@shared/lotto";
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -42,6 +43,24 @@ export interface AppConfig {
   collectTime: string;
   notify: { email: boolean };
   warnings: string[];
+}
+
+/**
+ * GET /api/lotto/status 응답. 폴링용으로 가벼운 필드만 담는다(1200점짜리 전체 스냅샷이 아니다).
+ * lastError/doneAcknowledged/busy 는 상태 판단에 필요해 백엔드가 LottoState 와 별개로 얹어준다.
+ */
+export interface LottoStatusSummary {
+  status: LottoStatus;
+  pauseReason: LottoPauseReason;
+  resumeAt: string | null;
+  scoredThrough: number | null;
+  latestDraw: number | null;
+  nextRound: number | null;
+  remaining: number;
+  cumScore: number;
+  lastError: string | null;
+  doneAcknowledged: boolean;
+  busy: boolean;
 }
 
 export const api = {
@@ -558,4 +577,39 @@ export const api = {
     await j<{ started: boolean }>(res);
     return { started: true, busy: false };
   },
+
+  // ── 로또 예측 실험 ──
+  // 백엔드가 아직 준비 중이면 404/500 이 그대로 throw 되므로, 화면에서는 반드시 try/catch 로
+  // 받아 빈 상태를 그린다(products() 등 기존 엔드포인트와 동일한 관례).
+  lotto: () => fetch("/api/lotto").then((r) => j<LottoSnapshot>(r)),
+
+  /** 가벼운 폴링용 상태. running 일 때만 3초마다 이걸 치고, scoredThrough 가 늘었을 때만 lotto()로 전체를 다시 받는다. */
+  lottoStatus: () => fetch("/api/lotto/status").then((r) => j<LottoStatusSummary>(r)),
+
+  startLotto: () =>
+    fetch("/api/lotto/start", { method: "POST" }).then((r) =>
+      j<{ ok: true; state: LottoState }>(r)
+    ),
+
+  pauseLotto: () =>
+    fetch("/api/lotto/pause", { method: "POST" }).then((r) =>
+      j<{ ok: true; state: LottoState }>(r)
+    ),
+
+  /**
+   * 예측·전략을 전부 삭제하고 1회차부터 재시작. 되돌릴 수 없으므로 호출 전 confirm 필수.
+   * 오삭제 방지로 종목 삭제(deleteTicker 등)와 같은 관례 — confirm 쿼리를 서버가 요구한다.
+   */
+  resetLotto: () =>
+    fetch("/api/lotto/reset?confirm=reset", { method: "POST" }).then((r) => j<{ ok: boolean }>(r)),
+
+  /** 완주 배너 확인 처리. */
+  ackLotto: () =>
+    fetch("/api/lotto/ack", { method: "POST" }).then((r) => j<{ ok: true; state: LottoState }>(r)),
+
+  /** 동행복권 회차 데이터 동기화. */
+  syncLotto: () =>
+    fetch("/api/lotto/sync", { method: "POST" }).then((r) =>
+      j<{ ok: true; added: number; latest: number; pages: number; errors: number }>(r)
+    ),
 };

@@ -85,6 +85,17 @@ import {
   updateHolding,
 } from "../stock/holdings.ts";
 import { runPulse, isPulseRunning, getLastPulseRun } from "../stock/pulse.ts";
+import { getLottoState } from "../lotto/store.ts";
+import {
+  acknowledgeDone,
+  getSnapshot as getLottoSnapshot,
+  getStatus as getLottoStatus,
+  isExperimentRunning,
+  pauseExperiment,
+  resetAll as resetLottoAll,
+  startExperiment,
+  syncLottoDraws,
+} from "../lotto/experiment.ts";
 import { isPulseNotifyEnabled } from "../notify/pulse-imessage.ts";
 import { allRecentPulseAlerts } from "../db/repo.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
@@ -1225,4 +1236,78 @@ api.get("/stock/tickers/:id/history", (req, res) => {
   if (!getStock(id)) return res.status(404).json({ error: "종목 없음" });
   const days = Number(req.query.days) || HISTORY_DAYS;
   res.json(getStockPoints(id, days));
+});
+
+// ── 로또 예측 실험 ──
+//
+// 다른 탭과 달리 정시 수집이 없다. 실험은 사용자가 버튼으로 시작하고(인터뷰 결정),
+// 그 뒤로는 최신 회차에 닿을 때까지 스스로 굴러간다. 그래서 이 구역의 라우트는
+// '조회'와 '실행 제어'로만 이루어져 있다.
+
+/** 전체 스냅샷(차트·표·전략 이력). 1200점이 실리므로 폴링에 쓰지 말 것. */
+api.get("/lotto", (_req, res) => {
+  try {
+    res.json(getLottoSnapshot());
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/** 폴링 전용 경량 상태. 진행 중 화면이 3초마다 두드리는 곳이다. */
+api.get("/lotto/status", (_req, res) => {
+  try {
+    res.json({ ...getLottoStatus(), busy: isExperimentRunning() });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * 실험 시작/재개.
+ *
+ * ⚠️ **응답을 기다리지 않는다.** 완주까지 수십 분(에이전트 호출 25회)이 걸리므로 await 하면
+ * HTTP 요청이 그동안 매달려 있다가 프록시/브라우저 타임아웃으로 끊기고, 사용자는 실패한
+ * 줄 안다. 실제 진행은 /lotto/status 로 본다.
+ */
+api.post("/lotto/start", (_req, res) => {
+  if (isExperimentRunning()) {
+    return res.status(409).json({ error: "실험이 이미 진행 중입니다.", state: getLottoStatus() });
+  }
+  void startExperiment("manual").catch((e) => log.error(`로또 실험 실행 오류: ${(e as Error).message}`));
+  // runExperiment 는 첫 await 전에 상태를 running 으로 올리므로, 여기서 읽으면 이미 반영돼 있다.
+  res.json({ ok: true, state: getLottoState() });
+});
+
+/** 일시정지. 진행 중이면 다음 회차 경계에서 멈춘다(즉시 멈추지 않는다). */
+api.post("/lotto/pause", (_req, res) => {
+  res.json({ ok: true, state: pauseExperiment() });
+});
+
+/** 완주 배너 확인 처리. */
+api.post("/lotto/ack", (_req, res) => {
+  res.json({ ok: true, state: acknowledgeDone() });
+});
+
+/**
+ * 초기화 — 채점 결과와 전략 세대를 전부 지운다. 회차 원본은 남긴다.
+ * 되돌릴 수 없으므로 confirm=reset 을 요구한다(종목 삭제와 같은 관례).
+ */
+api.post("/lotto/reset", (req, res) => {
+  if (req.query.confirm !== "reset") {
+    return res.status(400).json({ error: "초기화는 confirm=reset 파라미터가 필요합니다." });
+  }
+  if (isExperimentRunning()) {
+    return res.status(409).json({ error: "실험이 진행 중입니다. 일시정지 후 초기화하세요." });
+  }
+  res.json({ ok: true, state: resetLottoAll() });
+});
+
+/** 동행복권 회차 동기화. 첫 실행은 1회차부터 전량이라 수십 초가 걸린다. */
+api.post("/lotto/sync", async (req, res) => {
+  try {
+    const r = await syncLottoDraws(req.query.force === "1");
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(502).json({ error: (e as Error).message });
+  }
 });

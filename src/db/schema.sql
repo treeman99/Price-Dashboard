@@ -191,3 +191,51 @@ CREATE TABLE IF NOT EXISTS stock_pulse_alerts (
 CREATE INDEX IF NOT EXISTS idx_pulse_fp ON stock_pulse_alerts(fingerprint, created_at);
 CREATE INDEX IF NOT EXISTS idx_pulse_date ON stock_pulse_alerts(date, status);
 CREATE INDEX IF NOT EXISTS idx_pulse_created ON stock_pulse_alerts(created_at);
+
+-- ── 로또 예측 실험 ──
+--
+-- 다른 탭과 성격이 다르다. 나머지는 '오늘의 상태'를 수집하지만 여기는 **재현 가능한 실험 기록**이라
+-- 과거 행을 절대 덮어쓰지 않는다. 회차 r 의 예측은 r-1 회차까지의 정보만으로 만들어졌다는 것이
+-- 이 실험의 유일한 성립 조건이고, 그 증거가 아래 세 표의 append-only 성질이다.
+
+-- 동행복권 회차 원본. 실험의 정답지이자, 예측 시점에 '읽을 수 있었던 과거'의 원천이다.
+-- 회차는 불변이므로 재수집해도 값이 바뀔 일이 없다(정정 사례 없음) → PK 충돌 시 무시한다.
+CREATE TABLE IF NOT EXISTS lotto_draws (
+  round      INTEGER PRIMARY KEY,      -- 회차 (1 = 2002-12-07)
+  draw_date  TEXT NOT NULL,            -- YYYY-MM-DD
+  n1         INTEGER NOT NULL,
+  n2         INTEGER NOT NULL,
+  n3         INTEGER NOT NULL,
+  n4         INTEGER NOT NULL,
+  n5         INTEGER NOT NULL,
+  n6         INTEGER NOT NULL,
+  bonus      INTEGER NOT NULL,
+  fetched_at TEXT NOT NULL
+);
+
+-- 전략 세대. 50회차마다 에이전트가 한 행을 추가한다(version 1 은 무작위 시드 세대).
+-- spec_json 은 엔진이 해석하는 선언형 사양이다 — 코드 문자열이 아니다(eval 금지).
+CREATE TABLE IF NOT EXISTS lotto_strategies (
+  version    INTEGER PRIMARY KEY,      -- 1부터 증가
+  from_round INTEGER NOT NULL,         -- 이 세대가 적용되기 시작한 회차
+  spec_json  TEXT NOT NULL,            -- JSON(LottoStrategySpec)
+  rationale  TEXT NOT NULL DEFAULT '', -- 에이전트가 남긴 근거
+  hypothesis TEXT NOT NULL DEFAULT '', -- 검증 가능한 형태의 가설
+  author     TEXT NOT NULL,            -- 'seed' | 'agent'
+  model      TEXT NOT NULL DEFAULT '', -- 제안한 모델 ID
+  created_at TEXT NOT NULL
+);
+
+-- 회차별 채점 결과. cum_score 를 저장해 두는 이유는 1200행을 매 조회마다 누적 계산하지
+-- 않기 위해서가 아니라(그건 싸다), **중간에 회차를 건너뛰지 않았다는 증거**로 쓰기 위해서다.
+CREATE TABLE IF NOT EXISTS lotto_predictions (
+  round        INTEGER PRIMARY KEY REFERENCES lotto_draws(round) ON DELETE CASCADE,
+  version      INTEGER NOT NULL,       -- 이 회차에 적용된 전략 세대
+  sets_json    TEXT NOT NULL,          -- JSON: number[10][6]
+  matches_json TEXT NOT NULL,          -- JSON: number[10]
+  score        INTEGER NOT NULL,       -- 회차 점수 (-60 ~ +60)
+  cum_score    INTEGER NOT NULL,       -- 1회차부터의 누적
+  scored_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lotto_pred_version ON lotto_predictions(version);
