@@ -39,7 +39,8 @@ function migrate(conn: DatabaseSync): void {
   const cols = priceCols();
   const adds: Array<[string, string]> = [
     ["lowest_mall", "TEXT"], // 전체 최저가 판매처
-    ["source", "TEXT"], // 채택된 소스 (danawa|enuri|llm-websearch)
+    ["source", "TEXT"], // 채택된 소스 (danawa|enuri)
+    ["lowest_url", "TEXT"], // 종합 최저가가 적힌 페이지 링크 (표시가/착지가 불일치 방지)
   ];
   for (const [name, type] of adds) {
     if (!cols.has(name)) {

@@ -33,8 +33,9 @@ function priceCell(price: number, link: string | null): string {
 
 /** 상품 카드 HTML. 순수 함수 — 링크는 모두 수집기(LLM)가 만든 값이라 safeHref 로 거른다. */
 export function renderProduct(s: ProductSummary, chartCid: string): string {
-  // 종합 최저가는 가능하면 1위 리스팅 링크로 연결
-  const cheapestLink = safeHref(s.topListings[0]?.link ?? null);
+  // 종합 최저가는 '그 금액이 적힌 페이지'(lowestUrl)로만 연결한다.
+  // 네이버 Top1 고정 연결은 가격비교 소스가 최저일 때 표시가와 착지가가 어긋나서 폐기했다.
+  const cheapestLink = safeHref(s.latest?.lowestUrl ?? null);
   const overall = s.latest?.overallLowest ?? null;
   const overallHtml =
     overall != null && cheapestLink

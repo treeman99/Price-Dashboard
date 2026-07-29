@@ -39,7 +39,14 @@ export interface PricePoint {
   // ── 소스 계층(신규, 기존 코드 호환 위해 옵셔널) ──
   /** 전체 최저가 판매처 상호. */
   lowestMall?: string | null;
-  /** 가격을 채택한 소스: 'danawa' | 'enuri' | 'llm-websearch' (없으면 null). */
+  /**
+   * 종합 최저가를 **그 값이 실제로 적힌 페이지**로 연결하는 링크.
+   * 네이버가 최저면 네이버 Top1 리스팅, 가격비교 소스가 최저면 그 소스가 조회한 URL
+   * (다나와 info / 에누리 detail). 값의 출처와 링크가 항상 같은 페이지여야 한다 —
+   * 예전엔 링크를 무조건 네이버 Top1로 고정해서 표시가와 착지 페이지가 어긋났다.
+   */
+  lowestUrl?: string | null;
+  /** 가격을 채택한 소스: 'danawa' | 'enuri' (없으면 null). */
   source?: string | null;
 }
 

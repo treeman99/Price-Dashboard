@@ -65,6 +65,7 @@ interface PointRow {
   // 신규 컬럼 (ALTER 로 추가, 기존 행은 null)
   lowest_mall?: string | null;
   source?: string | null;
+  lowest_url?: string | null;
 }
 
 function rowToPoint(r: PointRow): PricePoint {
@@ -76,6 +77,7 @@ function rowToPoint(r: PointRow): PricePoint {
     overallLowest: r.overall_lowest,
     lowestSource: r.lowest_source ?? "",
     lowestMall: r.lowest_mall ?? null,
+    lowestUrl: r.lowest_url ?? null,
     source: r.source ?? null,
   };
 }
@@ -230,8 +232,8 @@ export function upsertPricePoint(
   db()
     .prepare(
       `INSERT INTO price_points
-         (product_id, date, naver_lowest, danawa_lowest, avg_price, overall_lowest, lowest_source, collected_at, lowest_mall, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (product_id, date, naver_lowest, danawa_lowest, avg_price, overall_lowest, lowest_source, collected_at, lowest_mall, source, lowest_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(product_id, date) DO UPDATE SET
          naver_lowest=excluded.naver_lowest,
          danawa_lowest=excluded.danawa_lowest,
@@ -240,7 +242,8 @@ export function upsertPricePoint(
          lowest_source=excluded.lowest_source,
          collected_at=excluded.collected_at,
          lowest_mall=excluded.lowest_mall,
-         source=excluded.source`
+         source=excluded.source,
+         lowest_url=excluded.lowest_url`
     )
     .run(
       productId,
@@ -252,7 +255,8 @@ export function upsertPricePoint(
       p.lowestSource ?? "",
       collectedAt,
       p.lowestMall ?? null,
-      p.source ?? null
+      p.source ?? null,
+      p.lowestUrl ?? null
     );
 }
 

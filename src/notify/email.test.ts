@@ -110,12 +110,42 @@ test("renderProduct: XSS — 리스팅의 javascript: 링크는 앵커로 렌더
 
 test("renderProduct: XSS — 종합 최저가도 불안전 링크면 앵커 없이 값만", () => {
   const html = renderProduct(
-    // eslint-disable-next-line no-script-url
-    summary({ topListings: [listing({ link: "javascript:alert(1)" })] }),
+    summary({
+      // eslint-disable-next-line no-script-url
+      latest: { ...summary().latest!, lowestUrl: "javascript:alert(1)" },
+    }),
     "cid1"
   );
   assert.ok(!html.includes("javascript:"));
   assert.ok(html.includes("<b>1,200,000원</b>")); // 앵커로 감싸지 않은 값
+});
+
+// ── 종합 최저가 링크 정합성 (2026-07-29) ───────────────────────
+// 표시 금액과 착지 페이지 금액이 어긋나던 버그의 회귀 방지.
+
+test("renderProduct: 종합 최저가는 lowestUrl 로 연결한다(네이버 Top1 이 아니라)", () => {
+  const html = renderProduct(
+    summary({
+      latest: { ...summary().latest!, lowestUrl: "https://prod.danawa.com/info/?pcode=123" },
+      topListings: [listing({ link: "https://smartstore.naver.com/x/1" })],
+    }),
+    "cid1"
+  );
+  // 종합 최저가 값이 다나와 링크로 감싸여 있다
+  assert.match(
+    html,
+    /<a href="https:\/\/prod\.danawa\.com\/info\/\?pcode=123"[^>]*><b>1,200,000원<\/b><\/a>/
+  );
+});
+
+test("renderProduct: lowestUrl 이 없으면 종합 최저가에 링크를 걸지 않는다", () => {
+  // 예전 동작(네이버 Top1 로 대체 연결)이 되살아나면 이 테스트가 깨진다.
+  const html = renderProduct(
+    summary({ topListings: [listing({ link: "https://smartstore.naver.com/x/1" })] }),
+    "cid1"
+  );
+  assert.ok(html.includes("<b>1,200,000원</b>"));
+  assert.ok(!html.includes(`<a href="https://smartstore.naver.com/x/1"><b>`));
 });
 
 test("renderProduct: XSS — 리뷰의 data: 링크는 앵커로 렌더하지 않는다", () => {

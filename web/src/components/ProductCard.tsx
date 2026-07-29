@@ -83,7 +83,10 @@ export function ProductCard({
   // 종합 최저가 표시용: 판매처(lowestMall)가 더 구체적이면 우선, 없으면 기존 lowestSource.
   const mallText = latest?.lowestMall ?? latest?.lowestSource ?? null;
 
-  const lowestHref = safeHref(topListings[0]?.link);
+  // 종합 최저가 링크는 반드시 '그 금액이 적힌 페이지'(lowestUrl)로만 건다.
+  // 예전엔 네이버 Top1(topListings[0])로 고정해서, 가격비교 소스가 최저가일 때
+  // 표시 금액과 착지 페이지 금액이 어긋났다. lowestUrl 이 없으면 링크를 걸지 않는다.
+  const lowestHref = safeHref(latest?.lowestUrl ?? null);
 
   useEffect(() => {
     let alive = true;

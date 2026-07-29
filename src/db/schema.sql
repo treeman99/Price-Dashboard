@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS price_points (
   avg_price      INTEGER,
   overall_lowest INTEGER,
   lowest_source  TEXT NOT NULL DEFAULT '',
+  lowest_url     TEXT,                     -- 종합 최저가가 실제로 적힌 페이지 링크
   collected_at   TEXT,                     -- ISO datetime
   PRIMARY KEY (product_id, date)
 );

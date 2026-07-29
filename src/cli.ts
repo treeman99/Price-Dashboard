@@ -38,6 +38,17 @@ async function main() {
       break;
     }
 
+    case "link": {
+      // 다나와/에누리 ref(pcode·modelno) 조사·확정. 기본은 조사만, --apply 로 확정.
+      const { linkSources, formatLinkReport } = await import("./collector/link-sources.ts");
+      const apply = process.argv.includes("--apply");
+      const idArg = process.argv.find((a) => a.startsWith("--product="));
+      const onlyProductId = idArg ? Number(idArg.split("=")[1]) : undefined;
+      const reports = await linkSources({ apply, onlyProductId });
+      console.log(formatLinkReport(reports, apply));
+      break;
+    }
+
     case "config": {
       const { warnings } = validateConfig();
       console.log(`PORT=${config.port}  COLLECT_TIME=${config.collectTime}`);
@@ -48,7 +59,10 @@ async function main() {
     }
 
     default:
-      console.log("사용법: tsx src/cli.ts <import|seed|collect|config>");
+      console.log(
+        "사용법: tsx src/cli.ts <import|seed|collect|link|config>\n" +
+          "  link [--apply] [--product=<id>]  다나와/에누리 ref 조사(기본) 또는 확정(--apply)"
+      );
       process.exit(1);
   }
 }

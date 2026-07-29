@@ -159,7 +159,23 @@ COLLECT_TIME=08:00     # HH:mm (24시간, 로컬 시각)
 ```bash
 npm run collect                 # 지금 즉시 전체 수집 (CLI)
 curl -X POST localhost:7777/api/collect   # 지금 수집 (API) — 대시보드 "지금 수집" 버튼과 동일
+
+# 다나와/에누리 ref(pcode·modelno) 조사·확정
+npx tsx src/cli.ts link                    # 조사만 (DB 변경 없음) — 어느 상품이 연결되는지 리포트
+npx tsx src/cli.ts link --apply            # 검증 통과한 후보를 확정 저장
+npx tsx src/cli.ts link --apply --product=15   # 특정 상품만
 ```
+
+### 종합 최저가는 어떻게 정해지나
+`종합 최저가 = min(네이버 최저가, 확정된 가격비교 소스의 전체최저가)` 이고, **그 금액이 적힌
+페이지 링크(`lowest_url`)를 값과 한 쌍으로** 저장한다. 네이버가 최저면 네이버 Top1 리스팅,
+다나와/에누리가 최저면 그 소스가 조회한 페이지로 연결된다.
+
+가격 소스는 **네이버 + 확정된 다나와/에누리 스크래핑뿐**이다. LLM 웹검색은 리뷰 전용이며
+가격을 내지 않는다 — 2026-07-29 라이브 실측에서 LLM 이 보고한 최저가가 자기가 준 비교
+페이지의 실제 최저가와 일치한 건 10건 중 2건뿐이었고, 나머지는 카드할인·적립 반영가라
+화면 금액과 링크 착지 금액이 어긋났다. `product_sources` 에 확정된 ref 가 없는 상품은
+네이버 단독으로 수집한다(`npx tsx src/cli.ts link` 로 연결 가능 여부를 확인).
 
 ## 주요 API
 | 메서드 | 경로 | 설명 |

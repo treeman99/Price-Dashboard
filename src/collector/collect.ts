@@ -37,15 +37,21 @@ interface Normalized {
   listings: ReturnType<typeof topListings>;
 }
 
-/** 채택 결과가 llm-websearch면 raw(ResearchResult)에서 리뷰를 꺼낸다. 다른 소스는 리뷰 없음. */
-function reviewsFromChosen(chosen: SourcePriceResult | null): Review[] {
-  if (chosen?.source !== "llm-websearch") return [];
-  const raw = chosen.raw as ResearchResult | undefined;
+/** LLM 리서치 결과에서 리뷰만 꺼낸다(가격은 쓰지 않는다 — collectProduct 주석 참고). */
+function reviewsFromResearch(res: SourcePriceResult | null): Review[] {
+  if (res?.source !== "llm-websearch") return [];
+  const raw = res.raw as ResearchResult | undefined;
   return Array.isArray(raw?.reviews) ? raw.reviews : [];
 }
 
-/** 네이버 백본 + 폴백으로 채택된 소스 결과 → PricePoint(+신규필드)로 정규화. */
-function normalize(
+/**
+ * 네이버 백본 + 채택된 스크래핑 소스 결과 → PricePoint(+신규필드)로 정규화.
+ *
+ * 종합 최저가는 값과 **그 값이 적힌 페이지 링크(lowestUrl)를 한 쌍으로** 정한다.
+ * 네이버가 최저면 네이버 Top1 리스팅, 가격비교 소스가 최저면 그 소스가 조회한 URL.
+ * (예전엔 링크를 무조건 네이버 Top1로 고정해 표시가와 착지 페이지가 어긋났다.)
+ */
+export function normalize(
   date: string,
   naver: NaverResult,
   chosen: SourcePriceResult | null
@@ -56,36 +62,40 @@ function normalize(
     : null;
 
   const chosenOverall = chosen?.overallLowest ?? null;
-  const llmRaw =
-    chosen?.source === "llm-websearch" ? (chosen.raw as ResearchResult | undefined) : undefined;
+  const listings = topListings(naver.candidates);
 
-  // danawaLowest(레거시 컬럼): 다나와 채택이면 그 전체최저가, LLM이면 research.danawaLowest.
-  const danawaLowest =
-    chosen?.source === "danawa"
-      ? chosenOverall?.price ?? null
-      : llmRaw
-        ? llmRaw.danawaLowest ?? null
-        : null;
+  // danawaLowest(레거시 컬럼): 실제 다나와 소스를 채택했을 때만 채운다.
+  // (LLM research.danawaLowest 는 페이지와 대조되지 않는 추정값이라 더 이상 쓰지 않는다.)
+  const danawaLowest = chosen?.source === "danawa" ? chosenOverall?.price ?? null : null;
 
-  // 종합 최저가 = 네이버 백본 + 채택 소스(전체최저가) 중 최저
-  const cands: Array<{ label: string; mall: string; value: number }> = [];
+  // 종합 최저가 = 네이버 백본 + 채택된 가격비교 소스 중 최저. 각 후보는 자기 링크를 들고 온다.
+  const cands: Array<{ label: string; mall: string; value: number; url: string | null }> = [];
   if (naver.naverLowest != null)
-    cands.push({ label: "네이버", mall: "네이버", value: naver.naverLowest });
+    cands.push({
+      label: "네이버",
+      mall: "네이버",
+      value: naver.naverLowest,
+      // naverLowest 는 가격 오름차순 후보의 1위 = listings[0] 이므로 Top1 링크가 곧 그 가격의 페이지다.
+      url: listings[0]?.link ?? null,
+    });
   if (chosenOverall)
     cands.push({
       label: chosenOverall.mall || "가격비교",
       mall: chosenOverall.mall || "가격비교",
       value: chosenOverall.price,
+      url: chosenOverall.url,
     });
 
   let overallLowest: number | null = null;
   let lowestSource = "";
   let lowestMall: string | null = null;
+  let lowestUrl: string | null = null;
   for (const s of cands) {
     if (overallLowest == null || s.value < overallLowest) {
       overallLowest = s.value;
       lowestSource = s.label;
       lowestMall = s.mall;
+      lowestUrl = s.url;
     }
   }
 
@@ -98,9 +108,10 @@ function normalize(
       overallLowest,
       lowestSource,
       lowestMall,
+      lowestUrl,
       source: chosen?.source ?? null,
     },
-    listings: topListings(naver.candidates),
+    listings,
   };
 }
 
@@ -112,8 +123,15 @@ interface SourceBundle {
 /**
  * 단일 상품 수집.
  * - 네이버 = 결정적 백본(실패 시 throw → 상위에서 per-product 격리).
- * - 가격비교 = 확정된 product_sources(danawa→enuri) 우선순위 폴백 + 최종 LLM 폴백.
- *   확정 스크래핑 소스가 없으면(§7-3 degrade) 네이버 백본 + LLM 폴백만으로 수집.
+ * - 가격비교 = 확정된 product_sources(danawa→enuri) 우선순위 폴백. **스크래핑 소스만** 가격을 낸다.
+ * - LLM 웹검색 = 리뷰 전용. 가격은 절대 채택하지 않는다.
+ *
+ * ⚠️ 2026-07-29: LLM 웹검색을 가격 소스에서 뺐다. 라이브 실측(10개 상품)에서 LLM 이 보고한
+ *    "전체 최저가"가 자기가 준 비교 페이지의 실제 최저가와 일치한 건 2/10 뿐이었다.
+ *    나머지는 카드할인·적립 반영가나 근거 없는 값이라, 대시보드에 뜬 금액과 링크를 눌러
+ *    도착한 페이지의 금액이 서로 달랐다(예: 벤큐 MA320UP 990,000 표시 / 페이지 1,040,000).
+ *    다나와 info·에누리 detail 스크래퍼는 가격과 링크를 같은 페이지에서 뽑으므로 이 불일치가
+ *    구조적으로 발생하지 않는다. 확정된 스크래핑 ref 가 없으면 네이버 단독으로 간다.
  */
 async function collectProduct(
   product: Product,
@@ -124,23 +142,15 @@ async function collectProduct(
   // 네이버 백본 (결정적) — 실패 시 throw
   const naver = await fetchNaverPrice(product);
 
-  // 폴백 ref 구성
+  // 가격 ref = 확정된 스크래핑 소스만 (danawa → enuri)
   const confirmed = listConfirmedSources(product.id);
-  const scrapeRefs: SourceRef[] = confirmed
+  const refs: SourceRef[] = confirmed
     .filter((s) => s.source === "danawa" || s.source === "enuri")
     .map((s) => ({ source: s.source as SourceId, refId: s.refId, url: s.url }));
-  const llmRef: SourceRef = {
-    source: "llm-websearch",
-    refId: null,
-    url: `llm-websearch:${product.id}`,
-  };
-  const refs: SourceRef[] = scrapeRefs.length > 0 ? [...scrapeRefs, llmRef] : [llmRef];
 
-  const llmSource = createLlmWebsearchSource(product);
   const getSource = (id: SourceId): PriceSource | null => {
     if (id === "danawa") return sources.danawa;
     if (id === "enuri") return sources.enuri;
-    if (id === "llm-websearch") return llmSource;
     return null;
   };
 
@@ -150,21 +160,55 @@ async function collectProduct(
     set: (ref, result) => putSourceFetchCache(product.id, ref.source, date, result),
   };
 
-  const { chosen } = await collectFromSources({
-    refs,
-    getSource,
-    cache,
-    label: product.name,
-    onBlocked: (r) =>
-      log.warn(`소스 차단 [${product.name}/${r.source}] → 당일 스킵 + 폴백`),
-  });
+  const { chosen } = refs.length
+    ? await collectFromSources({
+        refs,
+        getSource,
+        cache,
+        label: product.name,
+        onBlocked: (r) =>
+          log.warn(`소스 차단 [${product.name}/${r.source}] → 당일 스킵 + 폴백`),
+      })
+    : { chosen: null };
+
+  if (!refs.length) {
+    log.info(`[${product.name}] 확정된 가격비교 ref 없음 → 네이버 단독 수집`);
+  }
 
   const { point, listings } = normalize(date, naver, chosen);
   upsertPricePoint(product.id, point, collectedAt);
   replaceListings(product.id, date, listings);
-  const reviews = reviewsFromChosen(chosen);
+
+  // 리뷰는 별도 경로(LLM 웹검색). 가격 채택과 완전히 분리돼 있고, 실패해도 가격 수집엔 영향 없다.
+  const research = await fetchResearchReviews(product, cache);
+  const reviews = reviewsFromResearch(research);
   if (reviews.length) replaceReviews(product.id, date, reviews);
   return point;
+}
+
+/**
+ * 리뷰 전용 LLM 웹리서치 1회(당일 캐시 공유). 가격 필드는 호출자가 쓰지 않는다.
+ * 어떤 실패도 삼킨다 — 리뷰는 부가정보라 가격 시계열을 끊으면 안 된다.
+ */
+async function fetchResearchReviews(
+  product: Product,
+  cache: FetchCache
+): Promise<SourcePriceResult | null> {
+  const ref: SourceRef = {
+    source: "llm-websearch",
+    refId: null,
+    url: `llm-websearch:${product.id}`,
+  };
+  const cached = cache.get(ref);
+  if (cached) return cached;
+  try {
+    const result = await createLlmWebsearchSource(product).fetch(ref);
+    cache.set(ref, result);
+    return result;
+  } catch (e) {
+    log.warn(`리뷰 리서치 실패 [${product.name}]: ${(e as Error).message}`);
+    return null;
+  }
 }
 
 let priceCollecting = false;
