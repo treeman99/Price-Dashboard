@@ -6,6 +6,7 @@ import {
   assertSetShape,
   countScored,
   ensureSeedStrategy,
+  generationStartRound,
   generationStats,
   getLottoState,
   insertPrediction,
@@ -92,9 +93,19 @@ export function nextRoundToPredict(run = getLottoState().run): number | null {
  *
  * 조건을 "채점 수 % 50" 이 아니라 "현재 세대가 몇 회차를 소화했는가"로 잡은 이유:
  * 중간에 실험을 초기화하거나 회차가 끊겼을 때도 세대 길이가 일정하게 유지된다.
+ *
+ * ⚠️ 그 '몇 회차'를 **이번 바퀴 기준으로** 세어야 한다. `current.fromRound` 로 재면
+ * 반복에서 물려받은 세대의 시작 회차가 직전 바퀴의 값(예: 1201)이라 새 커서(1)보다 커져
+ * 조건이 영원히 거짓이 되고, 진화가 0회인 채로 바퀴가 끝난다(store.generationStartRound 주석).
+ * DB 에서 유도하므로 일시정지·재시작 후에도 정확하다.
  */
-function shouldEvolve(cursor: number, current: LottoStrategy): boolean {
-  return cursor - current.fromRound >= LOTTO_EVOLVE_EVERY;
+export function shouldEvolve(cursor: number, generationStart: number): boolean {
+  return cursor - generationStart >= LOTTO_EVOLVE_EVERY;
+}
+
+/** 현재 세대가 **이번 바퀴에서** 시작한 회차. 아직 한 회차도 안 돌았으면 지금 커서가 시작이다. */
+function generationStartFor(run: number, cursor: number, current: LottoStrategy): number {
+  return generationStartRound(run, current.version) ?? cursor;
 }
 
 /**
@@ -244,7 +255,7 @@ export async function runExperiment(trigger: string): Promise<RunResult> {
       }
 
       // 세대 개정. 실패해도 세대는 넘어가고, 한도 소진일 때만 여기서 멈춘다.
-      if (shouldEvolve(cursor, strategy)) {
+      if (shouldEvolve(cursor, generationStartFor(run, cursor, strategy))) {
         const next = await evolve(run, cursor, strategy);
         if (!next) {
           // ⚠️ 에이전트 호출은 최대 10분 await 한다. 그동안 사용자가 일시정지를 눌렀다면

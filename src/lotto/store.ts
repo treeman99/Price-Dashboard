@@ -217,6 +217,22 @@ export function countScored(run: number): number {
   return Number(row?.n ?? 0);
 }
 
+/**
+ * **이번 바퀴에서** 이 세대가 처음 적용된 회차. 아직 한 회차도 안 돌았으면 null.
+ *
+ * 세대 개정 시점을 `strategy.fromRound` 로 재면 안 된다는 것이 여기 있는 이유다:
+ * fromRound 는 그 세대가 만들어진 **바퀴**의 회차 번호라, 반복(run 2 이상)에서 직전 바퀴의
+ * 세대를 물려받으면 값이 새 커서보다 한참 크다(실측: v25.fromRound=1201 vs 커서 1).
+ * 그러면 `커서 - fromRound >= 50` 이 영원히 거짓이 되어 **진화가 한 번도 일어나지 않고**
+ * 1234회차가 통째로 한 세대로 끝난다(2026-07-29 실측: 136ms 만에 완주, 개정 0회).
+ */
+export function generationStartRound(run: number, version: number): number | null {
+  const row = db()
+    .prepare(`SELECT MIN(round) AS lo FROM lotto_predictions WHERE run = ? AND version = ?`)
+    .get(run, version) as unknown as { lo: number | null } | undefined;
+  return row?.lo ?? null;
+}
+
 /** DB 에 기록이 있는 반복 번호들(오름차순). */
 export function listRuns(): number[] {
   const rows = db()
@@ -476,7 +492,10 @@ export function runStats(currentRun: number): LottoRunStat[] {
         avgScore: agg.avgScore,
         avgMatches: agg.avgMatches,
         bestMatch: agg.bestMatch,
-        inProgress: run === currentRun,
+        // ⚠️ '현재 바퀴인가'만으로는 부족하다. 완주해도 state.run 은 그대로라 진행중으로 남는다
+        // (실측: 진행률은 1234/1234 인데 표는 '진행중'). 완주(done)면 끝난 것이다.
+        // paused 는 진행중이 맞다 — 재개하면 이어서 돌기 때문이다.
+        inProgress: run === currentRun && getLottoState().status !== "done",
       };
     });
 }

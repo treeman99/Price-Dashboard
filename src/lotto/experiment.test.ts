@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { historyBefore } from "./experiment.ts";
+import { historyBefore, shouldEvolve } from "./experiment.ts";
 import { SEED_SPEC, estimateHit3Rate, generateSets, makeRng, normalizeSpec } from "./strategy.ts";
 import type { LottoDraw } from "../../shared/lotto.ts";
 import {
@@ -29,6 +29,29 @@ test("historyBefore 는 회차가 끊겨 있어도 경계를 지킨다", () => {
   const draws = [1, 2, 7, 8].map(draw); // 3~6 결손
   assert.deepEqual(historyBefore(draws, 7).map((d) => d.round), [1, 2]);
   assert.deepEqual(historyBefore(draws, 5).map((d) => d.round), [1, 2]);
+});
+
+/**
+ * **실험 반복 회귀 테스트.**
+ *
+ * 개정 시점을 `strategy.fromRound` 로 재던 시절, 반복(run 2)에서 직전 바퀴의 세대를 물려받으면
+ * fromRound 가 1201 인데 새 커서는 1이라 `1 - 1201 >= 50` 이 영원히 거짓이었다.
+ * 결과: 2바퀴째가 **진화 0회로 136ms 만에 완주**했다(2026-07-29 실측). 사용자 눈에는
+ * "반복을 누르면 바로 종료로 간다"로 보였다. 기준을 '이번 바퀴에서 이 세대가 시작한 회차'로
+ * 바꾼 것이 수정이고, 아래가 그 계약이다.
+ */
+test("세대 개정은 '이번 바퀴에서 세대가 시작한 회차' 기준으로 50회차마다 발화한다", () => {
+  // 옛 방식이 만들던 상태 — 물려받은 fromRound(1201)를 그대로 쓰면 발화하지 않는다.
+  assert.equal(shouldEvolve(1, 1201), false);
+  assert.equal(shouldEvolve(1234, 1201), false);
+
+  // 이번 바퀴 시작(1) 기준이면 51회차에서 정상 발화한다.
+  assert.equal(shouldEvolve(50, 1), false);
+  assert.equal(shouldEvolve(51, 1), true);
+
+  // 세대가 51에서 시작했으면 101에서 다음 개정.
+  assert.equal(shouldEvolve(100, 51), false);
+  assert.equal(shouldEvolve(101, 51), true);
 });
 
 /** 균등 무작위 추첨 회차를 만든다(시드 고정 — 테스트가 흔들리지 않게). */
