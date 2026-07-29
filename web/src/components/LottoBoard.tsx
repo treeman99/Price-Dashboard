@@ -474,9 +474,19 @@ export function LottoBoard() {
           </div>
         </div>
         <div className="mt-4 border-t pt-3 text-xs text-muted-foreground">
-          현재 세대 <span className="font-semibold text-foreground">v{currentVersion ?? "-"}</span>
-          <span className="mx-1.5">·</span>
-          무작위 기준선 {snap.baselinePerRound.toFixed(2)}/회차
+          <div>
+            현재 세대 <span className="font-semibold text-foreground">v{currentVersion ?? "-"}</span>
+            <span className="mx-1.5">·</span>
+            무작위 기준선 {snap.baselinePerRound.toFixed(2)}/회차
+          </div>
+          {/* 오독 방지 캡션 — 곡선이 기준선 위로 잠깐 올라간 구간을 "알고리즘이 통했다"로 읽는
+              게 이 화면의 가장 흔한 오독이다. 결론(예측 가능/불가능)은 내리지 않고, 기대값은
+              전략과 무관하게 고정이고 전략은 분산만 바꾼다는 사실만 남겨 둔다(팀 리드 지시). */}
+          <p className="mt-1.5 leading-relaxed">
+            기준선은 어떤 전략을 써도 수학적으로 동일합니다 — 전략이 바꿀 수 있는 것은 기대값이
+            아니라 <span className="font-semibold text-foreground">분산</span>뿐입니다. 기준선
+            위아래로 흔들리는 구간은 대부분 잡음입니다.
+          </p>
         </div>
       </Card>
 
