@@ -12,10 +12,12 @@ import { isCodexUsageLimitNotice } from "../util/codex-query.ts";
 import { LOTTO_BASELINE_PER_ROUND } from "../../shared/lotto.ts";
 
 const ctx: LottoEvolveContext = {
+  run: 1,
   nextRound: 51,
   scoredRounds: 50,
   current: {
     version: 1,
+    run: 1,
     fromRound: 1,
     spec: SEED_SPEC,
     rationale: "실험의 기준점.",
@@ -36,6 +38,26 @@ const ctx: LottoEvolveContext = {
       worstScore: -42,
       avgMatches: 0.94,
       zeroSetRate: 0.33,
+      hit3Rate: 0.32,
+      hit3Rounds: 16,
+      hit3Sets: 19,
+      bestMatch: 4,
+    },
+  ],
+  runs: [
+    {
+      run: 1,
+      fromRound: 1,
+      toRound: 50,
+      rounds: 50,
+      firstVersion: 1,
+      lastVersion: 1,
+      hit3Rate: 0.32,
+      hit3Rounds: 16,
+      avgScore: -10.4,
+      avgMatches: 0.94,
+      bestMatch: 4,
+      inProgress: true,
     },
   ],
   recent: [
@@ -49,24 +71,38 @@ test("모델은 프로젝트 공용 설정과 무관하게 Opus 5 로 고정된�
   assert.equal(LOTTO_AGENT_MODEL, "claude-opus-5");
 });
 
-test("프롬프트에 채점 규칙·기준선·현재 사양이 모두 실린다", () => {
+test("프롬프트가 목표 지표(3+ 적중률)를 규칙·현재 사양과 함께 싣는다", () => {
   const p = buildEvolvePrompt(ctx);
   assert.match(p, /보너스 1개 = 7개/);
-  assert.match(p, /0개=-6/);
-  assert.match(p, new RegExp(LOTTO_BASELINE_PER_ROUND.toFixed(2).replace(".", "\\.")));
+  assert.match(p, /3\+ 적중률/);
   assert.match(p, /51회차부터/);
   assert.match(p, /"explore": 1/); // 현재 사양 JSON
-  assert.match(p, /max-coverage/); // 노브 설명서
+  assert.match(p, /maxSetOverlap/); // 노브 설명서
   assert.match(p, /walk-forward/);
+  assert.match(p, /1번째 바퀴/);
 });
 
-test("세대 성적표가 기준선 대비와 함께 표로 들어간다", () => {
+/**
+ * 답을 알려주면 실험이 아니라 받아쓰기가 된다. 우리는 최적 구조가
+ * '45개 전부 커버 + 세트간 중복 1' 이고 천장이 36.4% 라는 것을 이미 알고 있지만,
+ * 그 값들이 프롬프트에 새면 에이전트의 '발견'은 아무것도 증명하지 못한다.
+ */
+test("정답(최적 구조·천장 수치)을 프롬프트에 흘리지 않는다", () => {
   const p = buildEvolvePrompt(ctx);
-  assert.match(p, /\| 1 \| 1~50 \| 50 \| -10\.40 \| \+0\.60 \| 0\.94 \| 33\.0% \|/);
+  assert.doesNotMatch(p, /36\.4|36\.1|33\.36/);
+  assert.doesNotMatch(p, /천장|최적 구조|정답/);
 });
 
-test("직전 구간 점수가 회차:점수 형태로 들어간다", () => {
-  assert.match(buildEvolvePrompt(ctx), /49:-12, 50:-12/);
+test("대조군(점수·3+세트수)임을 명시해 개선 지표로 오인하지 않게 한다", () => {
+  const p = buildEvolvePrompt(ctx);
+  assert.match(p, /대조군/);
+  assert.match(p, new RegExp(LOTTO_BASELINE_PER_ROUND.toFixed(2).replace(".", "\\.")));
+});
+
+test("바퀴별·세대별 성적표가 3+ 적중률과 함께 표로 들어간다", () => {
+  const p = buildEvolvePrompt(ctx);
+  assert.match(p, /\| 1 \(진행중\) \| 50 \| v1~v1 \| \*\*32\.0%\*\* \| 16 \|/);
+  assert.match(p, /\| 1 \| 1~50 \| 50 \| \*\*32\.0%\*\* \| 16 \| 19 \| 4 \| -10\.40 \|/);
 });
 
 test("토큰 한도 오류를 알아본다", () => {

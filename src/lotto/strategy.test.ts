@@ -29,7 +29,7 @@ test("normalizeSpec 은 쓰레기 입력을 실행 가능한 사양으로 접는
     halfLife: -5,
     temperature: 0,
     explore: 5,
-    coverage: "nonsense",
+    design: { fullCover: "yes", maxSetOverlap: 99, searchSteps: -5 },
     filters: { sumMin: 1000, sumMax: -3, oddMin: 9, oddMax: -1, maxConsecutive: 0, maxPerDecade: 99 },
     쓸데없는필드: true,
   });
@@ -42,7 +42,9 @@ test("normalizeSpec 은 쓰레기 입력을 실행 가능한 사양으로 접는
   assert.equal(spec.halfLife, 1);
   assert.equal(spec.temperature, 0.05);
   assert.equal(spec.explore, 1);
-  assert.equal(spec.coverage, "independent");
+  assert.equal(spec.design.fullCover, false);
+  assert.equal(spec.design.maxSetOverlap, 6);
+  assert.equal(spec.design.searchSteps, 0);
   assert.equal(spec.filters.sumMin, 255);
   assert.equal(spec.filters.sumMax, 255); // sumMin 이상으로 강제
   assert.equal(spec.filters.oddMin, 6);
@@ -69,8 +71,13 @@ test("회차나 세대가 바뀌면 다른 세트가 나온다", () => {
 
 test("세 가지 coverage 모두 10세트 × 중복 없는 6번호를 낸다", () => {
   const history = fakeHistory(80);
-  for (const coverage of ["independent", "partition", "max-coverage"] as const) {
-    const sets = generateSets({ ...SEED_SPEC, coverage }, history, 81, 1);
+  const modes = [
+    { label: "independent", design: { fullCover: false, maxSetOverlap: 6, searchSteps: 0 } },
+    { label: "low-overlap", design: { fullCover: false, maxSetOverlap: 1, searchSteps: 0 } },
+    { label: "full-cover", design: { fullCover: true, maxSetOverlap: 6, searchSteps: 0 } },
+  ] as const;
+  for (const { label: coverage, design } of modes) {
+    const sets = generateSets({ ...SEED_SPEC, design }, history, 81, 1);
     assert.equal(sets.length, LOTTO_SET_COUNT, coverage);
     for (const s of sets) {
       assert.equal(s.length, LOTTO_PICK, coverage);
@@ -83,9 +90,14 @@ test("세 가지 coverage 모두 10세트 × 중복 없는 6번호를 낸다", (
   }
 });
 
-test("max-coverage 는 45개 번호를 전부 최소 1회 덮는다", () => {
+test("fullCover 는 45개 번호를 전부 최소 1회 덮는다", () => {
   const history = fakeHistory(80);
-  const sets = generateSets({ ...SEED_SPEC, coverage: "max-coverage" }, history, 81, 1);
+  const sets = generateSets(
+    { ...SEED_SPEC, design: { ...SEED_SPEC.design, fullCover: true } },
+    history,
+    81,
+    1
+  );
   const covered = new Set(sets.flat());
   assert.equal(covered.size, 45);
 });
@@ -104,12 +116,12 @@ test("excludeLastDraw 는 직전 회차 번호를 후보에서 뺀다", () => {
   }
 });
 
-test("excludeLastDraw 는 max-coverage 와 함께 쓰면 무시된다(45개를 덮어야 하므로)", () => {
+test("excludeLastDraw 는 fullCover 와 함께 쓰면 무시된다(45개를 덮어야 하므로)", () => {
   const history = fakeHistory(40);
   const sets = generateSets(
     {
       ...SEED_SPEC,
-      coverage: "max-coverage",
+      design: { ...SEED_SPEC.design, fullCover: true },
       filters: { ...SEED_SPEC.filters, excludeLastDraw: true },
     },
     history,

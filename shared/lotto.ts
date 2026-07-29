@@ -99,6 +99,38 @@ export const LOTTO_BASELINE_PER_SET = matchProbabilities().reduce(
  */
 export const LOTTO_BASELINE_PER_ROUND = LOTTO_BASELINE_PER_SET * LOTTO_SET_COUNT;
 
+// ── 실험의 목표: 3+ 적중 회차 비율 ──
+//
+// 2026-07-29 목표 전환. 점수(위)는 **어떤 전략을 써도 기대값이 같다**는 것이 실데이터 1234회차로
+// 확인됐고(전 전략 |z| < 1.5), 엔진이 쓰는 6개 특징의 예측 AUC 도 전부 0.50 이었다.
+// 즉 '예측 정확도' 축에는 올릴 것이 없다.
+//
+// 반면 **"10세트 중 최소 1세트가 3개 이상 맞힌 회차의 비율"** 은 실제로 움직인다.
+// 3+ 세트의 **총 개수**는 여전히 고정이지만(기대값 선형성), 그것을 여러 회차에 흩뿌릴지 한 회차에
+// 몰아넣을지는 디자인이 정한다. 실측 범위는 5.6%(극단 집중) ~ 36.4%(최적)로 6배가 넘는다.
+
+/** 세트 1개가 3개 이상 맞힐 확률. 아래 두 상수의 출처이자 상한의 근거. */
+export const LOTTO_P_THREE_PLUS = matchProbabilities()
+  .slice(3)
+  .reduce((a, p) => a + p, 0);
+
+/**
+ * 무작위로 10세트를 뽑았을 때의 3+ 적중 회차 비율. **기준선.**
+ * 닫힌 해가 없어(세트끼리 같은 당첨번호를 공유해 독립이 아니다) 몬테카를로로 측정했다:
+ * 무작위 디자인 20개 × 40만 회 추첨 = 33.36%.
+ */
+export const LOTTO_HIT3_RANDOM = 0.3336;
+
+/**
+ * 도달 가능한 **천장**. 40만 회 검증표본에서 국소탐색이 6회 재시작 모두 36.26~36.43% 로
+ * 수렴했다. 구조적으로는 (1) 45개 번호를 전부 덮고 (2) 어떤 두 세트도 번호를 1개까지만
+ * 공유할 때 나오는 값이다(그때 10세트가 덮는 서로 다른 3조합이 이론 최대인 200개가 된다).
+ *
+ * ⚠️ 이 값을 에이전트 프롬프트에 넣지 않는다 — 답을 알려주면 실험이 아니라 받아쓰기가 된다.
+ *    화면에만 그려 사용자가 '어디까지 왔는지'를 볼 수 있게 한다.
+ */
+export const LOTTO_HIT3_CEILING = 0.3643;
+
 // ── 전략 사양 ──
 
 /**
@@ -134,12 +166,30 @@ export interface LottoStrategySpec {
   /** 균등분포와의 혼합 비율. 1이면 특징을 전부 무시한 순수 무작위. */
   explore: number;
   /**
-   * 10세트를 어떻게 배치할지.
-   * - independent  각 세트를 독립 추출 (겹침 허용)
-   * - partition    번호를 나눠 담아 세트 간 중복을 최소화
-   * - max-coverage 45개 번호가 최소 1회씩 반드시 등장하도록 배치
+   * **10세트의 배치 구조.** 목표가 3+ 적중 회차 비율로 바뀌면서 성능을 좌우하는 축이
+   * 여기로 옮겨졌다 — 번호 선택 확률(위의 weights/temperature/explore)은 실측 예측력이
+   * AUC 0.50 으로 무력하다는 것이 1234회차로 확인됐다.
+   *
+   * 예전의 `coverage: independent|partition|max-coverage` 를 대체한다. 세 모드가 전부
+   * 아래 두 노브의 특수한 조합이라 표현력이 더 넓다:
+   *   independent  ≡ { fullCover: false, maxSetOverlap: 6 }
+   *   max-coverage ≡ { fullCover: true,  maxSetOverlap: 6 }
+   *   partition    ≈ { fullCover: true,  maxSetOverlap: 1 }
    */
-  coverage: "independent" | "partition" | "max-coverage";
+  design: {
+    /** 45개 번호가 10세트 전체에서 최소 1회씩 등장하도록 강제할지. */
+    fullCover: boolean;
+    /** 서로 다른 두 세트가 공유할 수 있는 번호 개수의 상한(1~6). 6이면 제약 없음. */
+    maxSetOverlap: number;
+    /**
+     * 목적함수에 대한 **국소탐색 스텝 수**(0이면 탐색 안 함).
+     *
+     * ⚠️ 이 탐색은 **미래 회차를 보지 않는다.** 당첨번호가 균등 무작위라는 사실만으로
+     * 목적함수(3+ 적중 확률)를 사전에 계산할 수 있어서, 고정 시드로 뽑은 가상 추첨 표본
+     * 위에서 디자인을 다듬는다. walk-forward 규칙을 어기지 않는다.
+     */
+    searchSteps: number;
+  };
   /** 뽑은 세트가 통과해야 하는 조건들. 통과 못 하면 재추출(상한 도달 시 조건 완화). */
   filters: {
     /** 6개 합계 하한(이론 최소 21) */
@@ -158,9 +208,36 @@ export interface LottoStrategySpec {
   };
 }
 
+/**
+ * 반복 1회(= 전 회차를 한 바퀴 돈 것)의 요약.
+ *
+ * '실험 반복'은 초기화가 아니다. 전략 세대는 계속 이어지고 이전 반복의 기록도 남는다.
+ * 따라서 반복 간 비교가 이 실험의 핵심 증거가 된다 — 2회차 바퀴가 1회차 바퀴보다 나은가?
+ */
+export interface LottoRunStat {
+  run: number;
+  fromRound: number;
+  toRound: number;
+  rounds: number;
+  /** 이 반복에서 쓰인 전략 세대 범위 */
+  firstVersion: number;
+  lastVersion: number;
+  /** **목표 지표** */
+  hit3Rate: number;
+  hit3Rounds: number;
+  /** 대조군(전략과 무관하게 고정되어야 한다) */
+  avgScore: number;
+  avgMatches: number;
+  bestMatch: number;
+  /** 아직 진행 중인 반복인지 */
+  inProgress: boolean;
+}
+
 /** 전략 세대 1개. */
 export interface LottoStrategy {
   version: number;
+  /** 이 세대가 만들어진 반복 회차 */
+  run: number;
   /** 이 세대가 적용되기 시작한 회차 */
   fromRound: number;
   spec: LottoStrategySpec;
@@ -216,6 +293,14 @@ export interface LottoScorePoint {
   /** 최근 50회차 이동평균(회차당 점수) */
   movingAvg: number;
   version: number;
+  /** 이 회차에 3개 이상 맞힌 세트가 하나라도 있었는가(= 목표 지표의 1회 관측) */
+  hit3: boolean;
+  /** 최근 LOTTO_HIT3_WINDOW 회차의 3+ 적중 회차 비율. **이 실험의 주인공 계열.** */
+  hit3Rate: number;
+  /** 1회차부터의 누적 3+ 적중 회차 비율 */
+  cumHit3Rate: number;
+  /** 이 회차에서 한 세트가 맞힌 최대 개수 */
+  bestMatch: number;
 }
 
 /** 세대별 성적 요약. 에이전트 프롬프트와 화면이 같은 표를 본다. */
@@ -232,6 +317,14 @@ export interface LottoGenerationStat {
   avgMatches: number;
   /** 0개 맞힌 세트의 비율 (0~1) */
   zeroSetRate: number;
+  /** **목표 지표** — 3개 이상 맞힌 세트가 있었던 회차의 비율 (0~1) */
+  hit3Rate: number;
+  /** 3+ 적중 회차 수 */
+  hit3Rounds: number;
+  /** 3+ 를 달성한 세트의 총 개수(기대값은 전략과 무관하게 고정 — 대조군) */
+  hit3Sets: number;
+  /** 이 세대에서 한 세트가 맞힌 최대 개수 */
+  bestMatch: number;
 }
 
 /** 실험 진행 상태. */
@@ -242,6 +335,11 @@ export type LottoPauseReason = "usage-limit" | "manual" | "error" | null;
 
 export interface LottoState {
   status: LottoStatus;
+  /**
+   * 지금 몇 번째 바퀴인가(1부터). '실험 반복'을 누를 때마다 +1.
+   * ⚠️ 초기화(reset)와 다르다 — 반복은 이전 기록과 전략 세대를 그대로 두고 새 바퀴만 시작한다.
+   */
+  run: number;
   pauseReason: LottoPauseReason;
   /** 토큰 한도로 멈췄을 때 자동 재개 예정 시각(ISO). 그 외에는 null. */
   resumeAt: string | null;
@@ -270,10 +368,21 @@ export interface LottoSnapshot {
   cumScore: number;
   /** 회차당 평균 점수 */
   avgScore: number | null;
-  /** 무작위 기준선(회차당) */
+  /** 무작위 기준선(회차당 점수) — 이제는 '전략이 못 움직인다'를 보여주는 대조군이다 */
   baselinePerRound: number;
+  /** **목표 지표** — 전체 3+ 적중 회차 비율 */
+  hit3Rate: number | null;
+  /** 3+ 적중 회차 수 */
+  hit3Rounds: number;
+  /** 무작위 디자인의 3+ 적중 회차 비율(기준선) */
+  hit3Random: number;
+  /** 도달 가능한 천장 */
+  hit3Ceiling: number;
   strategies: LottoStrategy[];
   generations: LottoGenerationStat[];
+  /** 반복별 요약(오래된 순). 반복이 1회뿐이면 항목 1개. */
+  runs: LottoRunStat[];
+  /** 차트용 점 — **현재 반복**만. 반복이 쌓여도 차트가 뒤엉키지 않게 한다. */
   points: LottoScorePoint[];
   /** 최근 회차 상세(당첨번호 포함). 최신이 뒤에 오는 오름차순. */
   recentResults: LottoRecentRound[];
@@ -286,3 +395,12 @@ export const LOTTO_EVOLVE_EVERY = 50;
 
 /** 이동평균 창. 차트와 세대 요약이 같은 값을 쓴다. */
 export const LOTTO_MOVING_AVG_WINDOW = 50;
+
+/**
+ * 3+ 적중률 이동평균 창.
+ *
+ * 점수(50)보다 넓게 잡는다. 목표 지표는 회차마다 0/1 뿐이라, 기준선 33.4% 와 천장 36.4% 의
+ * 차이(3%p)를 보려면 표본이 훨씬 많아야 한다 — 50회차 창의 표준오차는 6.7%p 로 차이의
+ * 두 배가 넘어 곡선이 의미 없이 요동친다. 200회차면 3.3%p 로 줄어든다.
+ */
+export const LOTTO_HIT3_WINDOW = 200;

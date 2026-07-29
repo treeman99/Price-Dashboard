@@ -73,7 +73,7 @@ export const SEED_SPEC: LottoStrategySpec = {
   halfLife: 50,
   temperature: 1,
   explore: 1,
-  coverage: "independent",
+  design: { fullCover: false, maxSetOverlap: LOTTO_PICK, searchSteps: 0 },
   filters: {
     sumMin: SUM_MIN,
     sumMax: SUM_MAX,
@@ -105,8 +105,7 @@ export function normalizeSpec(raw: unknown): LottoStrategySpec {
   const oddMin = clampInt(f.oddMin, 0, LOTTO_PICK, 0);
   const oddMax = clampInt(f.oddMax, oddMin, LOTTO_PICK, LOTTO_PICK);
 
-  const coverage =
-    r.coverage === "partition" || r.coverage === "max-coverage" ? r.coverage : "independent";
+  const d = (r.design ?? {}) as Record<string, unknown>;
 
   return {
     weights: {
@@ -122,7 +121,13 @@ export function normalizeSpec(raw: unknown): LottoStrategySpec {
     // 온도 하한 0.05: 더 낮추면 exp 가 폭주해 확률이 사실상 1개 번호로 붕괴한다.
     temperature: clamp(r.temperature, 0.05, 20, 1),
     explore: clamp(r.explore, 0, 1, 0),
-    coverage,
+    design: {
+      fullCover: d.fullCover === true,
+      maxSetOverlap: clampInt(d.maxSetOverlap, 1, LOTTO_PICK, LOTTO_PICK),
+      // 상한 60: 한 세대당 한 번만 도는 계산이지만(디자인 캐시), 스텝당 234개 후보 ×
+      // 평가표본 이라 무한정 키우면 세대 개정이 몇 분씩 걸린다. 실측상 30스텝이면 수렴한다.
+      searchSteps: clampInt(d.searchSteps, 0, 60, 0),
+    },
     filters: {
       sumMin,
       sumMax,
@@ -322,6 +327,36 @@ export function generateSets(
   round: number,
   version: number
 ): number[][] {
+  // 국소탐색을 켜면 디자인은 **구조물**이지 회차별 산출물이 아니다. 목적함수가 과거와
+  // 무관하므로 회차마다 다시 최적화할 이유가 없고(같은 답이 나온다), 1234회차 × 수 초는
+  // 실험을 몇 시간짜리로 만든다. 세대당 한 번만 계산해 캐시한다.
+  if (spec.design.searchSteps > 0) {
+    const key = `${version}:${JSON.stringify(spec)}`;
+    const cached = designCache.get(key);
+    if (cached) return cached.map((s) => [...s]);
+    const built = buildDesign(spec, history, round, version);
+    const tuned = optimizeDesign(built, spec.design.searchSteps, makeRng(seedFor(version, 7919)));
+    designCache.set(key, tuned);
+    return tuned.map((s) => [...s]);
+  }
+  return buildDesign(spec, history, round, version);
+}
+
+/** 세대당 1개. 실험 1회 완주에 최대 25개라 상한을 둘 필요가 없다. */
+const designCache = new Map<string, number[][]>();
+
+/** 캐시 비우기(초기화 시 호출 — 안 지우면 같은 version 번호가 옛 디자인을 물려받는다). */
+export function clearDesignCache(): void {
+  designCache.clear();
+}
+
+/** 확률·필터·구조 제약을 만족하는 10세트를 만든다(탐색 전 단계). */
+function buildDesign(
+  spec: LottoStrategySpec,
+  history: LottoDraw[],
+  round: number,
+  version: number
+): number[][] {
   const rng = makeRng(seedFor(round, version));
   const features = buildFeatures(history, spec);
   const probs = numberProbabilities(features, spec);
@@ -330,20 +365,17 @@ export function generateSets(
 
   // excludeLastDraw 는 풀에서 빼는 방식으로 건다. 필터로 걸면 재추출이 거의 매번 실패해
   // 상한만 태우고 결국 완화되는데, 그러면 옵션이 켜져 있어도 실질 효과가 없다.
-  // ⚠️ max-coverage 와는 양립할 수 없다(45개를 다 덮어야 하는데 7개를 빼면 불가능) →
-  //    그 모드에서는 무시한다.
+  // ⚠️ fullCover 와는 양립할 수 없다(45개를 다 덮어야 하는데 7개를 빼면 불가능) →
+  //    그때는 무시한다.
   const excluded =
-    spec.filters.excludeLastDraw && spec.coverage !== "max-coverage" && history.length > 0
+    spec.filters.excludeLastDraw && !spec.design.fullCover && history.length > 0
       ? new Set(winningNumbers(history[history.length - 1]))
       : new Set<number>();
   const pool = all.filter((n) => !excluded.has(n));
 
-  const sets: number[][] =
-    spec.coverage === "max-coverage"
-      ? drawMaxCoverage(all, probs, rng)
-      : spec.coverage === "partition"
-        ? drawPartition(pool, probs, spec, rng)
-        : Array.from({ length: LOTTO_SET_COUNT }, () => drawSet(pool, probs, spec, rng));
+  const sets = spec.design.fullCover
+    ? drawFullCover(all, probs, spec, rng)
+    : drawFree(pool, probs, spec, rng);
 
   // 같은 세트를 두 번 내는 것은 낭비다(같은 운명을 두 번 산다). 중복이면 몇 번 다시 뽑는다.
   const seen = new Set<string>();
@@ -359,37 +391,57 @@ export function generateSets(
   return sets;
 }
 
+/** 두 세트가 공유하는 번호 개수. */
+function overlap(a: readonly number[], b: readonly number[]): number {
+  const s = new Set(a);
+  return b.reduce((n, x) => n + (s.has(x) ? 1 : 0), 0);
+}
+
+/** maxSetOverlap 제약을 만족하는지. */
+function overlapOk(candidate: number[], chosen: number[][], max: number): boolean {
+  return chosen.every((s) => overlap(s, candidate) <= max);
+}
+
 /**
- * partition — 번호를 나눠 담아 세트 간 중복을 최소화한다.
- * 45개로는 7세트(42개)까지만 겹치지 않게 채울 수 있어, 소진되면 풀을 다시 채운다.
+ * 제약 없는 배치 — 각 세트를 독립 추출하되 maxSetOverlap 을 지키려 시도한다.
+ * 제약을 못 지키면 그대로 쓴다(해가 없는 제약에서 멈추지 않는다 — 필터와 같은 원칙).
  */
-function drawPartition(
+function drawFree(
   pool: number[],
   probs: number[],
   spec: LottoStrategySpec,
   rng: () => number
 ): number[][] {
   const sets: number[][] = [];
-  let remaining = [...pool];
+  const max = spec.design.maxSetOverlap;
   for (let i = 0; i < LOTTO_SET_COUNT; i++) {
-    if (remaining.length < LOTTO_PICK) remaining = [...pool];
-    const set = drawSet(remaining, probs, spec, rng);
-    sets.push(set);
-    const used = new Set(set);
-    remaining = remaining.filter((n) => !used.has(n));
+    let chosen: number[] | null = null;
+    for (let t = 0; t < 200; t++) {
+      const c = drawSet(pool, probs, spec, rng);
+      if (max >= LOTTO_PICK || overlapOk(c, sets, max)) {
+        chosen = c;
+        break;
+      }
+    }
+    sets.push(chosen ?? drawSet(pool, probs, spec, rng));
   }
   return sets;
 }
 
 /**
- * max-coverage — 45개 번호가 **최소 1회씩** 반드시 등장하도록 배치한다.
+ * fullCover — 45개 번호가 **최소 1회씩** 반드시 등장하도록 배치한다.
  *
  * 10세트 × 6칸 = 60칸이므로 45개를 모두 넣고도 15칸이 남는다. 45개를 먼저 흩뿌린 뒤
- * 남은 칸을 확률로 채운다. 필터는 여기서 강제하지 않는다 — 커버리지가 우선 제약이고,
- * 둘을 동시에 만족시키려 하면 대부분의 사양에서 해가 없어 조용히 완화된다.
+ * 남은 칸을 확률로 채우되, 채울 때 maxSetOverlap 을 지키려 시도한다.
+ * 필터는 여기서 강제하지 않는다 — 커버리지가 우선 제약이고, 둘을 동시에 만족시키려 하면
+ * 대부분의 사양에서 해가 없어 조용히 완화된다.
  */
-function drawMaxCoverage(all: number[], probs: number[], rng: () => number): number[][] {
-  // 확률 가중 셔플: 확률이 높은 번호가 앞쪽(= 먼저 배정)에 오게 한다.
+function drawFullCover(
+  all: number[],
+  probs: number[],
+  spec: LottoStrategySpec,
+  rng: () => number
+): number[][] {
   const order = sampleWithout(all, probs, all.length, rng);
   // sampleWithout 은 정렬해서 돌려주므로 추출 순서가 사라진다 → 여기서만 순서가 필요하니
   // 다시 섞되, 시드 RNG 로 결정론을 유지한다.
@@ -401,14 +453,179 @@ function drawMaxCoverage(all: number[], probs: number[], rng: () => number): num
   const sets: number[][] = Array.from({ length: LOTTO_SET_COUNT }, () => []);
   order.forEach((n, i) => sets[i % LOTTO_SET_COUNT].push(n));
 
-  for (const set of sets) {
+  const max = spec.design.maxSetOverlap;
+  for (let si = 0; si < sets.length; si++) {
+    const set = sets[si];
     while (set.length < LOTTO_PICK) {
       const used = new Set(set);
       const avail = all.filter((n) => !used.has(n));
-      const [pick] = sampleWithout(avail, probs, 1, rng);
+      const others = sets.filter((_, i) => i !== si);
+      // 제약을 지키는 후보를 우선 고른다. 없으면 제약을 포기하고 아무거나 채운다.
+      const legal =
+        max >= LOTTO_PICK ? avail : avail.filter((n) => overlapOk([...set, n], others, max));
+      const from = legal.length > 0 ? legal : avail;
+      const [pick] = sampleWithout(from, probs, 1, rng);
       set.push(pick);
     }
     set.sort((a, b) => a - b);
   }
   return sets;
+}
+
+// ── 목적함수 직접 최적화 ──
+//
+// 목표가 '3+ 적중 회차 비율' 로 바뀌면서 처음으로 **사전에 계산 가능한 목적함수**가 생겼다.
+// 당첨번호가 균등 무작위라는 사실만 있으면 어떤 디자인의 적중 확률도 계산할 수 있다 —
+// 과거 회차를 볼 필요가 없고, 따라서 미래를 엿보는 것도 아니다.
+
+/**
+ * 가상 추첨 표본은 **두 벌**을 쓴다.
+ *
+ * ⚠️ 탐색에 쓴 표본으로 평가하면 과적합된 숫자가 나온다 — 실측(2026-07-29)에서 같은 표본을
+ * 쓰자 국소탐색이 39.3% 를 보고했는데, 독립 표본으로 재면 36% 대였다. 도달 가능한 천장이
+ * 36.4% 인데 그걸 넘는 값이 화면에 뜨면 "천장을 뚫었다"는 거짓 결론이 된다.
+ * 그래서 탐색은 SEARCH 표본에서만 하고, 보고되는 값은 반드시 EVAL(홀드아웃) 표본으로 낸다.
+ */
+const SEARCH_SAMPLES = 30000;
+const EVAL_SAMPLES = 60000;
+const SEARCH_SEED = 0x5ea4c;
+const EVAL_SEED = 0x10770;
+
+interface DrawSample {
+  lo: Int32Array;
+  hi: Int32Array;
+  n: number;
+}
+let evalSample: DrawSample | null = null;
+let searchSample: DrawSample | null = null;
+
+/** 45비트를 32비트 2개로 나눠 담는다. popcount 로 교집합 크기를 즉시 얻으려는 것. */
+function popcount(x: number): number {
+  x = x - ((x >> 1) & 0x55555555);
+  x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+  x = (x + (x >> 4)) & 0x0f0f0f0f;
+  return (x * 0x01010101) >> 24;
+}
+
+function buildSample(seed: number, n: number): DrawSample {
+  const rng = makeRng(seed);
+  const lo = new Int32Array(n);
+  const hi = new Int32Array(n);
+  const pool = new Int32Array(LOTTO_MAX_NUMBER);
+  const winCount = 7; // 본번호 6 + 보너스 1 (채점 규칙과 동일해야 한다)
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < LOTTO_MAX_NUMBER; j++) pool[j] = j;
+    for (let j = LOTTO_MAX_NUMBER - 1; j > 0; j--) {
+      const k = Math.floor(rng() * (j + 1));
+      const t = pool[j];
+      pool[j] = pool[k];
+      pool[k] = t;
+    }
+    let L = 0;
+    let H = 0;
+    for (let j = 0; j < winCount; j++) {
+      const b = pool[j];
+      if (b < 32) L |= 1 << b;
+      else H |= 1 << (b - 32);
+    }
+    lo[i] = L;
+    hi[i] = H;
+  }
+  return { lo, hi, n };
+}
+
+/** 보고·검증용 홀드아웃 표본. 탐색은 절대 이걸 보지 않는다. */
+function getEvalSample(): DrawSample {
+  if (!evalSample) evalSample = buildSample(EVAL_SEED, EVAL_SAMPLES);
+  return evalSample;
+}
+
+/** 탐색 전용 표본(공통난수). 언덕오르기가 이 위에서만 움직인다. */
+function getSearchSample(): DrawSample {
+  if (!searchSample) searchSample = buildSample(SEARCH_SEED, SEARCH_SAMPLES);
+  return searchSample;
+}
+
+/** 세트 하나가 각 가상 추첨에서 3개 이상 맞히는지. */
+function setHitFlags(set: readonly number[], D: DrawSample): Uint8Array {
+  let L = 0;
+  let H = 0;
+  for (const v of set) {
+    const b = v - 1;
+    if (b < 32) L |= 1 << b;
+    else H |= 1 << (b - 32);
+  }
+  const out = new Uint8Array(D.n);
+  for (let i = 0; i < D.n; i++) {
+    out[i] = popcount(D.lo[i] & L) + popcount(D.hi[i] & H) >= 3 ? 1 : 0;
+  }
+  return out;
+}
+
+/**
+ * 디자인의 3+ 적중 회차 비율(**홀드아웃 표본** 기준). 화면·테스트가 인용하는 값.
+ * 탐색이 못 본 표본이라 과적합이 섞이지 않는다.
+ */
+export function estimateHit3Rate(design: number[][]): number {
+  const D = getEvalSample();
+  const flags = design.map((s) => setHitFlags(s, D));
+  let hit = 0;
+  for (let i = 0; i < D.n; i++) {
+    for (const f of flags) {
+      if (f[i]) {
+        hit += 1;
+        break;
+      }
+    }
+  }
+  return hit / D.n;
+}
+
+/**
+ * 언덕오르기 — 세트 하나의 번호 하나를 바꿔 보고 목적함수가 가장 좋아지는 수를 둔다.
+ *
+ * 같은 가상 표본을 계속 쓰는 것(공통난수)이 핵심이다. 매번 새로 뽑으면 목적함수가 흔들려
+ * 개선인지 잡음인지 구분할 수 없다.
+ */
+function optimizeDesign(start: number[][], steps: number, rng: () => number): number[][] {
+  const D = getSearchSample(); // ⚠️ 홀드아웃(EVAL)이 아니라 탐색 표본이어야 한다
+  const design = start.map((s) => [...s]);
+  const flags = design.map((s) => setHitFlags(s, D));
+  const cnt = new Int8Array(D.n);
+  for (const f of flags) for (let i = 0; i < D.n; i++) cnt[i] += f[i];
+
+  for (let step = 0; step < steps; step++) {
+    const si = Math.floor(rng() * design.length);
+    const old = design[si];
+    const oldFlags = flags[si];
+    for (let i = 0; i < D.n; i++) cnt[i] -= oldFlags[i];
+
+    // 현재 세트를 유지하는 안을 기준선으로 둔다(개선이 없으면 그대로).
+    let bestHit = 0;
+    for (let i = 0; i < D.n; i++) if (cnt[i] > 0 || oldFlags[i] > 0) bestHit += 1;
+    let bestSet = old;
+    let bestFlags = oldFlags;
+
+    for (let pos = 0; pos < LOTTO_PICK; pos++) {
+      for (let cand = 1; cand <= LOTTO_MAX_NUMBER; cand++) {
+        if (old.includes(cand)) continue;
+        const trial = [...old];
+        trial[pos] = cand;
+        trial.sort((a, b) => a - b);
+        const tf = setHitFlags(trial, D);
+        let hit = 0;
+        for (let i = 0; i < D.n; i++) if (cnt[i] > 0 || tf[i] > 0) hit += 1;
+        if (hit > bestHit) {
+          bestHit = hit;
+          bestSet = trial;
+          bestFlags = tf;
+        }
+      }
+    }
+
+    design[si] = bestSet;
+    flags[si] = bestFlags;
+    for (let i = 0; i < D.n; i++) cnt[i] += bestFlags[i];
+  }
+  return design;
 }

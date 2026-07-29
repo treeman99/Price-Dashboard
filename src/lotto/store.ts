@@ -3,17 +3,19 @@ import path from "node:path";
 import { db } from "../db/index.ts";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
-import { SEED_SPEC, normalizeSpec } from "./strategy.ts";
+import { SEED_SPEC, clearDesignCache, normalizeSpec } from "./strategy.ts";
 import type {
   LottoGenerationStat,
   LottoRecentRound,
   LottoRoundResult,
+  LottoRunStat,
   LottoScorePoint,
   LottoState,
   LottoStrategy,
   LottoStrategySpec,
 } from "../../shared/lotto.ts";
 import {
+  LOTTO_HIT3_WINDOW,
   LOTTO_MOVING_AVG_WINDOW,
   LOTTO_SET_COUNT,
   setScore,
@@ -31,6 +33,7 @@ import {
 
 interface StrategyRow {
   version: number;
+  run: number;
   from_round: number;
   spec_json: string;
   rationale: string;
@@ -52,6 +55,7 @@ function toStrategy(r: StrategyRow): LottoStrategy {
   }
   return {
     version: r.version,
+    run: r.run ?? 1,
     fromRound: r.from_round,
     spec,
     rationale: r.rationale ?? "",
@@ -78,6 +82,7 @@ export function latestStrategy(): LottoStrategy | null {
 }
 
 export interface InsertStrategyInput {
+  run: number;
   fromRound: number;
   spec: LottoStrategySpec;
   rationale?: string;
@@ -86,18 +91,19 @@ export interface InsertStrategyInput {
   model?: string;
 }
 
-/** 다음 세대를 추가하고 그 행을 돌려준다. version 은 자동으로 +1 된다. */
+/** 다음 세대를 추가하고 그 행을 돌려준다. version 은 **반복을 넘어서도** 자동으로 +1 된다. */
 export function insertStrategy(input: InsertStrategyInput): LottoStrategy {
   const prev = latestStrategy();
   const version = (prev?.version ?? 0) + 1;
   const createdAt = new Date().toISOString();
   db()
     .prepare(
-      `INSERT INTO lotto_strategies (version, from_round, spec_json, rationale, hypothesis, author, model, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO lotto_strategies (version, run, from_round, spec_json, rationale, hypothesis, author, model, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       version,
+      input.run,
       input.fromRound,
       JSON.stringify(input.spec),
       input.rationale ?? "",
@@ -108,6 +114,7 @@ export function insertStrategy(input: InsertStrategyInput): LottoStrategy {
     );
   return {
     version,
+    run: input.run,
     fromRound: input.fromRound,
     spec: input.spec,
     rationale: input.rationale ?? "",
@@ -118,11 +125,17 @@ export function insertStrategy(input: InsertStrategyInput): LottoStrategy {
   };
 }
 
-/** 세대가 하나도 없으면 무작위 시드 세대를 만든다. 실험 시작의 유일한 진입점. */
-export function ensureSeedStrategy(fromRound: number): LottoStrategy {
+/**
+ * 세대가 하나도 없으면 무작위 시드 세대를 만든다. 실험 시작의 유일한 진입점.
+ *
+ * ⚠️ 반복(run 2 이상)에서는 **새 시드를 만들지 않는다.** 반복은 초기화가 아니라 이어 도는
+ *    것이므로, 직전 반복이 도달한 전략에서 그대로 출발해야 반복 간 비교가 의미를 갖는다.
+ */
+export function ensureSeedStrategy(run: number, fromRound: number): LottoStrategy {
   const existing = latestStrategy();
   if (existing) return existing;
   return insertStrategy({
+    run,
     fromRound,
     spec: SEED_SPEC,
     author: "seed",
@@ -132,8 +145,12 @@ export function ensureSeedStrategy(fromRound: number): LottoStrategy {
 }
 
 // ── 회차 채점 결과 ──
+//
+// 모든 조회는 **반복(run) 스코프**다. '실험 반복'을 누르면 같은 회차 번호가 다시 채점되므로,
+// run 을 빼먹은 질의는 두 바퀴의 기록을 섞어 누적 점수와 적중률을 조용히 망가뜨린다.
 
 interface PredictionRow {
+  run: number;
   round: number;
   version: number;
   sets_json: string;
@@ -165,13 +182,14 @@ const SELECT_RESULT = `
   JOIN lotto_draws d ON d.round = p.round
 `;
 
-export function insertPrediction(r: LottoRoundResult): void {
+export function insertPrediction(run: number, r: LottoRoundResult): void {
   db()
     .prepare(
-      `INSERT OR REPLACE INTO lotto_predictions (round, version, sets_json, matches_json, score, cum_score, scored_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR REPLACE INTO lotto_predictions (run, round, version, sets_json, matches_json, score, cum_score, scored_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
+      run,
       r.round,
       r.version,
       JSON.stringify(r.sets),
@@ -182,26 +200,36 @@ export function insertPrediction(r: LottoRoundResult): void {
     );
 }
 
-/** 채점을 마친 마지막 회차와 그 누적 점수. 실험 재개 시 커서를 여기서 복원한다. */
-export function lastScored(): { round: number; cumScore: number } | null {
+/** 이 반복에서 채점을 마친 마지막 회차와 그 누적 점수. 재개 시 커서를 여기서 복원한다. */
+export function lastScored(run: number): { round: number; cumScore: number } | null {
   const row = db()
-    .prepare(`SELECT round, cum_score FROM lotto_predictions ORDER BY round DESC LIMIT 1`)
-    .get() as unknown as { round: number; cum_score: number } | undefined;
+    .prepare(
+      `SELECT round, cum_score FROM lotto_predictions WHERE run = ? ORDER BY round DESC LIMIT 1`
+    )
+    .get(run) as unknown as { round: number; cum_score: number } | undefined;
   return row ? { round: row.round, cumScore: row.cum_score } : null;
 }
 
-export function countScored(): number {
-  const row = db().prepare(`SELECT COUNT(*) AS n FROM lotto_predictions`).get() as unknown as {
-    n: number;
-  };
+export function countScored(run: number): number {
+  const row = db()
+    .prepare(`SELECT COUNT(*) AS n FROM lotto_predictions WHERE run = ?`)
+    .get(run) as unknown as { n: number };
   return Number(row?.n ?? 0);
 }
 
-/** 최근 n회차(오래된 순). 에이전트 프롬프트와 화면의 '최근 회차' 표가 함께 쓴다. */
-export function recentResults(n: number): LottoRoundResult[] {
+/** DB 에 기록이 있는 반복 번호들(오름차순). */
+export function listRuns(): number[] {
   const rows = db()
-    .prepare(`${SELECT_RESULT} ORDER BY p.round DESC LIMIT ?`)
-    .all(n) as unknown as PredictionJoinRow[];
+    .prepare(`SELECT DISTINCT run FROM lotto_predictions ORDER BY run ASC`)
+    .all() as unknown as Array<{ run: number }>;
+  return rows.map((r) => r.run);
+}
+
+/** 최근 n회차(오래된 순). 에이전트 프롬프트와 화면의 '최근 회차' 표가 함께 쓴다. */
+export function recentResults(run: number, n: number): LottoRoundResult[] {
+  const rows = db()
+    .prepare(`${SELECT_RESULT} WHERE p.run = ? ORDER BY p.round DESC LIMIT ?`)
+    .all(run, n) as unknown as PredictionJoinRow[];
   return rows.map(toResult).reverse();
 }
 
@@ -209,14 +237,14 @@ export function recentResults(n: number): LottoRoundResult[] {
  * 최근 n회차 + 그 회차 당첨번호(오래된 순).
  * 화면이 "어느 번호가 맞았는지"를 칠하려면 예측과 정답이 한자리에 있어야 한다.
  */
-export function recentResultsWithDraw(n: number): LottoRecentRound[] {
+export function recentResultsWithDraw(run: number, n: number): LottoRecentRound[] {
   const rows = db()
     .prepare(
       `SELECT p.*, d.draw_date, d.n1, d.n2, d.n3, d.n4, d.n5, d.n6, d.bonus
        FROM lotto_predictions p JOIN lotto_draws d ON d.round = p.round
-       ORDER BY p.round DESC LIMIT ?`
+       WHERE p.run = ? ORDER BY p.round DESC LIMIT ?`
     )
-    .all(n) as unknown as Array<
+    .all(run, n) as unknown as Array<
     PredictionJoinRow & {
       n1: number;
       n2: number;
@@ -236,41 +264,65 @@ export function recentResultsWithDraw(n: number): LottoRecentRound[] {
     .reverse();
 }
 
-/** 특정 세대의 결과 전체. */
-export function resultsForVersion(version: number): LottoRoundResult[] {
-  const rows = db()
-    .prepare(`${SELECT_RESULT} WHERE p.version = ? ORDER BY p.round ASC`)
-    .all(version) as unknown as PredictionJoinRow[];
-  return rows.map(toResult);
+/** 적중 배열에서 목표 지표(3+ 여부)와 최대 적중을 뽑는다. 한 곳에만 둔다. */
+function hit3Of(matchesJson: string): { hit3: boolean; best: number; sets3: number } {
+  let arr: number[];
+  try {
+    arr = JSON.parse(matchesJson) as number[];
+  } catch {
+    return { hit3: false, best: 0, sets3: 0 };
+  }
+  let best = 0;
+  let sets3 = 0;
+  for (const m of arr) {
+    if (m > best) best = m;
+    if (m >= 3) sets3 += 1;
+  }
+  return { hit3: sets3 > 0, best, sets3 };
 }
 
 /**
- * 차트용 점 목록.
+ * 차트용 점 목록(현재 반복).
  *
- * ⚠️ 여기서 세트 JSON 을 파싱하지 않는 것이 중요하다. 1200행 × 10세트를 매 조회마다
- * 파싱하면 스냅샷 하나가 수 MB 로 부풀어 브라우저가 버벅인다. 점수만 읽는다.
+ * ⚠️ 세트 JSON 은 파싱하지 않는다 — 1200행 × 10세트를 매 조회마다 파싱하면 스냅샷이 수 MB 로
+ * 부푼다. 반면 matches_json 은 정수 10개짜리라 파싱해도 무시할 수 있고, 목표 지표(3+ 여부)가
+ * 여기서 나오므로 컬럼을 새로 만들지 않고 그대로 계산한다.
  */
-export function scorePoints(): LottoScorePoint[] {
+export function scorePoints(run: number): LottoScorePoint[] {
   const rows = db()
     .prepare(
-      `SELECT p.round, p.version, p.score, p.cum_score, d.draw_date
+      `SELECT p.round, p.version, p.score, p.cum_score, p.matches_json, d.draw_date
        FROM lotto_predictions p JOIN lotto_draws d ON d.round = p.round
-       ORDER BY p.round ASC`
+       WHERE p.run = ? ORDER BY p.round ASC`
     )
-    .all() as unknown as Array<{
+    .all(run) as unknown as Array<{
     round: number;
     version: number;
     score: number;
     cum_score: number;
+    matches_json: string;
     draw_date: string;
   }>;
 
   const out: LottoScorePoint[] = [];
   let windowSum = 0;
+  let hitWindow = 0;
+  let hitTotal = 0;
+  const hits: number[] = [];
   for (let i = 0; i < rows.length; i++) {
+    const { hit3, best } = hit3Of(rows[i].matches_json);
+    hits.push(hit3 ? 1 : 0);
+
     windowSum += rows[i].score;
     if (i >= LOTTO_MOVING_AVG_WINDOW) windowSum -= rows[i - LOTTO_MOVING_AVG_WINDOW].score;
     const span = Math.min(i + 1, LOTTO_MOVING_AVG_WINDOW);
+
+    hitWindow += hits[i];
+    if (i >= LOTTO_HIT3_WINDOW) hitWindow -= hits[i - LOTTO_HIT3_WINDOW];
+    const hitSpan = Math.min(i + 1, LOTTO_HIT3_WINDOW);
+
+    hitTotal += hits[i];
+
     out.push({
       round: rows[i].round,
       drawDate: rows[i].draw_date,
@@ -278,78 +330,163 @@ export function scorePoints(): LottoScorePoint[] {
       cumScore: rows[i].cum_score,
       movingAvg: windowSum / span,
       version: rows[i].version,
+      hit3,
+      hit3Rate: hitWindow / hitSpan,
+      cumHit3Rate: hitTotal / (i + 1),
+      bestMatch: best,
     });
   }
   return out;
 }
 
+/** 여러 행의 적중 통계를 한 번에 집계한다(세대 요약과 반복 요약이 공유). */
+function aggregate(rows: Array<{ matches_json: string; score: number }>) {
+  let totalMatches = 0;
+  let zeroSets = 0;
+  let sets = 0;
+  let hit3Rounds = 0;
+  let hit3Sets = 0;
+  let bestMatch = 0;
+  let totalScore = 0;
+  for (const r of rows) {
+    totalScore += r.score;
+    let arr: number[];
+    try {
+      arr = JSON.parse(r.matches_json) as number[];
+    } catch {
+      continue;
+    }
+    let any3 = false;
+    for (const m of arr) {
+      sets += 1;
+      totalMatches += m;
+      if (m === 0) zeroSets += 1;
+      if (m >= 3) {
+        hit3Sets += 1;
+        any3 = true;
+      }
+      if (m > bestMatch) bestMatch = m;
+    }
+    if (any3) hit3Rounds += 1;
+  }
+  const n = rows.length;
+  return {
+    rounds: n,
+    totalScore,
+    avgScore: n > 0 ? totalScore / n : 0,
+    avgMatches: sets > 0 ? totalMatches / sets : 0,
+    zeroSetRate: sets > 0 ? zeroSets / sets : 0,
+    hit3Rounds,
+    hit3Sets,
+    hit3Rate: n > 0 ? hit3Rounds / n : 0,
+    bestMatch,
+  };
+}
+
 /**
  * 세대별 성적 요약. 에이전트 프롬프트와 화면이 **같은 함수**를 쓴다 —
  * 두 곳이 각자 집계하면 사용자가 보는 표와 모델이 보는 표가 갈라진다.
+ *
+ * 세대(version)는 반복을 넘어서도 계속 증가하므로 run 으로 나누지 않는다.
  */
 export function generationStats(): LottoGenerationStat[] {
   const rows = db()
     .prepare(
-      `SELECT version,
-              MIN(round) AS from_round,
-              MAX(round) AS to_round,
-              COUNT(*)   AS rounds,
-              SUM(score) AS total_score,
-              MAX(score) AS best_score,
-              MIN(score) AS worst_score
-       FROM lotto_predictions GROUP BY version ORDER BY version ASC`
+      `SELECT p.version, p.round, p.score, p.matches_json
+       FROM lotto_predictions p ORDER BY p.version ASC, p.round ASC`
     )
     .all() as unknown as Array<{
     version: number;
-    from_round: number;
-    to_round: number;
-    rounds: number;
-    total_score: number;
-    best_score: number;
-    worst_score: number;
+    round: number;
+    score: number;
+    matches_json: string;
   }>;
 
-  return rows.map((r) => {
-    // 적중 개수 집계는 SQL 로 못 한다(JSON 배열이라). 세대당 한 번만 도는 경로라 부담 없다.
-    const detail = db()
-      .prepare(`SELECT matches_json FROM lotto_predictions WHERE version = ?`)
-      .all(r.version) as unknown as Array<{ matches_json: string }>;
+  const byVersion = new Map<number, typeof rows>();
+  for (const r of rows) {
+    const list = byVersion.get(r.version) ?? [];
+    list.push(r);
+    byVersion.set(r.version, list);
+  }
 
-    let totalMatches = 0;
-    let zeroSets = 0;
-    let sets = 0;
-    for (const d of detail) {
-      let arr: number[];
-      try {
-        arr = JSON.parse(d.matches_json) as number[];
-      } catch {
-        continue;
-      }
-      for (const m of arr) {
-        sets += 1;
-        totalMatches += m;
-        if (m === 0) zeroSets += 1;
-      }
-    }
+  return [...byVersion.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([version, list]) => {
+      const agg = aggregate(list);
+      const roundsList = list.map((r) => r.round);
+      return {
+        version,
+        fromRound: Math.min(...roundsList),
+        toRound: Math.max(...roundsList),
+        rounds: agg.rounds,
+        totalScore: agg.totalScore,
+        avgScore: agg.avgScore,
+        bestScore: Math.max(...list.map((r) => r.score)),
+        worstScore: Math.min(...list.map((r) => r.score)),
+        avgMatches: agg.avgMatches,
+        zeroSetRate: agg.zeroSetRate,
+        hit3Rate: agg.hit3Rate,
+        hit3Rounds: agg.hit3Rounds,
+        hit3Sets: agg.hit3Sets,
+        bestMatch: agg.bestMatch,
+      };
+    });
+}
 
-    return {
-      version: r.version,
-      fromRound: r.from_round,
-      toRound: r.to_round,
-      rounds: r.rounds,
-      totalScore: r.total_score,
-      avgScore: r.rounds > 0 ? r.total_score / r.rounds : 0,
-      bestScore: r.best_score,
-      worstScore: r.worst_score,
-      avgMatches: sets > 0 ? totalMatches / sets : 0,
-      zeroSetRate: sets > 0 ? zeroSets / sets : 0,
-    };
-  });
+/**
+ * 반복별 요약. **이 실험의 결론이 읽히는 표**다 — 두 번째 바퀴가 첫 번째보다 나은가.
+ * 세대별 표는 표본이 50회차뿐이라 3%p 차이를 못 보지만, 반복은 1234회차라 볼 수 있다.
+ */
+export function runStats(currentRun: number): LottoRunStat[] {
+  const rows = db()
+    .prepare(
+      `SELECT p.run, p.round, p.version, p.score, p.matches_json
+       FROM lotto_predictions p ORDER BY p.run ASC, p.round ASC`
+    )
+    .all() as unknown as Array<{
+    run: number;
+    round: number;
+    version: number;
+    score: number;
+    matches_json: string;
+  }>;
+
+  const byRun = new Map<number, typeof rows>();
+  for (const r of rows) {
+    const list = byRun.get(r.run) ?? [];
+    list.push(r);
+    byRun.set(r.run, list);
+  }
+
+  return [...byRun.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([run, list]) => {
+      const agg = aggregate(list);
+      const roundsList = list.map((r) => r.round);
+      const versions = list.map((r) => r.version);
+      return {
+        run,
+        fromRound: Math.min(...roundsList),
+        toRound: Math.max(...roundsList),
+        rounds: agg.rounds,
+        firstVersion: Math.min(...versions),
+        lastVersion: Math.max(...versions),
+        hit3Rate: agg.hit3Rate,
+        hit3Rounds: agg.hit3Rounds,
+        avgScore: agg.avgScore,
+        avgMatches: agg.avgMatches,
+        bestMatch: agg.bestMatch,
+        inProgress: run === currentRun,
+      };
+    });
 }
 
 /** 채점 결과와 전략 세대를 통째로 지운다(회차 원본은 남긴다 — 다시 받을 이유가 없다). */
 export function resetExperiment(): void {
   db().exec(`DELETE FROM lotto_predictions; DELETE FROM lotto_strategies;`);
+  // 디자인 캐시는 version 을 키로 쓴다. 안 지우면 초기화 후 다시 만들어진 v1 이 옛 디자인을
+  // 물려받아, '무작위 출발선'이어야 할 세대가 최적화된 디자인으로 시작한다.
+  clearDesignCache();
 }
 
 // ── 실험 상태 ──
@@ -362,6 +499,7 @@ const STATE_PATH = path.join(path.dirname(config.dbPath), "lotto-state.json");
 
 const DEFAULT_STATE: LottoState = {
   status: "idle",
+  run: 1,
   pauseReason: null,
   resumeAt: null,
   lastError: null,
@@ -382,6 +520,8 @@ export function getLottoState(): LottoState {
       ...DEFAULT_STATE,
       ...raw,
       status,
+      // run 이 깨지면 두 바퀴의 기록이 섞인다. 정수 1 이상만 허용한다.
+      run: Number.isInteger(raw.run) && (raw.run as number) >= 1 ? (raw.run as number) : 1,
       pauseReason:
         raw.pauseReason === "usage-limit" ||
         raw.pauseReason === "manual" ||

@@ -4,14 +4,15 @@ import { normalizeSpec } from "./strategy.ts";
 import type {
   LottoGenerationStat,
   LottoRoundResult,
+  LottoRunStat,
   LottoStrategy,
   LottoStrategySpec,
 } from "../../shared/lotto.ts";
 import {
   LOTTO_BASELINE_PER_ROUND,
   LOTTO_EVOLVE_EVERY,
+  LOTTO_P_THREE_PLUS,
   LOTTO_SET_COUNT,
-  LOTTO_ZERO_PENALTY,
 } from "../../shared/lotto.ts";
 
 /**
@@ -54,10 +55,11 @@ const TIMEOUT_MS = 10 * 60 * 1000;
  * 포기하는 것도 금지다 — 그건 실험을 하지 않겠다는 말이고, 판단은 데이터가 한다.
  */
 const LOTTO_AGENT_IDENTITY = [
-  "너는 로또 6/45 번호 예측 전략을 개선하는 실험 연구 에이전트다.",
+  "너는 로또 6/45 세트 구성 전략을 개선하는 실험 연구 에이전트다.",
+  "목표는 단 하나 — **10세트 중 최소 1세트가 3개 이상 맞힌 회차의 비율(3+ 적중률)을 최대화**하는 것이다.",
   "주어진 성적표와 전략 이력만을 근거로 다음 세대 전략 사양을 제안한다.",
-  "표본이 작을 때의 점수 변동은 대부분 잡음이다 — 무작위 기준선과의 차이가 잡음 범위 안이면",
-  "'개선됐다'고 쓰지 말고 그렇게 보인다는 사실을 그대로 적어라.",
+  "표본이 작을 때의 변동은 대부분 잡음이다 — 50회차 표본에서 3+ 적중률의 표준오차는 약 6.7%p 다.",
+  "그보다 작은 차이를 '개선됐다'고 쓰지 말고 그렇게 보인다는 사실을 그대로 적어라.",
   "동시에, 아직 시도하지 않은 설정이 남아 있다면 탐색을 멈추지 마라. 결론은 데이터가 낸다.",
   "숫자를 지어내지 않는다 — 프롬프트에 주어진 값만 인용한다.",
   "허용된 노브 밖의 필드를 만들지 않는다. 코드나 수식이 아니라 값만 제안한다.",
@@ -79,10 +81,16 @@ const KNOB_CATALOG = `
   "halfLife": 50,                    // 1 ~ 1000. decay 반감기(회차).
   "temperature": 1,                  // 0.05 ~ 20. 작을수록 상위 번호에 확률이 몰린다.
   "explore": 0,                      // 0 ~ 1. 균등분포와의 혼합 비율. 1이면 완전 무작위.
-  "coverage": "independent",         // "independent" | "partition" | "max-coverage"
-                                     //   independent  = 10세트를 각각 독립 추출(겹침 허용)
-                                     //   partition    = 번호를 나눠 담아 세트 간 중복 최소화
-                                     //   max-coverage = 45개 번호가 최소 1회씩 반드시 등장
+  "design": {                        // ★ 10세트를 **어떻게 배치할지**. 목표 지표가 여기에 걸려 있다.
+    "fullCover": false,              //   true 면 45개 번호가 10세트 전체에서 최소 1회씩 등장
+    "maxSetOverlap": 6,              //   1 ~ 6. 서로 다른 두 세트가 공유할 수 있는 번호 개수 상한
+                                     //     (6 = 제약 없음, 1 = 어떤 두 세트도 번호 1개까지만 공유)
+    "searchSteps": 0                 //   0 ~ 60. 목적함수(3+ 적중률)에 대한 국소탐색 스텝 수.
+                                     //     0보다 크면 엔진이 가상 추첨 표본 위에서 디자인을 직접
+                                     //     다듬는다. 미래 회차를 보지 않으므로 규칙 위반이 아니다.
+                                     //     대신 세대당 수 초가 걸리고, 켜면 그 세대의 10세트는
+                                     //     회차마다 바뀌지 않고 고정된다.
+  },
   "filters": {
     "sumMin": 21,                    // 21 ~ 255. 6개 합계 하한.
     "sumMax": 255,                   // sumMin ~ 255.
@@ -91,20 +99,24 @@ const KNOB_CATALOG = `
     "maxConsecutive": 6,             // 1 ~ 6. 연속번호 최대 길이.
     "maxPerDecade": 6,               // 1 ~ 6. 구간(1-9,10-19,20-29,30-39,40-45)별 최대 개수.
     "excludeLastDraw": false         // 직전 회차 당첨번호를 후보에서 제외.
-                                     //   (coverage="max-coverage" 에서는 무시된다)
+                                     //   (design.fullCover=true 에서는 무시된다)
   }
 }`.trim();
 
 /** 프롬프트 조립에 필요한 재료. 순수 데이터라 테스트에서 그대로 만들 수 있다. */
 export interface LottoEvolveContext {
+  /** 지금 몇 번째 바퀴인가 */
+  run: number;
   /** 다음 세대가 적용되기 시작할 회차 */
   nextRound: number;
-  /** 지금까지 채점한 회차 수 */
+  /** 이번 바퀴에서 지금까지 채점한 회차 수 */
   scoredRounds: number;
   /** 현재(직전) 세대 */
   current: LottoStrategy;
   /** 세대별 성적 요약(오래된 순) */
   generations: LottoGenerationStat[];
+  /** 바퀴별 요약(오래된 순). 바퀴는 1234회차라 세대(50회차)보다 훨씬 신뢰할 수 있는 신호다. */
+  runs: LottoRunStat[];
   /** 직전 구간의 회차별 결과(최대 LOTTO_EVOLVE_EVERY 개) */
   recent: LottoRoundResult[];
 }
@@ -112,53 +124,71 @@ export interface LottoEvolveContext {
 /** 소수 둘째 자리 문자열. 표가 흔들리지 않게 전 구간 동일 규칙을 쓴다. */
 const f2 = (v: number) => v.toFixed(2);
 
-/** 기준선 대비 차이. +면 기준선보다 잘한 것. */
-const vsBaseline = (avg: number) => {
-  const d = avg - LOTTO_BASELINE_PER_ROUND;
-  return `${d >= 0 ? "+" : ""}${f2(d)}`;
-};
-
 export function buildEvolvePrompt(ctx: LottoEvolveContext): string {
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
   const genTable = ctx.generations
     .map(
       (g) =>
-        `| ${g.version} | ${g.fromRound}~${g.toRound} | ${g.rounds} | ${f2(g.avgScore)} | ${vsBaseline(
-          g.avgScore
-        )} | ${f2(g.avgMatches)} | ${(g.zeroSetRate * 100).toFixed(1)}% |`
+        `| ${g.version} | ${g.fromRound}~${g.toRound} | ${g.rounds} | **${pct(g.hit3Rate)}** | ${g.hit3Rounds} | ${g.hit3Sets} | ${g.bestMatch} | ${f2(g.avgScore)} |`
     )
     .join("\n");
 
-  const recentScores = ctx.recent.map((r) => `${r.round}:${r.score}`).join(", ");
-  const recentAvg =
-    ctx.recent.length > 0
-      ? ctx.recent.reduce((s, r) => s + r.score, 0) / ctx.recent.length
-      : 0;
+  const runTable = ctx.runs
+    .map(
+      (r) =>
+        `| ${r.run}${r.inProgress ? " (진행중)" : ""} | ${r.rounds} | v${r.firstVersion}~v${r.lastVersion} | **${pct(r.hit3Rate)}** | ${r.hit3Rounds} | ${r.bestMatch} | ${f2(r.avgScore)} |`
+    )
+    .join("\n");
+
+  const recentHits = ctx.recent.filter((r) => r.matches.some((m) => m >= 3)).length;
+  const recentRate = ctx.recent.length > 0 ? recentHits / ctx.recent.length : 0;
+  // 이항 표준오차 — '이 차이가 볼 만한 크기인가'를 모델이 스스로 판단할 수 있게 같이 준다.
+  const se = ctx.recent.length > 0 ? Math.sqrt((recentRate * (1 - recentRate)) / ctx.recent.length) : 0;
 
   return `
 # 실험 규칙
 
 - 로또 6/45. 매 회차 **${LOTTO_SET_COUNT}세트**를 제출하고 각 세트는 서로 다른 번호 6개다.
 - 당첨번호는 본번호 6개 + **보너스 1개 = 7개**이며, 세트의 6개 중 이 7개와 겹친 개수가 그 세트의 적중 수다.
-- 세트 점수: 적중 1개=+1, 2개=+2, … 6개=+6, **0개=${LOTTO_ZERO_PENALTY}**.
-- 회차 점수 = ${LOTTO_SET_COUNT}세트 합계 (이론 범위 -60 ~ +60).
-- **무작위 기준선(회차당 기대점수) = ${f2(LOTTO_BASELINE_PER_ROUND)}점.** 모든 평가는 이 값과의 차이로 한다.
 - 예측은 walk-forward 다: ${ctx.nextRound}회차를 예측할 때 쓸 수 있는 정보는 ${ctx.nextRound - 1}회차까지의 결과뿐이다.
+
+# 목표 지표 (이것만 최대화한다)
+
+**3+ 적중률 = 10세트 중 최소 1세트가 3개 이상 맞힌 회차의 비율.**
+
+알아 둘 것:
+- 세트 1개가 3개 이상 맞힐 확률은 **${(LOTTO_P_THREE_PLUS * 100).toFixed(3)}%** 이고, 이 값은 어떤 번호를 고르든 같다.
+  당첨번호가 균등 무작위이므로 고정된 6개 집합의 적중 분포는 그 집합이 무엇이든 동일하기 때문이다.
+- 따라서 **'3+ 를 달성한 세트의 총 개수'는 전략이 못 바꾼다**(기대값 선형성). 아래 표의 '3+세트수' 열은
+  개선 지표가 아니라 **대조군**이다 — 크게 흔들리면 그건 잡음이거나 계산이 틀린 것이다.
+- 바꿀 수 있는 것은 그 적중이 **몇 개의 서로 다른 회차에 흩어지는가**다. 같은 총량이라도 한 회차에
+  3개가 몰리면 1회차만 성공이고, 세 회차에 하나씩 흩어지면 3회차가 성공이다.
+- 점수(평균점수 열)도 대조군이다. 이전 실험에서 **어떤 전략도 무작위 기준선 ${f2(LOTTO_BASELINE_PER_ROUND)}점을
+  유의하게 넘지 못했고**, 번호 선택 특징(hot/cold/gap/decay/pair/overall)의 예측 AUC 는 1234회차 실측에서
+  전부 0.50 이었다. 그 축에 시간을 쓰는 것은 권하지 않지만, 직접 확인하고 싶다면 막지 않는다.
 
 # 현재 상태
 
-- 채점 완료 회차: ${ctx.scoredRounds}회차
+- 지금 **${ctx.run}번째 바퀴**, 이번 바퀴에서 채점 완료 ${ctx.scoredRounds}회차
 - 다음 세대가 적용될 회차: **${ctx.nextRound}회차부터** (다음 개정까지 ${LOTTO_EVOLVE_EVERY}회차)
 - 현재 세대: v${ctx.current.version} (${ctx.current.fromRound}회차부터 적용)
 
-## 세대별 성적
+## 바퀴별 성적 (표본이 커서 가장 믿을 만하다)
 
-| 세대 | 회차 구간 | 회차수 | 평균점수 | 기준선대비 | 세트당평균적중 | 0적중세트비율 |
+| 바퀴 | 회차수 | 세대 | 3+적중률 | 3+회차수 | 최고적중 | 평균점수(대조군) |
 |---|---|---|---|---|---|---|
-${genTable || "| (없음) | | | | | | |"}
+${runTable || "| (없음) | | | | | | |"}
 
-## 직전 구간 회차별 점수 (평균 ${f2(recentAvg)}, 기준선대비 ${vsBaseline(recentAvg)})
+## 세대별 성적 (표본 ${LOTTO_EVOLVE_EVERY}회차 — 표준오차가 약 6.7%p 라 작은 차이는 못 읽는다)
 
-${recentScores || "(없음)"}
+| 세대 | 회차 구간 | 회차수 | 3+적중률 | 3+회차수 | 3+세트수(대조군) | 최고적중 | 평균점수(대조군) |
+|---|---|---|---|---|---|---|---|
+${genTable || "| (없음) | | | | | | | |"}
+
+## 직전 구간
+
+3+ 적중 회차 ${recentHits}/${ctx.recent.length} = **${pct(recentRate)}** (표준오차 ±${(se * 100).toFixed(1)}%p)
 
 ## 현재 전략 사양
 
@@ -178,8 +208,8 @@ ${KNOB_CATALOG}
 
 위 성적을 읽고 **다음 세대 전략 사양**을 제안하라. 판단 기준:
 
-1. 직전 세대가 기준선 대비 어땠는지, 그 차이가 ${ctx.recent.length}회차 표본에서 의미 있는 크기인지.
-2. 아직 시험하지 않은 노브 조합이 무엇인지. 한 번에 너무 많이 바꾸면 무엇이 효과였는지 알 수 없으니,
+1. 직전 세대의 3+ 적중률이 이전 세대들과 비교해 의미 있는 차이인지 — 표준오차를 넘는 크기인지 먼저 따져라.
+2. 아직 시험하지 않은 \`design\` 조합이 무엇인지. 한 번에 너무 많이 바꾸면 무엇이 효과였는지 알 수 없으니,
    **바꾸는 노브는 1~3개로 제한**하고 나머지는 그대로 두어라.
 3. 이전 세대들에서 이미 나쁜 결과가 나온 방향을 반복하지 마라.
 
@@ -191,7 +221,7 @@ ${KNOB_CATALOG}
 {
   "spec": { ...위 노브 구조 전체... },
   "changed": ["바꾼 노브 이름", "..."],
-  "hypothesis": "이 변경이 무엇을 어떻게 바꿀 것이라 예상하는지 한 문장. 다음 세대가 검증할 수 있게 구체적으로.",
+  "hypothesis": "이 변경이 3+ 적중률을 어떻게 바꿀 것이라 예상하는지 한 문장. 다음 세대가 검증할 수 있게 구체적으로.",
   "rationale": "왜 그렇게 판단했는지. 성적표의 어떤 숫자를 근거로 삼았는지 명시. 3~5문장."
 }
 \`\`\`

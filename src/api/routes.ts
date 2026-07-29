@@ -92,6 +92,7 @@ import {
   getStatus as getLottoStatus,
   isExperimentRunning,
   pauseExperiment,
+  repeatExperiment,
   resetAll as resetLottoAll,
   startExperiment,
   syncLottoDraws,
@@ -1286,6 +1287,20 @@ api.post("/lotto/pause", (_req, res) => {
 /** 완주 배너 확인 처리. */
 api.post("/lotto/ack", (_req, res) => {
   res.json({ ok: true, state: acknowledgeDone() });
+});
+
+/**
+ * **실험 반복** — 초기화 없이 전 회차를 한 바퀴 더 돈다.
+ * 전략 세대와 지난 바퀴의 기록을 모두 보존한 채 run 만 +1 하고, 곧바로 실행까지 이어 준다.
+ * (초기화와 달리 되돌릴 것이 없어 confirm 을 요구하지 않는다.)
+ */
+api.post("/lotto/repeat", (_req, res) => {
+  const r = repeatExperiment();
+  if (!r.ok) return res.status(409).json({ error: r.error, state: r.state });
+  void startExperiment("repeat").catch((e) =>
+    log.error(`로또 실험 반복 실행 오류: ${(e as Error).message}`)
+  );
+  res.json({ ok: true, state: getLottoState() });
 });
 
 /**

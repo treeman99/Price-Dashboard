@@ -13,9 +13,11 @@ import {
   lastScored,
   latestStrategy,
   listStrategies,
+  listRuns,
   recentResults,
   recentResultsWithDraw,
   resetExperiment,
+  runStats,
   resetLottoState,
   scorePoints,
   setLottoState,
@@ -25,6 +27,8 @@ import type { LottoDraw, LottoSnapshot, LottoState, LottoStrategy } from "../../
 import {
   LOTTO_BASELINE_PER_ROUND,
   LOTTO_EVOLVE_EVERY,
+  LOTTO_HIT3_CEILING,
+  LOTTO_HIT3_RANDOM,
   LOTTO_RECENT_LIMIT,
   countMatches,
   winningNumbers,
@@ -76,10 +80,10 @@ export function isExperimentDone(): boolean {
 }
 
 /** 다음에 예측할 회차. 커서는 저장하지 않고 항상 채점 결과에서 유도한다. */
-export function nextRoundToPredict(): number | null {
+export function nextRoundToPredict(run = getLottoState().run): number | null {
   const range = drawRange();
   if (range.first === null) return null;
-  const last = lastScored();
+  const last = lastScored(run);
   return last ? last.round + 1 : range.first;
 }
 
@@ -102,18 +106,25 @@ function shouldEvolve(cursor: number, current: LottoStrategy): boolean {
  *
  * @returns 한도 소진이면 null (호출부가 실험을 멈춘다)
  */
-async function evolve(cursor: number, current: LottoStrategy): Promise<LottoStrategy | null> {
+async function evolve(
+  run: number,
+  cursor: number,
+  current: LottoStrategy
+): Promise<LottoStrategy | null> {
   const ctx = {
+    run,
     nextRound: cursor,
-    scoredRounds: countScored(),
+    scoredRounds: countScored(run),
     current,
     generations: generationStats(),
-    recent: recentResults(LOTTO_EVOLVE_EVERY),
+    runs: runStats(run),
+    recent: recentResults(run, LOTTO_EVOLVE_EVERY),
   };
 
   try {
     const proposal = await runLottoEvolveAgent(ctx);
     const next = insertStrategy({
+      run,
       fromRound: cursor,
       spec: proposal.spec,
       rationale: proposal.rationale,
@@ -135,6 +146,7 @@ async function evolve(cursor: number, current: LottoStrategy): Promise<LottoStra
     }
     log.error(`로또 진화 에이전트 실패 → 직전 사양 유지하고 세대만 넘김: ${err.message}`);
     return insertStrategy({
+      run,
       fromRound: cursor,
       spec: current.spec,
       author: "agent",
@@ -208,11 +220,12 @@ export async function runExperiment(trigger: string): Promise<RunResult> {
     const byRound = new Map(draws.map((d) => [d.round, d]));
     const latest = draws[draws.length - 1].round;
 
-    let cursor = nextRoundToPredict();
+    const run = getLottoState().run;
+    let cursor = nextRoundToPredict(run);
     if (cursor === null) return { scored, status: "idle", reason: "no-draws" };
 
-    let cum = lastScored()?.cumScore ?? 0;
-    let strategy = ensureSeedStrategy(cursor);
+    let cum = lastScored(run)?.cumScore ?? 0;
+    let strategy = ensureSeedStrategy(run, cursor);
 
     setLottoState({
       status: "running",
@@ -221,7 +234,7 @@ export async function runExperiment(trigger: string): Promise<RunResult> {
       lastError: null,
       startedAt: getLottoState().startedAt ?? new Date().toISOString(),
     });
-    log.info(`로또 실험 시작 [${trigger}] — ${cursor}회차부터 ${latest}회차까지`);
+    log.info(`로또 실험 시작 [${trigger}] — ${run}번째 바퀴, ${cursor}회차부터 ${latest}회차까지`);
 
     while (cursor <= latest) {
       if (pauseRequested) {
@@ -232,7 +245,7 @@ export async function runExperiment(trigger: string): Promise<RunResult> {
 
       // 세대 개정. 실패해도 세대는 넘어가고, 한도 소진일 때만 여기서 멈춘다.
       if (shouldEvolve(cursor, strategy)) {
-        const next = await evolve(cursor, strategy);
+        const next = await evolve(run, cursor, strategy);
         if (!next) {
           // ⚠️ 에이전트 호출은 최대 10분 await 한다. 그동안 사용자가 일시정지를 눌렀다면
           // **그 의사가 한도 소진보다 우선**이다. 이 검사가 없으면 사용자가 세운 실험이
@@ -284,7 +297,7 @@ export async function runExperiment(trigger: string): Promise<RunResult> {
       const { score } = summarizeMatches(matches);
       cum += score;
 
-      insertPrediction({
+      insertPrediction(run, {
         round: cursor,
         drawDate: draw.drawDate,
         version: strategy.version,
@@ -311,7 +324,7 @@ export async function runExperiment(trigger: string): Promise<RunResult> {
       doneAcknowledged: false,
     });
     log.info(
-      `로또 실험 완주 — ${latest}회차까지 채점 완료(이번 실행 ${scored}건, 누적 점수 ${cum})`
+      `로또 실험 완주 — ${run}번째 바퀴 ${latest}회차까지 채점 완료(이번 실행 ${scored}건, 누적 점수 ${cum})`
     );
     return { scored, status: state.status, reason: "done" };
   } catch (e) {
@@ -369,6 +382,45 @@ export function pauseExperiment(): LottoState {
 /** 완주 배너 확인. */
 export function acknowledgeDone(): LottoState {
   return setLottoState({ doneAcknowledged: true });
+}
+
+/**
+ * **실험 반복** — 초기화 없이 전 회차를 한 바퀴 더 돈다(2026-07-29 사용자 요청).
+ *
+ * 초기화(resetAll)와 무엇이 다른가:
+ *   초기화 — 채점 기록과 전략 세대를 **지우고** v1 무작위 출발선부터 다시.
+ *   반복   — 아무것도 지우지 않고 run 만 +1. 전략은 직전 바퀴가 도달한 세대에서 **이어서**
+ *            진화하고, 지난 바퀴의 기록은 그대로 남아 반복 간 비교(runs 표)의 근거가 된다.
+ *
+ * 완주한 상태에서만 의미가 있다 — 진행 중이거나 남은 회차가 있으면 그냥 이어서 돌면 된다.
+ */
+export function repeatExperiment(): { ok: boolean; error?: string; state: LottoState } {
+  if (running) {
+    return { ok: false, error: "실험이 진행 중입니다.", state: getLottoState() };
+  }
+  const state = getLottoState();
+  const range = drawRange();
+  if (state.status !== "done") {
+    return {
+      ok: false,
+      error: "완주한 뒤에만 반복할 수 있습니다. 진행 중이거나 남은 회차가 있으면 [실험 시작]을 쓰세요.",
+      state,
+    };
+  }
+  if (range.first === null) {
+    return { ok: false, error: "회차 데이터가 없습니다.", state };
+  }
+  const next = setLottoState({
+    run: state.run + 1,
+    status: "idle",
+    pauseReason: null,
+    resumeAt: null,
+    lastError: null,
+    finishedAt: null,
+    doneAcknowledged: false,
+  });
+  log.info(`로또 실험 반복 준비 — ${next.run}번째 바퀴 (전략 세대는 이어서 진화)`);
+  return { ok: true, state: next };
 }
 
 /** 채점 결과·전략을 전부 지우고 처음부터. 회차 원본은 남긴다. */
@@ -443,14 +495,18 @@ function upcomingPicks(): { round: number; sets: number[][] } | null {
 
 export function getSnapshot(): LottoSnapshot {
   const state = getLottoState();
+  const run = state.run;
   const range = drawRange();
-  const last = lastScored();
+  const last = lastScored(run);
   const scoredThrough = last?.round ?? null;
-  const total = countScored();
+  const total = countScored(run);
   const cumScore = last?.cumScore ?? 0;
-  const next = nextRoundToPredict();
+  const next = nextRoundToPredict(run);
   const remaining =
     range.latest !== null && next !== null ? Math.max(0, range.latest - next + 1) : 0;
+
+  const points = scorePoints(run);
+  const hit3Rounds = points.reduce((n, p) => n + (p.hit3 ? 1 : 0), 0);
 
   return {
     state,
@@ -463,10 +519,15 @@ export function getSnapshot(): LottoSnapshot {
     cumScore,
     avgScore: total > 0 ? cumScore / total : null,
     baselinePerRound: LOTTO_BASELINE_PER_ROUND,
+    hit3Rate: total > 0 ? hit3Rounds / total : null,
+    hit3Rounds,
+    hit3Random: LOTTO_HIT3_RANDOM,
+    hit3Ceiling: LOTTO_HIT3_CEILING,
     strategies: listStrategies(),
     generations: generationStats(),
-    points: scorePoints(),
-    recentResults: recentResultsWithDraw(LOTTO_RECENT_LIMIT),
+    runs: runStats(run),
+    points,
+    recentResults: recentResultsWithDraw(run, LOTTO_RECENT_LIMIT),
     upcoming: remaining === 0 && total > 0 ? upcomingPicks() : null,
   };
 }
@@ -474,13 +535,16 @@ export function getSnapshot(): LottoSnapshot {
 /** 폴링용 경량 상태. 스냅샷은 1200점이라 3초마다 보낼 수 없다. */
 export function getStatus() {
   const state = getLottoState();
+  const run = state.run;
   const range = drawRange();
-  const last = lastScored();
-  const next = nextRoundToPredict();
+  const last = lastScored(run);
+  const next = nextRoundToPredict(run);
   const remaining =
     range.latest !== null && next !== null ? Math.max(0, range.latest - next + 1) : 0;
   return {
     status: state.status,
+    run,
+    totalRuns: listRuns().length,
     pauseReason: state.pauseReason,
     resumeAt: state.resumeAt,
     lastError: state.lastError,

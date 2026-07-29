@@ -216,7 +216,8 @@ CREATE TABLE IF NOT EXISTS lotto_draws (
 -- 전략 세대. 50회차마다 에이전트가 한 행을 추가한다(version 1 은 무작위 시드 세대).
 -- spec_json 은 엔진이 해석하는 선언형 사양이다 — 코드 문자열이 아니다(eval 금지).
 CREATE TABLE IF NOT EXISTS lotto_strategies (
-  version    INTEGER PRIMARY KEY,      -- 1부터 증가
+  version    INTEGER PRIMARY KEY,      -- 1부터 증가. **반복(run)을 넘어서도 계속 증가한다**
+  run        INTEGER NOT NULL DEFAULT 1, -- 이 세대가 만들어진 반복 회차
   from_round INTEGER NOT NULL,         -- 이 세대가 적용되기 시작한 회차
   spec_json  TEXT NOT NULL,            -- JSON(LottoStrategySpec)
   rationale  TEXT NOT NULL DEFAULT '', -- 에이전트가 남긴 근거
@@ -228,14 +229,24 @@ CREATE TABLE IF NOT EXISTS lotto_strategies (
 
 -- 회차별 채점 결과. cum_score 를 저장해 두는 이유는 1200행을 매 조회마다 누적 계산하지
 -- 않기 위해서가 아니라(그건 싸다), **중간에 회차를 건너뛰지 않았다는 증거**로 쓰기 위해서다.
+-- ⚠️ PK 가 (run, round) 인 이유: 사용자가 초기화 없이 **전체 회차를 다시 한 바퀴** 돌릴 수
+-- 있어야 한다('실험 반복'). 그때 1회차부터 다시 예측하는데, round 만 PK 면 이전 반복의 기록을
+-- 덮어써 반복 간 비교가 불가능해진다. run 은 1부터 증가하고 전략 세대(version)는 반복을
+-- 넘어서도 계속 이어진다 — 초기화가 아니라 '이어서 더 도는 것'이기 때문이다.
 CREATE TABLE IF NOT EXISTS lotto_predictions (
-  round        INTEGER PRIMARY KEY REFERENCES lotto_draws(round) ON DELETE CASCADE,
+  run          INTEGER NOT NULL DEFAULT 1,
+  round        INTEGER NOT NULL REFERENCES lotto_draws(round) ON DELETE CASCADE,
   version      INTEGER NOT NULL,       -- 이 회차에 적용된 전략 세대
   sets_json    TEXT NOT NULL,          -- JSON: number[10][6]
   matches_json TEXT NOT NULL,          -- JSON: number[10]
   score        INTEGER NOT NULL,       -- 회차 점수 (-60 ~ +60)
-  cum_score    INTEGER NOT NULL,       -- 1회차부터의 누적
-  scored_at    TEXT NOT NULL
+  cum_score    INTEGER NOT NULL,       -- 이 반복의 1회차부터의 누적
+  scored_at    TEXT NOT NULL,
+  PRIMARY KEY (run, round)
 );
 
 CREATE INDEX IF NOT EXISTS idx_lotto_pred_version ON lotto_predictions(version);
+-- ⚠️ (run, round) 인덱스는 여기 두면 안 된다. schema.sql 은 migrate() **이전**에 실행되는데,
+-- run 컬럼이 없는 옛 표가 남아 있는 DB 에서는 이 CREATE INDEX 가 "no such column: run" 으로
+-- 터지고 그 순간 서버 부팅 자체가 죽는다(실측 2026-07-29). 표를 다시 만든 직후,
+-- 즉 컬럼 존재가 보장된 시점에 migrate() 안에서 만든다.

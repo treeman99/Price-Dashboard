@@ -57,6 +57,52 @@ function migrate(conn: DatabaseSync): void {
     }
   }
 
+  // 로또 실험: '실험 반복'(초기화 없이 전체 회차를 다시 도는 기능) 도입으로 예측 표의 PK 가
+  // round → (run, round) 로 바뀌었다. SQLite 는 PK 를 ALTER 로 못 바꾸므로 표를 다시 만든다.
+  // 기존 행은 전부 run=1 로 옮긴다(첫 바퀴였으므로 사실과 일치한다).
+  const predCols = new Set(
+    (conn.prepare("PRAGMA table_info(lotto_predictions)").all() as Array<{ name: string }>).map(
+      (r) => r.name
+    )
+  );
+  if (predCols.size > 0 && !predCols.has("run")) {
+    conn.exec(`
+      ALTER TABLE lotto_predictions RENAME TO lotto_predictions_old;
+      CREATE TABLE lotto_predictions (
+        run          INTEGER NOT NULL DEFAULT 1,
+        round        INTEGER NOT NULL REFERENCES lotto_draws(round) ON DELETE CASCADE,
+        version      INTEGER NOT NULL,
+        sets_json    TEXT NOT NULL,
+        matches_json TEXT NOT NULL,
+        score        INTEGER NOT NULL,
+        cum_score    INTEGER NOT NULL,
+        scored_at    TEXT NOT NULL,
+        PRIMARY KEY (run, round)
+      );
+      INSERT INTO lotto_predictions (run, round, version, sets_json, matches_json, score, cum_score, scored_at)
+        SELECT 1, round, version, sets_json, matches_json, score, cum_score, scored_at FROM lotto_predictions_old;
+      DROP TABLE lotto_predictions_old;
+      CREATE INDEX IF NOT EXISTS idx_lotto_pred_version ON lotto_predictions(version);
+    `);
+  }
+
+  // (run, round) 인덱스는 **여기서** 만든다. schema.sql 에 두면 run 컬럼이 없는 옛 표가 남은
+  // DB 에서 부팅이 통째로 죽는다(위 블록이 돌기 전에 실행되기 때문). 이 지점은 표가 새로
+  // 만들어졌든 위에서 재작성됐든 컬럼 존재가 보장된다.
+  if (conn.prepare("PRAGMA table_info(lotto_predictions)").all().length > 0) {
+    conn.exec("CREATE INDEX IF NOT EXISTS idx_lotto_pred_run ON lotto_predictions(run, round)");
+  }
+
+  // lotto_strategies.run: PK 를 건드리지 않으므로 단순 ADD 로 충분하다.
+  const stratCols = new Set(
+    (conn.prepare("PRAGMA table_info(lotto_strategies)").all() as Array<{ name: string }>).map(
+      (r) => r.name
+    )
+  );
+  if (stratCols.size > 0 && !stratCols.has("run")) {
+    conn.exec("ALTER TABLE lotto_strategies ADD COLUMN run INTEGER NOT NULL DEFAULT 1");
+  }
+
   // products.sort_order: 기존 DB엔 컬럼이 없으므로 1회 ADD 후 id 순서로 백필.
   // (백필로 기존 카드 표시 순서가 종전(id 오름차순)과 동일하게 유지된다.)
   const productCols = new Set(

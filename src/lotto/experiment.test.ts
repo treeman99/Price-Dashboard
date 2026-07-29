@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { historyBefore } from "./experiment.ts";
-import { SEED_SPEC, generateSets, makeRng, normalizeSpec } from "./strategy.ts";
+import { SEED_SPEC, estimateHit3Rate, generateSets, makeRng, normalizeSpec } from "./strategy.ts";
 import type { LottoDraw } from "../../shared/lotto.ts";
 import {
   LOTTO_BASELINE_PER_ROUND,
@@ -79,7 +79,7 @@ test("어떤 전략도 무작위 기준선을 유의하게 넘지 못한다 (평
   const cases = [
     ["시드(무작위)", SEED_SPEC],
     ["hot 편향", normalizeSpec({ ...SEED_SPEC, explore: 0, weights: { hot: 3 }, temperature: 0.4 })],
-    ["max-coverage", normalizeSpec({ ...SEED_SPEC, coverage: "max-coverage" })],
+    ["fullCover", normalizeSpec({ ...SEED_SPEC, design: { ...SEED_SPEC.design, fullCover: true } })],
   ] as const;
 
   for (const [name, spec] of cases) {
@@ -89,12 +89,50 @@ test("어떤 전략도 무작위 기준선을 유의하게 넘지 못한다 (평
   }
 });
 
-test("세트를 겹치지 않게 깔면 분산이 줄어든다 (전략이 실제로 바꿀 수 있는 유일한 것)", () => {
+test("세트를 겹치지 않게 깔면 점수 분산이 줄어든다 (점수 축에서 유일하게 움직이는 것)", () => {
   const draws = syntheticDraws(300, 777);
   const independent = simulate(SEED_SPEC, draws);
-  const covered = simulate(normalizeSpec({ ...SEED_SPEC, coverage: "max-coverage" }), draws);
+  const covered = simulate(
+    normalizeSpec({ ...SEED_SPEC, design: { ...SEED_SPEC.design, fullCover: true } }),
+    draws
+  );
   assert.ok(
     covered.sd < independent.sd,
-    `max-coverage sd=${covered.sd.toFixed(2)} 가 independent sd=${independent.sd.toFixed(2)} 보다 작아야 한다`
+    `fullCover sd=${covered.sd.toFixed(2)} 가 independent sd=${independent.sd.toFixed(2)} 보다 작아야 한다`
   );
+});
+
+/**
+ * **목표 지표가 실제로 움직인다**는 것을 못박는다.
+ *
+ * 점수(위 테스트들)는 어떤 전략을 써도 기대값이 같지만, 3+ 적중 회차 비율은 다르다 —
+ * 같은 총 적중량을 몇 개의 회차에 흩뿌리느냐가 디자인에 달려 있기 때문이다.
+ * 이 테스트가 깨지면 목표 지표가 최적화 불가능해진 것이고, 그러면 실험의 전제가 무너진다.
+ */
+test("전 번호 커버 + 낮은 세트간 중복이 3+ 적중 회차 비율을 실제로 올린다", () => {
+  const spread = estimateHit3Rate(
+    generateSets(
+      normalizeSpec({ ...SEED_SPEC, design: { fullCover: true, maxSetOverlap: 1, searchSteps: 0 } }),
+      [],
+      1,
+      1
+    )
+  );
+  // 10세트를 좁은 풀에 몰아넣으면 적중이 같은 회차에 겹쳐 낭비된다.
+  const clumped = estimateHit3Rate([
+    [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 7], [1, 2, 3, 4, 5, 8], [1, 2, 3, 4, 5, 9],
+    [1, 2, 3, 4, 5, 10], [1, 2, 3, 4, 6, 7], [1, 2, 3, 4, 6, 8], [1, 2, 3, 4, 6, 9],
+    [1, 2, 3, 4, 6, 10], [1, 2, 3, 4, 7, 8],
+  ]);
+  assert.ok(spread > clumped + 0.1, `spread=${spread.toFixed(3)} vs clumped=${clumped.toFixed(3)}`);
+  // 무작위 기준선(33.4%) 근처 이상이어야 한다 — 아래로 떨어지면 디자인이 역효과를 낸 것이다.
+  assert.ok(spread > 0.33, `spread=${spread.toFixed(3)} 가 무작위 기준선보다 낮다`);
+});
+
+test("국소탐색을 켜면 목적함수가 나빠지지 않는다", () => {
+  const base = normalizeSpec({ ...SEED_SPEC, design: { fullCover: false, maxSetOverlap: 6, searchSteps: 0 } });
+  const tuned = normalizeSpec({ ...SEED_SPEC, design: { fullCover: false, maxSetOverlap: 6, searchSteps: 12 } });
+  const before = estimateHit3Rate(generateSets(base, [], 1, 1));
+  const after = estimateHit3Rate(generateSets(tuned, [], 1, 1));
+  assert.ok(after >= before, `탐색 후 ${after.toFixed(4)} < 탐색 전 ${before.toFixed(4)}`);
 });
