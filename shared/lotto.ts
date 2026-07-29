@@ -131,6 +131,54 @@ export const LOTTO_HIT3_RANDOM = 0.3336;
  */
 export const LOTTO_HIT3_CEILING = 0.3643;
 
+// ── 가중 회차 점수 (2026-07-29 목표 정련) ──
+//
+// 사용자 요청: "3개 이상 맞추는 횟수가 많을수록 좋고, 4개 이상은 더 높은 점수, 5개 이상은 더 높은 점수."
+//
+// ⚠️ 여기서 **'횟수'는 최적화할 수 없다.** 세트 단위로 더하는 모든 지표는 기대값이 디자인과
+//    무관하게 고정이기 때문이다(실측: 회차당 3+ 세트 수가 무작위 0.39364 / 전커버 0.39410 /
+//    풀10집중 0.39184, 이론 0.39370 — 전부 같다). 점수표를 지수(1/2/4/8/16/32)로 바꿔도
+//    마찬가지다. 회차당 기대점수가 -11.003 에서 -10.509 로 상수만 바뀌고 디자인 의존성은 0이다.
+//
+// 그래서 '높을수록 더 좋다'를 **회차 단위 지시함수의 가중합**으로 옮긴다. 이건 비선형이라
+// 최적화가 가능하다:
+//     회차 점수 = 1·[3+ 있음] + 2·[4+ 있음] + 4·[5+ 있음] + 8·[6 있음]   (0 ~ 15)
+export const LOTTO_HIT_WEIGHTS: ReadonlyArray<{ k: number; w: number }> = [
+  { k: 3, w: 1 },
+  { k: 4, w: 2 },
+  { k: 5, w: 4 },
+  { k: 6, w: 8 },
+];
+
+/** 그 회차 최고 적중 개수 → 가중 점수. */
+export function weightedHitScore(bestMatch: number): number {
+  return LOTTO_HIT_WEIGHTS.reduce((s, { k, w }) => s + (bestMatch >= k ? w : 0), 0);
+}
+
+/**
+ * 가중 점수의 **수학적 상한** = Σ w_k · E[k+ 세트 개수].
+ *
+ * P(회차에 k+ 가 1개 이상) <= E[k+ 세트 개수] 이기 때문이다 — 같은 회차에 두 번 터지면
+ * 회차 지표에서는 낭비된다. 최적화란 그 낭비를 줄이는 일이 전부이고, 따라서 **희귀한 사건일수록
+ * 여지가 없다**(4+ 는 무작위가 이미 상한에 붙어 있다: 3.073% vs 상한 3.120%).
+ */
+export const LOTTO_WEIGHTED_BOUND = LOTTO_HIT_WEIGHTS.reduce(
+  (s, { k, w }) => s + w * LOTTO_SET_COUNT * matchProbabilities().slice(k).reduce((a, p) => a + p, 0),
+  0
+);
+
+/** 무작위 디자인의 가중 회차 점수 평균(실측, 60만 표본). */
+export const LOTTO_WEIGHTED_RANDOM = 0.3976;
+
+/**
+ * 도달 가능한 천장(실측). 상한(46.0%)의 93.4% 지점이다.
+ *
+ * ⚠️ 3+ 단독일 때의 상대 여지(+8.6%)보다 **작다**(+8.1%). 높은 적중에 가중치를 줄수록
+ *    희귀 사건의 비중이 커지는데 그쪽은 최적화 여지가 없기 때문이다. 목표를 이렇게 바꾸는 것은
+ *    '더 원하는 것을 재는 것'이지 '더 잘할 수 있게 되는 것'이 아니다.
+ */
+export const LOTTO_WEIGHTED_CEILING = 0.4298;
+
 // ── 전략 사양 ──
 
 /**
@@ -229,6 +277,12 @@ export interface LottoRunStat {
   avgScore: number;
   avgMatches: number;
   bestMatch: number;
+  /** **목표 지표** — 가중 회차 점수 평균 */
+  weightedRate: number;
+  hit4Rounds: number;
+  hit5Rounds: number;
+  /** 3+ 를 달성한 **세트 수**. 전략과 무관하게 고정 — 대조군이다. */
+  hit3Sets: number;
   /** 아직 진행 중인 반복인지 */
   inProgress: boolean;
 }
@@ -301,6 +355,12 @@ export interface LottoScorePoint {
   cumHit3Rate: number;
   /** 이 회차에서 한 세트가 맞힌 최대 개수 */
   bestMatch: number;
+  /** **목표 지표** — 가중 회차 점수(0~15) */
+  weighted: number;
+  /** 최근 LOTTO_HIT3_WINDOW 회차의 가중 점수 평균 */
+  weightedRate: number;
+  /** 1회차부터의 누적 가중 점수 평균 */
+  cumWeightedRate: number;
 }
 
 /** 세대별 성적 요약. 에이전트 프롬프트와 화면이 같은 표를 본다. */
@@ -325,6 +385,11 @@ export interface LottoGenerationStat {
   hit3Sets: number;
   /** 이 세대에서 한 세트가 맞힌 최대 개수 */
   bestMatch: number;
+  /** **목표 지표** — 가중 회차 점수 평균 */
+  weightedRate: number;
+  /** 4+ / 5+ 적중 회차 수 (가중 점수의 구성 요소) */
+  hit4Rounds: number;
+  hit5Rounds: number;
 }
 
 /** 실험 진행 상태. */
@@ -378,6 +443,12 @@ export interface LottoSnapshot {
   hit3Random: number;
   /** 도달 가능한 천장 */
   hit3Ceiling: number;
+  /** **목표 지표** — 가중 회차 점수 평균 */
+  weightedRate: number | null;
+  weightedRandom: number;
+  weightedCeiling: number;
+  /** 수학적 상한(= Σ w_k·E[k+ 세트 수]). 최적화로도 넘을 수 없다. */
+  weightedBound: number;
   strategies: LottoStrategy[];
   generations: LottoGenerationStat[];
   /** 반복별 요약(오래된 순). 반복이 1회뿐이면 항목 1개. */

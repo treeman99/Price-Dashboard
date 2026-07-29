@@ -3,6 +3,7 @@ import {
   LOTTO_MAX_NUMBER,
   LOTTO_PICK,
   LOTTO_SET_COUNT,
+  weightedHitScore,
   winningNumbers,
 } from "../../shared/lotto.ts";
 
@@ -546,8 +547,8 @@ function getSearchSample(): DrawSample {
   return searchSample;
 }
 
-/** 세트 하나가 각 가상 추첨에서 3개 이상 맞히는지. */
-function setHitFlags(set: readonly number[], D: DrawSample): Uint8Array {
+/** 세트 하나의 가상 추첨별 **적중 개수**. 모든 지표를 여기서 유도한다. */
+function setMatchCounts(set: readonly number[], D: DrawSample): Uint8Array {
   let L = 0;
   let H = 0;
   for (const v of set) {
@@ -557,9 +558,19 @@ function setHitFlags(set: readonly number[], D: DrawSample): Uint8Array {
   }
   const out = new Uint8Array(D.n);
   for (let i = 0; i < D.n; i++) {
-    out[i] = popcount(D.lo[i] & L) + popcount(D.hi[i] & H) >= 3 ? 1 : 0;
+    out[i] = popcount(D.lo[i] & L) + popcount(D.hi[i] & H);
   }
   return out;
+}
+
+/** 가상 추첨별 '그 회차 최고 적중 개수'. */
+function bestPerSample(design: number[][], D: DrawSample): Uint8Array {
+  const best = new Uint8Array(D.n);
+  for (const set of design) {
+    const c = setMatchCounts(set, D);
+    for (let i = 0; i < D.n; i++) if (c[i] > best[i]) best[i] = c[i];
+  }
+  return best;
 }
 
 /**
@@ -568,17 +579,22 @@ function setHitFlags(set: readonly number[], D: DrawSample): Uint8Array {
  */
 export function estimateHit3Rate(design: number[][]): number {
   const D = getEvalSample();
-  const flags = design.map((s) => setHitFlags(s, D));
+  const best = bestPerSample(design, D);
   let hit = 0;
-  for (let i = 0; i < D.n; i++) {
-    for (const f of flags) {
-      if (f[i]) {
-        hit += 1;
-        break;
-      }
-    }
-  }
+  for (let i = 0; i < D.n; i++) if (best[i] >= 3) hit += 1;
   return hit / D.n;
+}
+
+/**
+ * **목표 지표** — 가중 회차 점수의 기대값(홀드아웃 표본).
+ * 1·[3+ 있음] + 2·[4+ 있음] + 4·[5+ 있음] + 8·[6 있음] 의 회차 평균.
+ */
+export function estimateWeightedRate(design: number[][]): number {
+  const D = getEvalSample();
+  const best = bestPerSample(design, D);
+  let s = 0;
+  for (let i = 0; i < D.n; i++) s += weightedHitScore(best[i]);
+  return s / D.n;
 }
 
 /**
@@ -590,21 +606,34 @@ export function estimateHit3Rate(design: number[][]): number {
 function optimizeDesign(start: number[][], steps: number, rng: () => number): number[][] {
   const D = getSearchSample(); // ⚠️ 홀드아웃(EVAL)이 아니라 탐색 표본이어야 한다
   const design = start.map((s) => [...s]);
-  const flags = design.map((s) => setHitFlags(s, D));
-  const cnt = new Int8Array(D.n);
-  for (const f of flags) for (let i = 0; i < D.n; i++) cnt[i] += f[i];
+  const counts = design.map((s) => setMatchCounts(s, D));
+
+  /** 세트 si 를 뺀 나머지의 표본별 최고 적중. 후보 평가를 O(n) 으로 만드는 장치다. */
+  const bestExcluding = (si: number): Uint8Array => {
+    const b = new Uint8Array(D.n);
+    for (let k = 0; k < counts.length; k++) {
+      if (k === si) continue;
+      const c = counts[k];
+      for (let i = 0; i < D.n; i++) if (c[i] > b[i]) b[i] = c[i];
+    }
+    return b;
+  };
 
   for (let step = 0; step < steps; step++) {
     const si = Math.floor(rng() * design.length);
-    const old = design[si];
-    const oldFlags = flags[si];
-    for (let i = 0; i < D.n; i++) cnt[i] -= oldFlags[i];
+    const other = bestExcluding(si);
+
+    const scoreWith = (c: Uint8Array): number => {
+      let s = 0;
+      for (let i = 0; i < D.n; i++) s += weightedHitScore(c[i] > other[i] ? c[i] : other[i]);
+      return s;
+    };
 
     // 현재 세트를 유지하는 안을 기준선으로 둔다(개선이 없으면 그대로).
-    let bestHit = 0;
-    for (let i = 0; i < D.n; i++) if (cnt[i] > 0 || oldFlags[i] > 0) bestHit += 1;
+    const old = design[si];
+    let best = scoreWith(counts[si]);
     let bestSet = old;
-    let bestFlags = oldFlags;
+    let bestCounts = counts[si];
 
     for (let pos = 0; pos < LOTTO_PICK; pos++) {
       for (let cand = 1; cand <= LOTTO_MAX_NUMBER; cand++) {
@@ -612,20 +641,18 @@ function optimizeDesign(start: number[][], steps: number, rng: () => number): nu
         const trial = [...old];
         trial[pos] = cand;
         trial.sort((a, b) => a - b);
-        const tf = setHitFlags(trial, D);
-        let hit = 0;
-        for (let i = 0; i < D.n; i++) if (cnt[i] > 0 || tf[i] > 0) hit += 1;
-        if (hit > bestHit) {
-          bestHit = hit;
+        const tc = setMatchCounts(trial, D);
+        const v = scoreWith(tc);
+        if (v > best) {
+          best = v;
           bestSet = trial;
-          bestFlags = tf;
+          bestCounts = tc;
         }
       }
     }
 
     design[si] = bestSet;
-    flags[si] = bestFlags;
-    for (let i = 0; i < D.n; i++) cnt[i] += bestFlags[i];
+    counts[si] = bestCounts;
   }
   return design;
 }

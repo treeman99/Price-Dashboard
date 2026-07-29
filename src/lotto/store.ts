@@ -19,6 +19,7 @@ import {
   LOTTO_MOVING_AVG_WINDOW,
   LOTTO_SET_COUNT,
   setScore,
+  weightedHitScore,
 } from "../../shared/lotto.ts";
 
 /**
@@ -324,10 +325,14 @@ export function scorePoints(run: number): LottoScorePoint[] {
   let windowSum = 0;
   let hitWindow = 0;
   let hitTotal = 0;
+  let wWindow = 0;
+  let wTotal = 0;
   const hits: number[] = [];
+  const weights: number[] = [];
   for (let i = 0; i < rows.length; i++) {
     const { hit3, best } = hit3Of(rows[i].matches_json);
     hits.push(hit3 ? 1 : 0);
+    weights.push(weightedHitScore(best));
 
     windowSum += rows[i].score;
     if (i >= LOTTO_MOVING_AVG_WINDOW) windowSum -= rows[i - LOTTO_MOVING_AVG_WINDOW].score;
@@ -338,6 +343,10 @@ export function scorePoints(run: number): LottoScorePoint[] {
     const hitSpan = Math.min(i + 1, LOTTO_HIT3_WINDOW);
 
     hitTotal += hits[i];
+
+    wWindow += weights[i];
+    if (i >= LOTTO_HIT3_WINDOW) wWindow -= weights[i - LOTTO_HIT3_WINDOW];
+    wTotal += weights[i];
 
     out.push({
       round: rows[i].round,
@@ -350,6 +359,9 @@ export function scorePoints(run: number): LottoScorePoint[] {
       hit3Rate: hitWindow / hitSpan,
       cumHit3Rate: hitTotal / (i + 1),
       bestMatch: best,
+      weighted: weights[i],
+      weightedRate: wWindow / hitSpan,
+      cumWeightedRate: wTotal / (i + 1),
     });
   }
   return out;
@@ -361,9 +373,12 @@ function aggregate(rows: Array<{ matches_json: string; score: number }>) {
   let zeroSets = 0;
   let sets = 0;
   let hit3Rounds = 0;
+  let hit4Rounds = 0;
+  let hit5Rounds = 0;
   let hit3Sets = 0;
   let bestMatch = 0;
   let totalScore = 0;
+  let weightedTotal = 0;
   for (const r of rows) {
     totalScore += r.score;
     let arr: number[];
@@ -373,7 +388,9 @@ function aggregate(rows: Array<{ matches_json: string; score: number }>) {
       continue;
     }
     let any3 = false;
+    let roundBest = 0;
     for (const m of arr) {
+      if (m > roundBest) roundBest = m;
       sets += 1;
       totalMatches += m;
       if (m === 0) zeroSets += 1;
@@ -384,6 +401,9 @@ function aggregate(rows: Array<{ matches_json: string; score: number }>) {
       if (m > bestMatch) bestMatch = m;
     }
     if (any3) hit3Rounds += 1;
+    if (roundBest >= 4) hit4Rounds += 1;
+    if (roundBest >= 5) hit5Rounds += 1;
+    weightedTotal += weightedHitScore(roundBest);
   }
   const n = rows.length;
   return {
@@ -393,8 +413,11 @@ function aggregate(rows: Array<{ matches_json: string; score: number }>) {
     avgMatches: sets > 0 ? totalMatches / sets : 0,
     zeroSetRate: sets > 0 ? zeroSets / sets : 0,
     hit3Rounds,
+    hit4Rounds,
+    hit5Rounds,
     hit3Sets,
     hit3Rate: n > 0 ? hit3Rounds / n : 0,
+    weightedRate: n > 0 ? weightedTotal / n : 0,
     bestMatch,
   };
 }
@@ -445,6 +468,9 @@ export function generationStats(): LottoGenerationStat[] {
         hit3Rounds: agg.hit3Rounds,
         hit3Sets: agg.hit3Sets,
         bestMatch: agg.bestMatch,
+        weightedRate: agg.weightedRate,
+        hit4Rounds: agg.hit4Rounds,
+        hit5Rounds: agg.hit5Rounds,
       };
     });
 }
@@ -492,6 +518,10 @@ export function runStats(currentRun: number): LottoRunStat[] {
         avgScore: agg.avgScore,
         avgMatches: agg.avgMatches,
         bestMatch: agg.bestMatch,
+        weightedRate: agg.weightedRate,
+        hit4Rounds: agg.hit4Rounds,
+        hit5Rounds: agg.hit5Rounds,
+        hit3Sets: agg.hit3Sets,
         // ⚠️ '현재 바퀴인가'만으로는 부족하다. 완주해도 state.run 은 그대로라 진행중으로 남는다
         // (실측: 진행률은 1234/1234 인데 표는 '진행중'). 완주(done)면 끝난 것이다.
         // paused 는 진행중이 맞다 — 재개하면 이어서 돌기 때문이다.

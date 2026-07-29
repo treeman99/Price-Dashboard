@@ -17,7 +17,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { LottoHit3Chart, LottoScoreChart, LottoCumulativeChart } from "@/components/LottoChart";
+import { LottoObjectiveChart, LottoScoreChart, LottoCumulativeChart } from "@/components/LottoChart";
 
 const STATUS_LABEL: Record<LottoStatus, string> = {
   idle: "대기",
@@ -57,19 +57,25 @@ function fmtPct(ratio: number, digits = 1): string {
   return `${(ratio * 100).toFixed(digits)}%`;
 }
 
+/** value 가 base 대비 상대적으로 몇 % 인지("무작위 대비 +5.6%" 같은 표현에 쓴다). base<=0 은
+ * 이론상 나올 수 없지만 방어적으로 0을 반환한다. */
+function relPct(value: number, base: number): number {
+  return base > 0 ? (value / base - 1) * 100 : 0;
+}
+
 /**
- * 바퀴별 성적표에서 "천장에 얼마나 근접했는가"를 막대로 보여준다. 무작위~천장 구간을 0~100%로
- * 정규화한다 — 두 기준선 사이 3%p 안에서 어디쯤인지가 이 실험의 결론이라, 절대 스케일(0~100%
- * 적중률)로 그리면 막대가 거의 안 움직여 의미가 없다. 구간 밖(기준선보다 낮거나 천장을
- * 넘는 값)도 나올 수 있어 0~100으로 clamp 한다.
+ * 값이 [low, high] 구간에서 얼마나 진행됐는지 0~100 막대로 보여준다. 바퀴별 성적표의 가중
+ * 점수 칸에서 "무작위~수학적 상한" 구간 중 어디쯤인지(상한 근접도)를 보여줄 때 쓴다 — 절대
+ * 스케일(0~15)로 그리면 세 기준선이 서로 6.5%p 안쪽에 몰려 있어 막대가 거의 안 움직이므로
+ * 정규화가 필수다. 구간 밖(더 낮거나 상한을 넘는 값)도 나올 수 있어 0~100으로 clamp 한다.
  */
-function Hit3Bar({ rate, random, ceiling }: { rate: number; random: number; ceiling: number }) {
-  const span = ceiling - random;
-  const pct = span > 0 ? ((rate - random) / span) * 100 : 0;
+function ProximityBar({ value, low, high }: { value: number; low: number; high: number }) {
+  const span = high - low;
+  const pct = span > 0 ? ((value - low) / span) * 100 : 0;
   const clamped = Math.max(0, Math.min(100, pct));
   return (
     <div className="mt-1 h-1.5 w-20 overflow-hidden rounded-full bg-muted">
-      <div className="h-full rounded-full bg-emerald-500" style={{ width: `${clamped}%` }} />
+      <div className="h-full rounded-full bg-[#7c3aed]" style={{ width: `${clamped}%` }} />
     </div>
   );
 }
@@ -170,9 +176,21 @@ function RecentRoundCard({ r }: { r: LottoRecentRound }) {
   );
 }
 
-/** 바퀴별 성적표 한 행 — 이 실험의 결론이 읽히는 곳이라 세대 표보다 크고 눈에 띄게 그린다. */
-function RunRow({ r, hit3Random, hit3Ceiling }: { r: LottoRunStat; hit3Random: number; hit3Ceiling: number }) {
-  const diff = (r.hit3Rate - hit3Random) * 100;
+/**
+ * 바퀴별 성적표 한 행 — 이 실험의 결론이 읽히는 곳이라 세대 표보다 크고 눈에 띄게 그린다.
+ * 헤드라인 칸이 3+ 적중률에서 가중 점수로 바뀌었다(팀 리드 지시, 2026-07-29 목표 정련) —
+ * 3+ 적중률은 오른쪽에 구성 요소로 남아 있다.
+ */
+function RunRow({
+  r,
+  weightedRandom,
+  weightedBound,
+}: {
+  r: LottoRunStat;
+  weightedRandom: number;
+  weightedBound: number;
+}) {
+  const diffPct = relPct(r.weightedRate, weightedRandom);
   return (
     <tr className={cn("border-t align-middle", r.inProgress && "bg-violet-50/60")}>
       <td className="px-3 py-3 font-semibold">{r.run}바퀴</td>
@@ -181,13 +199,28 @@ function RunRow({ r, hit3Random, hit3Ceiling }: { r: LottoRunStat; hit3Random: n
         v{r.firstVersion}~v{r.lastVersion}
       </td>
       <td className="px-3 py-3">
-        <div className="text-right text-base font-extrabold text-emerald-700">{fmtPct(r.hit3Rate)}</div>
-        <div className={cn("text-right text-[11px] font-medium", diff > 0 ? "text-emerald-600" : "text-slate-400")}>
-          ({fmtSigned(diff, 1)}%p vs 무작위)
+        <div className="text-right text-base font-extrabold text-[#7c3aed]">
+          {r.weightedRate.toFixed(4)}
         </div>
-        <Hit3Bar rate={r.hit3Rate} random={hit3Random} ceiling={hit3Ceiling} />
+        <div
+          className={cn(
+            "text-right text-[11px] font-medium",
+            diffPct > 0 ? "text-emerald-600" : "text-slate-400"
+          )}
+        >
+          ({fmtSigned(diffPct, 1)}% vs 무작위)
+        </div>
+        <ProximityBar value={r.weightedRate} low={weightedRandom} high={weightedBound} />
       </td>
-      <td className="px-3 py-3 text-right">{r.hit3Rounds}</td>
+      <td className="px-3 py-3 text-right">{r.hit4Rounds}</td>
+      <td className="px-3 py-3 text-right">{r.hit5Rounds}</td>
+      <td className="px-3 py-3 text-right font-semibold text-emerald-700">{fmtPct(r.hit3Rate)}</td>
+      <td
+        className="px-3 py-3 text-right text-muted-foreground"
+        title="3+ 를 달성한 세트의 총 개수 — 대조군, 전략과 무관하게 기대값이 고정됩니다"
+      >
+        {r.hit3Sets}
+      </td>
       <td className="px-3 py-3 text-right font-semibold">{r.bestMatch}</td>
       <td className="px-3 py-3 text-right text-muted-foreground">{r.avgScore.toFixed(2)}</td>
       <td className="px-3 py-3">
@@ -316,6 +349,9 @@ export function LottoBoard() {
   // 최신이 위에 오도록 뒤집기만 한다(항상 배열이라 별도 폴백은 필요 없다).
   const recent = [...snap.recentResults].sort((a, b) => b.round - a.round);
   const hit3DiffVsRandom = snap.hit3Rate != null ? (snap.hit3Rate - snap.hit3Random) * 100 : null;
+  // **헤드라인** — 가중 점수의 무작위 대비 상대 변화(%). hit3DiffVsRandom 은 %p(퍼센트 포인트)
+  // 표기지만, 가중 점수는 그 자체가 비율이 아니라 회차당 기대 점수라 상대 변화(%)로 보여준다.
+  const weightedDiffPct = snap.weightedRate != null ? relPct(snap.weightedRate, snap.weightedRandom) : null;
   // 실험 반복은 완주(done) 상태에서만 서버가 받아 준다(experiment.ts repeatExperiment 참고).
   // 버튼을 누르기 전에 이유를 보여 주기 위해 프론트에서도 같은 조건을 미리 안내한다.
   const repeatDisabledReason: string | undefined =
@@ -548,8 +584,8 @@ export function LottoBoard() {
           </div>
         )}
 
-      {/* 상태 카드 — 헤드라인이 3+ 적중률로 바뀌었다(팀 리드 지시, 2026-07-29 목표 전환).
-          점수/평균점수는 지우지 않고 작게 "(대조군)" 라벨과 함께 아래 서브 로우로 내렸다. */}
+      {/* 상태 카드 — 헤드라인이 가중 점수로 바뀌었다(팀 리드 지시, 2026-07-29 목표 정련).
+          3+ 적중률은 지우지 않고 "구성 요소" 라벨과 함께 아래 서브 로우로 내렸다. */}
       <Card className="mb-6 p-5">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div>
@@ -571,32 +607,51 @@ export function LottoBoard() {
           </div>
           <div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              3+ 적중률
+              가중 회차 점수
               <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
                 목표 지표
               </span>
             </div>
-            <div className="mt-1 text-2xl font-extrabold text-emerald-700">
-              {snap.hit3Rate != null ? fmtPct(snap.hit3Rate) : "-"}
+            <div className="mt-1 text-2xl font-extrabold text-[#7c3aed]">
+              {snap.weightedRate != null ? snap.weightedRate.toFixed(4) : "-"}
             </div>
             <div className="mt-0.5 text-xs text-muted-foreground">
-              무작위 {fmtPct(snap.hit3Random)} · 천장 {fmtPct(snap.hit3Ceiling)}
-              {hit3DiffVsRandom != null && (
+              무작위 {snap.weightedRandom.toFixed(4)} · 천장 {snap.weightedCeiling.toFixed(4)} · 상한{" "}
+              {snap.weightedBound.toFixed(4)}
+              {weightedDiffPct != null && (
                 <span
                   className={cn(
                     "ml-1.5 font-semibold",
-                    hit3DiffVsRandom > 0 ? "text-emerald-600" : "text-slate-400"
+                    weightedDiffPct > 0 ? "text-emerald-600" : "text-slate-400"
                   )}
                 >
-                  ({fmtSigned(hit3DiffVsRandom, 1)}%p vs 무작위)
+                  ({fmtSigned(weightedDiffPct, 1)}% vs 무작위)
                 </span>
               )}
             </div>
           </div>
         </div>
-        {/* 대조군(점수) 요약 — 작게. 지우지 않는 이유: 점수 자체는 여전히 채점 로그이자
-            "세트가 하나도 안 맞은 비율" 같은 다른 신호의 원천이라 화면에서 완전히 뺄 이유는 없다. */}
-        <div className="mt-4 grid grid-cols-2 gap-4 border-t pt-3 sm:grid-cols-4">
+        {/* 구성 요소 + 대조군 요약. 3+ 적중률은 지운 게 아니라 여기로 내려왔다 — 가중 점수의
+            대부분이 이 값에서 온다는 걸 계속 보여준다. */}
+        <div className="mt-4 grid grid-cols-2 gap-4 border-t pt-3 sm:grid-cols-5">
+          <div>
+            <div className="text-[11px] text-muted-foreground">
+              3+ 적중률 <span className="opacity-70">(구성 요소)</span>
+            </div>
+            <div className="mt-0.5 text-sm font-semibold text-emerald-700">
+              {snap.hit3Rate != null ? fmtPct(snap.hit3Rate) : "-"}
+              {hit3DiffVsRandom != null && (
+                <span
+                  className={cn(
+                    "ml-1 text-[11px] font-medium",
+                    hit3DiffVsRandom > 0 ? "text-emerald-600" : "text-slate-400"
+                  )}
+                >
+                  ({fmtSigned(hit3DiffVsRandom, 1)}%p)
+                </span>
+              )}
+            </div>
+          </div>
           <div>
             <div className="text-[11px] text-muted-foreground">
               누적 점수 <span className="opacity-70">(대조군)</span>
@@ -627,52 +682,63 @@ export function LottoBoard() {
             <div className="mt-0.5 text-sm font-semibold">{snap.state.run}바퀴째</div>
           </div>
         </div>
-        {/* 새 캡션 — 이 실험이 왜 "3+ 적중률"만 유일하게 최적화 가능한지 설명한다(팀 리드 지시).
-            기존 "기준선은 어떤 전략이든 동일 / 분산만 바뀜" 문장은 아래 점수 차트(대조군) 쪽으로
-            옮겼다 — 그건 점수 얘기지 3+ 적중률 얘기가 아니라서 여기 남으면 헷갈린다. */}
+        {/* 새 캡션 — 가중 점수가 왜 "회차 단위 지시함수"로만 최적화 가능한지, 그리고 그마저도
+            수학적 상한을 넘을 수 없는 이유를 설명한다(팀 리드 지시, 2026-07-29 목표 정련). */}
         <p className="mt-4 border-t pt-3 text-xs leading-relaxed text-muted-foreground">
-          3+ 적중 <span className="font-semibold text-foreground">세트의 총 개수</span>는 전략과
-          무관하게 고정입니다. 바뀌는 것은 그 적중이{" "}
-          <span className="font-semibold text-foreground">몇 개의 서로 다른 회차에 흩어지는가</span>
-          입니다. 그래서 이 비율만이 유일하게 최적화 가능한 지표입니다.
+          점수표를 어떻게 바꿔도{" "}
+          <span className="font-semibold text-foreground">세트 단위로 더하는 지표는 기대값이 고정</span>
+          입니다(3+ 세트 수는 회차당 0.394개로 전략과 무관). 최적화가 가능한 것은{" "}
+          <span className="font-semibold text-foreground">회차 단위 지시함수</span>뿐이고, 그마저
+          수학적 상한 {snap.weightedBound.toFixed(4)}을 넘을 수 없습니다. 가중치가 높은
+          항목(4+·5+)일수록 여지가 작습니다 — 희귀해서 한 회차에 겹칠 일이 거의 없기 때문입니다.
         </p>
       </Card>
 
-      {/* 3+ 적중률 추이 — 이 실험의 새 주인공 차트(LottoChart.tsx 의 LottoHit3Chart 참고). */}
+      {/* 가중 회차 점수 추이 — 이 실험의 주인공 차트(LottoChart.tsx 의 LottoObjectiveChart 참고). */}
       <section className="mb-6">
         <Card className="p-4">
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="text-lg font-bold" style={{ color: "#059669" }}>
-              🎯 3+ 적중률 추이
+            <h3 className="text-lg font-bold" style={{ color: "#7c3aed" }}>
+              📈 가중 회차 점수 추이
               <span className="ml-2 text-xs font-normal text-muted-foreground">
                 — 이 실험의 목표 지표
               </span>
             </h3>
             <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
               <span className="inline-flex items-center gap-1">
-                <span className="inline-block h-0.5 w-3 bg-[#059669]" />
+                <span className="inline-block h-0.5 w-3 bg-[#7c3aed]" />
                 200회차 이동평균
               </span>
               <span className="inline-flex items-center gap-1">
-                <span className="inline-block h-0.5 w-3 bg-[#a7f3d0]" />
+                <span className="inline-block h-0.5 w-3 bg-[#ddd6fe]" />
                 누적
               </span>
               <span className="inline-flex items-center gap-1">
+                <span className="inline-block h-0 w-3 border-t border-dashed border-emerald-300" />
+                3+ 적중률(보조)
+              </span>
+              <span className="inline-flex items-center gap-1">
                 <span className="inline-block h-0 w-3 border-t border-dashed border-slate-400" />
-                무작위 / 천장 기준선
+                무작위 / 천장
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block h-0.5 w-3 bg-[#dc2626]" />
+                상한(넘을 수 없음)
               </span>
             </div>
           </div>
-          <LottoHit3Chart
+          <LottoObjectiveChart
             points={snap.points}
             strategies={snap.strategies}
-            hit3Random={snap.hit3Random}
-            hit3Ceiling={snap.hit3Ceiling}
+            weightedRandom={snap.weightedRandom}
+            weightedCeiling={snap.weightedCeiling}
+            weightedBound={snap.weightedBound}
           />
           <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-            y축은 25%~45%로 고정했습니다 — 자동 스케일이면 기준선(
-            {fmtPct(snap.hit3Random)})과 천장({fmtPct(snap.hit3Ceiling)})의 3%p 차이가 뭉개져
-            안 보입니다.
+            y축은 0.30~0.48로 고정했습니다 — 자동 스케일이면 무작위({snap.weightedRandom.toFixed(4)})
+            · 천장({snap.weightedCeiling.toFixed(4)}) · 상한({snap.weightedBound.toFixed(4)})의
+            차이가 뭉개져 안 보입니다. 옅은 초록(3+ 적중률)이 굵은 보라(가중 점수)와 거의 겹쳐
+            움직이는 것이, 가중 점수 대부분이 3+ 항에서 온다는 증거입니다.
           </p>
         </Card>
       </section>
@@ -693,14 +759,22 @@ export function LottoBoard() {
           </Card>
         ) : (
           <Card className="overflow-x-auto border-emerald-200 p-0">
-            <table className="w-full min-w-[760px] text-sm">
+            <table className="w-full min-w-[980px] text-sm">
               <thead className="bg-emerald-50/60 text-xs text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">바퀴</th>
                   <th className="px-3 py-2 text-right font-medium">회차수</th>
                   <th className="px-3 py-2 text-left font-medium">세대 범위</th>
+                  <th className="px-3 py-2 text-right font-medium">가중 점수</th>
+                  <th className="px-3 py-2 text-right font-medium">4+ 회차</th>
+                  <th className="px-3 py-2 text-right font-medium">5+ 회차</th>
                   <th className="px-3 py-2 text-right font-medium">3+ 적중률</th>
-                  <th className="px-3 py-2 text-right font-medium">3+ 회차수</th>
+                  <th
+                    className="px-3 py-2 text-right font-medium"
+                    title="3+ 를 달성한 세트의 총 개수 — 대조군, 전략과 무관하게 기대값이 고정됩니다"
+                  >
+                    3+ 세트수*
+                  </th>
                   <th className="px-3 py-2 text-right font-medium">최고적중</th>
                   <th className="px-3 py-2 text-right font-medium">평균점수 (대조군)</th>
                   <th className="px-3 py-2 text-left font-medium">상태</th>
@@ -708,16 +782,22 @@ export function LottoBoard() {
               </thead>
               <tbody>
                 {snap.runs.map((r) => (
-                  <RunRow key={r.run} r={r} hit3Random={snap.hit3Random} hit3Ceiling={snap.hit3Ceiling} />
+                  <RunRow key={r.run} r={r} weightedRandom={snap.weightedRandom} weightedBound={snap.weightedBound} />
                 ))}
               </tbody>
             </table>
           </Card>
         )}
+        {snap.runs.length > 0 && (
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            * 3+ 세트수 = 대조군 — 전략과 무관하게 기대값이 고정됩니다(이 실험의 핵심 증거).
+          </p>
+        )}
       </section>
 
-      {/* 세대 이력 — hit3Rate/bestMatch 컬럼을 추가하고, 표가 넓어진 만큼 점수 관련 컬럼
-          (기준선 대비/0개 세트 비율)을 뺐다. */}
+      {/* 세대 이력 — 가중 점수 컬럼을 앞세우고 3+ 적중률·4+ 회차 컬럼을 추가했다(팀 리드 지시,
+          2026-07-29 목표 정련). 표가 넓어진 만큼 점수 관련 컬럼(기준선 대비/0개 세트 비율)은
+          여전히 뺀 채로 둔다. */}
       <section className="mb-6">
         <h3 className="mb-2 text-lg font-bold">세대 이력</h3>
         {snap.generations.length === 0 ? (
@@ -726,13 +806,15 @@ export function LottoBoard() {
           </Card>
         ) : (
           <Card className="overflow-x-auto p-0">
-            <table className="w-full min-w-[840px] text-sm">
+            <table className="w-full min-w-[960px] text-sm">
               <thead className="bg-muted/50 text-xs text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">세대</th>
                   <th className="px-3 py-2 text-left font-medium">회차 구간</th>
                   <th className="px-3 py-2 text-right font-medium">회차수</th>
+                  <th className="px-3 py-2 text-right font-medium">가중 점수</th>
                   <th className="px-3 py-2 text-right font-medium">3+ 적중률</th>
+                  <th className="px-3 py-2 text-right font-medium">4+ 회차</th>
                   <th className="px-3 py-2 text-right font-medium">최고적중</th>
                   <th className="px-3 py-2 text-right font-medium">평균점수 (대조군)</th>
                   <th className="px-3 py-2 text-right font-medium">세트당 평균 적중</th>
@@ -749,9 +831,13 @@ export function LottoBoard() {
                         {g.fromRound}~{g.toRound}회
                       </td>
                       <td className="px-3 py-2 text-right">{g.rounds}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-[#7c3aed]">
+                        {g.weightedRate.toFixed(4)}
+                      </td>
                       <td className="px-3 py-2 text-right font-semibold text-emerald-700">
                         {fmtPct(g.hit3Rate)}
                       </td>
+                      <td className="px-3 py-2 text-right">{g.hit4Rounds}</td>
                       <td className="px-3 py-2 text-right">{g.bestMatch}</td>
                       <td className="px-3 py-2 text-right text-muted-foreground">
                         {g.avgScore.toFixed(2)}

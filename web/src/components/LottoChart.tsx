@@ -68,10 +68,11 @@ function GenerationLines({ strategies }: { strategies: LottoStrategy[] }) {
 }
 
 /**
- * 3+ 적중률 차트 전용 툴팁. 회차 점수 툴팁과 데이터 포인트(LottoScorePoint)는 같지만 이 차트의
- * 주인공 필드(hit3Rate/cumHit3Rate)를 앞세워 보여준다.
+ * 가중 점수 차트 전용 툴팁. 이 회차의 가중 점수(0~15, weightedHitScore 결과)와 그 근거인
+ * 3+ 여부·최고 적중 개수, 이동평균·누적, 세대를 한 번에 보여준다. 3+ 적중률(hit3Rate)도
+ * 같이 보여줘 "가중 점수 대부분이 3+ 항에서 온다"는 걸 숫자로도 확인시킨다.
  */
-function Hit3Tooltip({ active, payload }: TooltipProps<number, string>) {
+function ObjectiveTooltip({ active, payload }: TooltipProps<number, string>) {
   if (!active || !payload || !payload.length) return null;
   const p = payload[0]?.payload as LottoScorePoint | undefined;
   if (!p) return null;
@@ -81,9 +82,11 @@ function Hit3Tooltip({ active, payload }: TooltipProps<number, string>) {
         {p.round}회차 · {p.drawDate}
       </div>
       <div className="mt-1 space-y-0.5 text-muted-foreground">
-        <div>{p.hit3 ? "🎯 이 회차 3+ 적중" : "이 회차 3+ 미적중"} · 최고 {p.bestMatch}개</div>
-        <div>200회차 이동평균 {(p.hit3Rate * 100).toFixed(1)}%</div>
-        <div>누적 {(p.cumHit3Rate * 100).toFixed(1)}%</div>
+        <div>
+          가중 점수 {p.weighted}/15 · {p.hit3 ? "🎯 3+ 적중" : "3+ 미적중"} · 최고 {p.bestMatch}개
+        </div>
+        <div>200회차 이동평균 {p.weightedRate.toFixed(4)} (3+ 적중률 {(p.hit3Rate * 100).toFixed(1)}%)</div>
+        <div>누적 {p.cumWeightedRate.toFixed(4)}</div>
         <div>세대 v{p.version}</div>
       </div>
     </div>
@@ -91,32 +94,37 @@ function Hit3Tooltip({ active, payload }: TooltipProps<number, string>) {
 }
 
 /**
- * ⚠️ y축을 [0.25, 0.45] 로 고정한다. 이 실험의 결론은 "무작위 기준선(33.4%)과 도달 가능 천장
- * (36.4%)의 차이는 겨우 3%p"라는 것이다. recharts 기본 auto 스케일은 데이터 전체 범위(때로는
- * 0%~40% 이상)에 맞춰 축을 늘리는데, 그러면 이 3%p 차이가 축 전체의 몇 % 밖에 안 되는 눌린
- * 구간으로 뭉개져 화면에서 안 보인다. 고정 도메인이 실험의 결론을 실제로 눈에 보이게 한다
- * (팀 리드 지시).
+ * ⚠️ y축을 [0.30, 0.48] 로 고정한다. 무작위(0.3976)·천장(0.4298)·상한(0.4601) 세 기준선이
+ * 전부 이 구간 안에 몰려 있고 서로 6.5%p 안쪽 차이다. recharts 자동 스케일(보통 0 근처부터
+ * 시작)을 쓰면 이 좁은 차이가 축 전체의 몇 % 밖에 안 되는 구간으로 눌려 안 보이므로, 3+
+ * 적중률 차트와 같은 이유로 고정한다(팀 리드 지시).
  */
-const HIT3_Y_DOMAIN: [number, number] = [0.25, 0.45];
+const WEIGHTED_Y_DOMAIN: [number, number] = [0.3, 0.48];
 
 /**
- * **3+ 적중률 추이 — 이 실험의 새 주인공 차트.**
- * 점수(LottoScoreChart)는 어떤 전략을 써도 기대값이 같다는 게 확인되어 대조군으로 강등됐고,
- * 이 차트가 그 자리를 대신한다. 계열 2개 + 기준선 2개:
- *  - hit3Rate: 최근 LOTTO_HIT3_WINDOW(200)회차 이동평균 — 굵은 선, 주인공
- *  - cumHit3Rate: 1회차부터의 누적 비율 — 가는 선
- *  - 무작위 기준선(hit3Random)과 도달 가능 천장(hit3Ceiling): 둘 다 수평 점선
+ * **가중 회차 점수 추이 — 이 실험의 주인공 차트.**
+ * 3+ 적중률 단독 지표(과거 LottoHit3Chart)는 가중 점수의 구성 요소로 강등됐다 — 사용자 요청이
+ * "3+ 는 많을수록, 4+/5+ 는 더 높은 점수"였기 때문이다. 계열 3개 + 기준선 3개:
+ *  - weightedRate: 최근 LOTTO_HIT3_WINDOW(200)회차 가중 점수 이동평균 — 굵은 선, 주인공
+ *  - cumWeightedRate: 1회차부터의 누적 평균 — 가는 선
+ *  - hit3Rate: 3+ 적중률(200회차 이동평균) — 옅은 보조 계열. 가중 점수의 대부분이 3+ 항에서
+ *    나온다는 것(4+/5+/6개는 희귀해서 기여가 작다)을 곡선 두 개가 거의 겹치는 모습으로 보여준다.
+ *  - 기준선 3개: 무작위(weightedRandom, 점선) · 도달 가능 천장(weightedCeiling, 점선) ·
+ *    수학적 상한(weightedBound). 상한은 최적화로도 절대 못 넘는 값이라 다른 둘과 다르게
+ *    실선 + 진한 빨강으로 구분한다(팀 리드 지시).
  */
-export function LottoHit3Chart({
+export function LottoObjectiveChart({
   points,
   strategies,
-  hit3Random,
-  hit3Ceiling,
+  weightedRandom,
+  weightedCeiling,
+  weightedBound,
 }: {
   points: LottoScorePoint[];
   strategies: LottoStrategy[];
-  hit3Random: number;
-  hit3Ceiling: number;
+  weightedRandom: number;
+  weightedCeiling: number;
+  weightedBound: number;
 }) {
   if (!points.length) {
     return (
@@ -140,45 +148,69 @@ export function LottoHit3Chart({
           tick={{ fontSize: 11 }}
           stroke="hsl(var(--muted-foreground))"
           width={48}
-          domain={HIT3_Y_DOMAIN}
-          tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+          domain={WEIGHTED_Y_DOMAIN}
+          tickFormatter={(v: number) => v.toFixed(2)}
         />
-        <Tooltip content={<Hit3Tooltip />} />
+        <Tooltip content={<ObjectiveTooltip />} />
         <ReferenceLine
-          y={hit3Random}
+          y={weightedRandom}
           stroke="#94a3b8"
           strokeDasharray="6 3"
           label={{
-            value: `무작위 ${(hit3Random * 100).toFixed(1)}%`,
+            value: `무작위 ${weightedRandom.toFixed(4)}`,
             position: "insideBottomRight",
             fontSize: 11,
             fill: "#64748b",
           }}
         />
         <ReferenceLine
-          y={hit3Ceiling}
+          y={weightedCeiling}
           stroke="#f59e0b"
           strokeDasharray="6 3"
           label={{
-            value: `천장 ${(hit3Ceiling * 100).toFixed(1)}%`,
+            value: `천장 ${weightedCeiling.toFixed(4)}`,
             position: "insideTopRight",
             fontSize: 11,
             fill: "#b45309",
           }}
         />
+        {/* 상한선만 실선 + 두꺼운 진한 빨강 — 도달 가능/불가능의 경계가 아니라 수학적으로
+            절대 넘을 수 없는 값이라, 점선 기준선 두 개와는 다른 무게감을 줘야 한다. */}
+        <ReferenceLine
+          y={weightedBound}
+          stroke="#dc2626"
+          strokeWidth={2}
+          label={{
+            value: `상한 ${weightedBound.toFixed(4)} — 넘을 수 없음`,
+            position: "insideTopRight",
+            fontSize: 11,
+            fill: "#b91c1c",
+          }}
+        />
         <GenerationLines strategies={strategies} />
+        {/* 보조 계열: 3+ 적중률. 옅고 가늘게 — 주인공(weightedRate)과 겹쳐 그려질수록 "가중
+            점수 대부분이 3+ 에서 온다"는 게 시각적으로 드러난다. */}
         <Line
           type="monotone"
-          dataKey="cumHit3Rate"
+          dataKey="hit3Rate"
           stroke="#a7f3d0"
+          strokeWidth={1}
+          strokeDasharray="3 3"
+          dot={false}
+          isAnimationActive={false}
+        />
+        <Line
+          type="monotone"
+          dataKey="cumWeightedRate"
+          stroke="#ddd6fe"
           strokeWidth={1}
           dot={false}
           isAnimationActive={false}
         />
         <Line
           type="monotone"
-          dataKey="hit3Rate"
-          stroke="#059669"
+          dataKey="weightedRate"
+          stroke="#7c3aed"
           strokeWidth={2.5}
           dot={false}
           isAnimationActive={false}

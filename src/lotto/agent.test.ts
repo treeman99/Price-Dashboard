@@ -42,6 +42,9 @@ const ctx: LottoEvolveContext = {
       hit3Rounds: 16,
       hit3Sets: 19,
       bestMatch: 4,
+      weightedRate: 0.40,
+      hit4Rounds: 2,
+      hit5Rounds: 0,
     },
   ],
   runs: [
@@ -57,6 +60,10 @@ const ctx: LottoEvolveContext = {
       avgScore: -10.4,
       avgMatches: 0.94,
       bestMatch: 4,
+      weightedRate: 0.40,
+      hit4Rounds: 2,
+      hit5Rounds: 0,
+      hit3Sets: 19,
       inProgress: true,
     },
   ],
@@ -74,6 +81,7 @@ test("모델은 프로젝트 공용 설정과 무관하게 Opus 5 로 고정된�
 test("프롬프트가 목표 지표(3+ 적중률)를 규칙·현재 사양과 함께 싣는다", () => {
   const p = buildEvolvePrompt(ctx);
   assert.match(p, /보너스 1개 = 7개/);
+  assert.match(p, /가중 회차 점수/);
   assert.match(p, /3\+ 적중률/);
   assert.match(p, /51회차부터/);
   assert.match(p, /"explore": 1/); // 현재 사양 JSON
@@ -99,10 +107,10 @@ test("대조군(점수·3+세트수)임을 명시해 개선 지표로 오인하�
   assert.match(p, new RegExp(LOTTO_BASELINE_PER_ROUND.toFixed(2).replace(".", "\\.")));
 });
 
-test("바퀴별·세대별 성적표가 3+ 적중률과 함께 표로 들어간다", () => {
+test("바퀴별·세대별 성적표가 가중 점수를 주인공으로 표에 들어간다", () => {
   const p = buildEvolvePrompt(ctx);
-  assert.match(p, /\| 1 \(진행중\) \| 50 \| v1~v1 \| \*\*32\.0%\*\* \| 16 \|/);
-  assert.match(p, /\| 1 \| 1~50 \| 50 \| \*\*32\.0%\*\* \| 16 \| 19 \| 4 \| -10\.40 \|/);
+  assert.match(p, /\| 1 \(진행중\) \| 50 \| v1~v1 \| \*\*0\.4000\*\* \| 32\.0% \| 2 \| 0 \|/);
+  assert.match(p, /\| 1 \| 1~50 \| 50 \| \*\*0\.4000\*\* \| 32\.0% \| 2 \| 19 \| 4 \|/);
 });
 
 test("토큰 한도 오류를 알아본다", () => {

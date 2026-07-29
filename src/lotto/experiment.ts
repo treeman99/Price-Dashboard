@@ -31,6 +31,9 @@ import {
   LOTTO_HIT3_CEILING,
   LOTTO_HIT3_RANDOM,
   LOTTO_RECENT_LIMIT,
+  LOTTO_WEIGHTED_BOUND,
+  LOTTO_WEIGHTED_CEILING,
+  LOTTO_WEIGHTED_RANDOM,
   countMatches,
   winningNumbers,
 } from "../../shared/lotto.ts";
@@ -518,6 +521,7 @@ export function getSnapshot(): LottoSnapshot {
 
   const points = scorePoints(run);
   const hit3Rounds = points.reduce((n, p) => n + (p.hit3 ? 1 : 0), 0);
+  const weightedTotal = points.reduce((n, p) => n + p.weighted, 0);
 
   return {
     state,
@@ -534,6 +538,10 @@ export function getSnapshot(): LottoSnapshot {
     hit3Rounds,
     hit3Random: LOTTO_HIT3_RANDOM,
     hit3Ceiling: LOTTO_HIT3_CEILING,
+    weightedRate: total > 0 ? weightedTotal / total : null,
+    weightedRandom: LOTTO_WEIGHTED_RANDOM,
+    weightedCeiling: LOTTO_WEIGHTED_CEILING,
+    weightedBound: LOTTO_WEIGHTED_BOUND,
     strategies: listStrategies(),
     generations: generationStats(),
     runs: runStats(run),

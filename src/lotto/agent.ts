@@ -13,6 +13,7 @@ import {
   LOTTO_EVOLVE_EVERY,
   LOTTO_P_THREE_PLUS,
   LOTTO_SET_COUNT,
+  weightedHitScore,
 } from "../../shared/lotto.ts";
 
 /**
@@ -56,9 +57,10 @@ const TIMEOUT_MS = 10 * 60 * 1000;
  */
 const LOTTO_AGENT_IDENTITY = [
   "너는 로또 6/45 세트 구성 전략을 개선하는 실험 연구 에이전트다.",
-  "목표는 단 하나 — **10세트 중 최소 1세트가 3개 이상 맞힌 회차의 비율(3+ 적중률)을 최대화**하는 것이다.",
+  "목표는 단 하나 — **가중 회차 점수의 평균을 최대화**하는 것이다.",
+  "회차 점수 = 1×[3+ 적중 세트 있음] + 2×[4+ 있음] + 4×[5+ 있음] + 8×[6개 있음]. 회차당 0~15점.",
   "주어진 성적표와 전략 이력만을 근거로 다음 세대 전략 사양을 제안한다.",
-  "표본이 작을 때의 변동은 대부분 잡음이다 — 50회차 표본에서 3+ 적중률의 표준오차는 약 6.7%p 다.",
+  "표본이 작을 때의 변동은 대부분 잡음이다 — 50회차 표본에서 3+ 적중률의 표준오차만 해도 약 6.7%p 다.",
   "그보다 작은 차이를 '개선됐다'고 쓰지 말고 그렇게 보인다는 사실을 그대로 적어라.",
   "동시에, 아직 시도하지 않은 설정이 남아 있다면 탐색을 멈추지 마라. 결론은 데이터가 낸다.",
   "숫자를 지어내지 않는다 — 프롬프트에 주어진 값만 인용한다.",
@@ -130,19 +132,24 @@ export function buildEvolvePrompt(ctx: LottoEvolveContext): string {
   const genTable = ctx.generations
     .map(
       (g) =>
-        `| ${g.version} | ${g.fromRound}~${g.toRound} | ${g.rounds} | **${pct(g.hit3Rate)}** | ${g.hit3Rounds} | ${g.hit3Sets} | ${g.bestMatch} | ${f2(g.avgScore)} |`
+        `| ${g.version} | ${g.fromRound}~${g.toRound} | ${g.rounds} | **${g.weightedRate.toFixed(4)}** | ${pct(g.hit3Rate)} | ${g.hit4Rounds} | ${g.hit3Sets} | ${g.bestMatch} |`
     )
     .join("\n");
 
   const runTable = ctx.runs
     .map(
       (r) =>
-        `| ${r.run}${r.inProgress ? " (진행중)" : ""} | ${r.rounds} | v${r.firstVersion}~v${r.lastVersion} | **${pct(r.hit3Rate)}** | ${r.hit3Rounds} | ${r.bestMatch} | ${f2(r.avgScore)} |`
+        `| ${r.run}${r.inProgress ? " (진행중)" : ""} | ${r.rounds} | v${r.firstVersion}~v${r.lastVersion} | **${r.weightedRate.toFixed(4)}** | ${pct(r.hit3Rate)} | ${r.hit4Rounds} | ${r.hit5Rounds} | ${r.bestMatch} | ${f2(r.avgScore)} |`
     )
     .join("\n");
 
   const recentHits = ctx.recent.filter((r) => r.matches.some((m) => m >= 3)).length;
   const recentRate = ctx.recent.length > 0 ? recentHits / ctx.recent.length : 0;
+  const recentWeighted =
+    ctx.recent.length > 0
+      ? ctx.recent.reduce((s, r) => s + weightedHitScore(Math.max(0, ...r.matches)), 0) /
+        ctx.recent.length
+      : 0;
   // 이항 표준오차 — '이 차이가 볼 만한 크기인가'를 모델이 스스로 판단할 수 있게 같이 준다.
   const se = ctx.recent.length > 0 ? Math.sqrt((recentRate * (1 - recentRate)) / ctx.recent.length) : 0;
 
@@ -155,7 +162,8 @@ export function buildEvolvePrompt(ctx: LottoEvolveContext): string {
 
 # 목표 지표 (이것만 최대화한다)
 
-**3+ 적중률 = 10세트 중 최소 1세트가 3개 이상 맞힌 회차의 비율.**
+**가중 회차 점수 = 1×[3+ 적중 세트 있음] + 2×[4+ 있음] + 4×[5+ 있음] + 8×[6개 있음]** (회차당 0~15점).
+평가는 이 값의 **회차 평균**으로 한다.
 
 알아 둘 것:
 - 세트 1개가 3개 이상 맞힐 확률은 **${(LOTTO_P_THREE_PLUS * 100).toFixed(3)}%** 이고, 이 값은 어떤 번호를 고르든 같다.
@@ -163,7 +171,9 @@ export function buildEvolvePrompt(ctx: LottoEvolveContext): string {
 - 따라서 **'3+ 를 달성한 세트의 총 개수'는 전략이 못 바꾼다**(기대값 선형성). 아래 표의 '3+세트수' 열은
   개선 지표가 아니라 **대조군**이다 — 크게 흔들리면 그건 잡음이거나 계산이 틀린 것이다.
 - 바꿀 수 있는 것은 그 적중이 **몇 개의 서로 다른 회차에 흩어지는가**다. 같은 총량이라도 한 회차에
-  3개가 몰리면 1회차만 성공이고, 세 회차에 하나씩 흩어지면 3회차가 성공이다.
+  3개가 몰리면 1회차만 점수가 붙고, 세 회차에 하나씩 흩어지면 세 회차 모두 점수가 붙는다.
+- 같은 논리로 4+/5+ 도 회차 단위로 세지만, 그 사건들은 훨씬 희귀해서 한 회차에 두 번 겹치는 일이
+  거의 없다 — 즉 **가중치가 높은 항목일수록 최적화로 얻을 것이 적다.** 점수의 대부분은 3+ 항에서 온다.
 - 점수(평균점수 열)도 대조군이다. 이전 실험에서 **어떤 전략도 무작위 기준선 ${f2(LOTTO_BASELINE_PER_ROUND)}점을
   유의하게 넘지 못했고**, 번호 선택 특징(hot/cold/gap/decay/pair/overall)의 예측 AUC 는 1234회차 실측에서
   전부 0.50 이었다. 그 축에 시간을 쓰는 것은 권하지 않지만, 직접 확인하고 싶다면 막지 않는다.
@@ -176,19 +186,19 @@ export function buildEvolvePrompt(ctx: LottoEvolveContext): string {
 
 ## 바퀴별 성적 (표본이 커서 가장 믿을 만하다)
 
-| 바퀴 | 회차수 | 세대 | 3+적중률 | 3+회차수 | 최고적중 | 평균점수(대조군) |
-|---|---|---|---|---|---|---|
+| 바퀴 | 회차수 | 세대 | **가중점수** | 3+적중률 | 4+회차 | 5+회차 | 최고적중 | 평균점수(대조군) |
+|---|---|---|---|---|---|---|---|---|
 ${runTable || "| (없음) | | | | | | |"}
 
 ## 세대별 성적 (표본 ${LOTTO_EVOLVE_EVERY}회차 — 표준오차가 약 6.7%p 라 작은 차이는 못 읽는다)
 
-| 세대 | 회차 구간 | 회차수 | 3+적중률 | 3+회차수 | 3+세트수(대조군) | 최고적중 | 평균점수(대조군) |
+| 세대 | 회차 구간 | 회차수 | **가중점수** | 3+적중률 | 4+회차 | 3+세트수(대조군) | 최고적중 |
 |---|---|---|---|---|---|---|---|
 ${genTable || "| (없음) | | | | | | | |"}
 
 ## 직전 구간
 
-3+ 적중 회차 ${recentHits}/${ctx.recent.length} = **${pct(recentRate)}** (표준오차 ±${(se * 100).toFixed(1)}%p)
+가중 점수 평균 **${recentWeighted.toFixed(4)}** · 3+ 적중 회차 ${recentHits}/${ctx.recent.length} = ${pct(recentRate)} (표준오차 ±${(se * 100).toFixed(1)}%p)
 
 ## 현재 전략 사양
 
@@ -208,7 +218,7 @@ ${KNOB_CATALOG}
 
 위 성적을 읽고 **다음 세대 전략 사양**을 제안하라. 판단 기준:
 
-1. 직전 세대의 3+ 적중률이 이전 세대들과 비교해 의미 있는 차이인지 — 표준오차를 넘는 크기인지 먼저 따져라.
+1. 직전 세대의 가중 점수가 이전 세대들과 비교해 의미 있는 차이인지 — 표준오차를 넘는 크기인지 먼저 따져라.
 2. 아직 시험하지 않은 \`design\` 조합이 무엇인지. 한 번에 너무 많이 바꾸면 무엇이 효과였는지 알 수 없으니,
    **바꾸는 노브는 1~3개로 제한**하고 나머지는 그대로 두어라.
 3. 이전 세대들에서 이미 나쁜 결과가 나온 방향을 반복하지 마라.
@@ -221,7 +231,7 @@ ${KNOB_CATALOG}
 {
   "spec": { ...위 노브 구조 전체... },
   "changed": ["바꾼 노브 이름", "..."],
-  "hypothesis": "이 변경이 3+ 적중률을 어떻게 바꿀 것이라 예상하는지 한 문장. 다음 세대가 검증할 수 있게 구체적으로.",
+  "hypothesis": "이 변경이 가중 점수를 어떻게 바꿀 것이라 예상하는지 한 문장. 다음 세대가 검증할 수 있게 구체적으로.",
   "rationale": "왜 그렇게 판단했는지. 성적표의 어떤 숫자를 근거로 삼았는지 명시. 3~5문장."
 }
 \`\`\`
