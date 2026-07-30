@@ -57,9 +57,10 @@ function migrate(conn: DatabaseSync): void {
     }
   }
 
-  // 로또 실험: '실험 반복'(초기화 없이 전체 회차를 다시 도는 기능) 도입으로 예측 표의 PK 가
-  // round → (run, round) 로 바뀌었다. SQLite 는 PK 를 ALTER 로 못 바꾸므로 표를 다시 만든다.
-  // 기존 행은 전부 run=1 로 옮긴다(첫 바퀴였으므로 사실과 일치한다).
+  // 로또: (구)'실험 반복' 도입으로 예측 표의 PK 가 round → (run, round) 로 바뀌었다.
+  // 반복 기능 자체는 2026-07-30 에 제거됐지만, 그 시절에 쌓인 8바퀴 기록이 (run, round) 로
+  // 남아 있어 이 마이그레이션은 계속 필요하다(옛 DB 에서 부팅할 때).
+  // SQLite 는 PK 를 ALTER 로 못 바꾸므로 표를 다시 만들고, 기존 행은 전부 run=1 로 옮긴다.
   const predCols = new Set(
     (conn.prepare("PRAGMA table_info(lotto_predictions)").all() as Array<{ name: string }>).map(
       (r) => r.name

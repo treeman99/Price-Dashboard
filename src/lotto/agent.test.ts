@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   LOTTO_AGENT_MODEL,
+  LOTTO_AGENT_WINDOW,
   buildEvolvePrompt,
   isLottoUsageLimit,
   type LottoEvolveContext,
@@ -9,85 +10,133 @@ import {
 import { SEED_SPEC } from "./strategy.ts";
 import { isFailureSignal } from "../util/agent-query.ts";
 import { isCodexUsageLimitNotice } from "../util/codex-query.ts";
+import type { LottoRecentRound, LottoSummary } from "../../shared/lotto.ts";
 import { LOTTO_BASELINE_PER_ROUND } from "../../shared/lotto.ts";
 
+const summary = (patch: Partial<LottoSummary> = {}): LottoSummary => ({
+  rounds: 1234,
+  avgScore: -10.98,
+  avgMatches: 0.93,
+  hit3Rounds: 412,
+  hit4Rounds: 38,
+  hit5Rounds: 2,
+  hit3Sets: 486,
+  hit3Rate: 0.334,
+  weightedRate: 0.4,
+  bestMatch: 5,
+  ...patch,
+});
+
+/** 방금 채점된 회차 — 이번 호출의 유일한 새 정보다. */
+const latest: LottoRecentRound = {
+  round: 1235,
+  drawDate: "2026-08-01",
+  version: 169,
+  sets: [
+    [3, 11, 20, 28, 36, 44],
+    [1, 9, 17, 25, 33, 41],
+    [5, 13, 21, 29, 37, 45],
+    [2, 10, 18, 26, 34, 42],
+    [7, 15, 23, 31, 39, 43],
+    [4, 12, 19, 27, 35, 40],
+    [6, 14, 22, 30, 38, 45],
+    [8, 16, 24, 32, 36, 44],
+    [1, 11, 21, 31, 41, 43],
+    [2, 12, 22, 32, 42, 45],
+  ],
+  matches: [2, 0, 1, 0, 1, 0, 0, 1, 3, 0],
+  score: -19,
+  cumScore: -13540,
+  drawNumbers: [1, 11, 20, 21, 31, 36],
+  drawBonus: 43,
+};
+
 const ctx: LottoEvolveContext = {
-  run: 1,
-  nextRound: 51,
-  scoredRounds: 50,
+  nextRound: 1236,
   current: {
-    version: 1,
-    run: 1,
-    fromRound: 1,
+    version: 169,
+    run: 8,
+    fromRound: 1201,
     spec: SEED_SPEC,
-    rationale: "실험의 기준점.",
+    rationale: "기준점.",
     hypothesis: "무작위 추출.",
-    author: "seed",
-    model: "",
+    author: "agent",
+    model: "claude-opus-5",
     createdAt: "2026-07-29T00:00:00.000Z",
   },
-  generations: [
+  latest,
+  recent: [latest],
+  overall: summary(),
+  window: summary({ rounds: 100, hit3Rounds: 34, hit3Rate: 0.34, weightedRate: 0.41 }),
+  history: [
     {
-      version: 1,
-      fromRound: 1,
-      toRound: 50,
-      rounds: 50,
-      totalScore: -520,
-      avgScore: -10.4,
-      bestScore: 8,
-      worstScore: -42,
-      avgMatches: 0.94,
-      zeroSetRate: 0.33,
-      hit3Rate: 0.32,
-      hit3Rounds: 16,
-      hit3Sets: 19,
-      bestMatch: 4,
-      weightedRate: 0.40,
-      hit4Rounds: 2,
-      hit5Rounds: 0,
+      version: 169,
+      run: 8,
+      fromRound: 1201,
+      spec: SEED_SPEC,
+      rationale: "기준점.",
+      hypothesis: "searchSteps 를 0으로 되돌리면 가중점수가 표준오차 안에서 구별되지 않을 것이다.",
+      author: "agent",
+      model: "claude-opus-5",
+      createdAt: "2026-07-29T00:00:00.000Z",
     },
-  ],
-  runs: [
-    {
-      run: 1,
-      fromRound: 1,
-      toRound: 50,
-      rounds: 50,
-      firstVersion: 1,
-      lastVersion: 1,
-      hit3Rate: 0.32,
-      hit3Rounds: 16,
-      avgScore: -10.4,
-      avgMatches: 0.94,
-      bestMatch: 4,
-      weightedRate: 0.40,
-      hit4Rounds: 2,
-      hit5Rounds: 0,
-      hit3Sets: 19,
-      inProgress: true,
-    },
-  ],
-  recent: [
-    { round: 49, drawDate: "2003-11-08", version: 1, sets: [], matches: [], score: -12, cumScore: -508 },
-    { round: 50, drawDate: "2003-11-15", version: 1, sets: [], matches: [], score: -12, cumScore: -520 },
   ],
 };
 
 test("모델은 프로젝트 공용 설정과 무관하게 Opus 5 로 고정된다", () => {
-  // 사용자 요구(2026-07-29)이자 실험의 통제 변인. 바뀌면 곡선의 원인을 분리할 수 없다.
+  // 사용자 요구(2026-07-29). 한도 소진 시에도 다른 모델로 갈아타지 않는다.
   assert.equal(LOTTO_AGENT_MODEL, "claude-opus-5");
 });
 
-test("프롬프트가 목표 지표(3+ 적중률)를 규칙·현재 사양과 함께 싣는다", () => {
+test("프롬프트가 목표 지표·현재 사양·적용 회차를 함께 싣는다", () => {
   const p = buildEvolvePrompt(ctx);
   assert.match(p, /보너스 1개 = 7개/);
   assert.match(p, /가중 회차 점수/);
-  assert.match(p, /3\+ 적중률/);
-  assert.match(p, /51회차부터/);
+  assert.match(p, /1236회차/); // 새 세대가 적용될 회차
   assert.match(p, /"explore": 1/); // 현재 사양 JSON
   assert.match(p, /maxSetOverlap/); // 노브 설명서
   assert.match(p, /walk-forward/);
-  assert.match(p, /1번째 바퀴/);
+});
+
+/**
+ * **이번 주 새 정보가 프롬프트의 주인공이어야 한다.**
+ * 지난주에 추천한 10세트와 실제 당첨번호가 나란히 들어가지 않으면, 사용자가 요청한
+ * "비교 결과를 에이전트에 업데이트"가 실제로는 일어나지 않는다.
+ */
+test("방금 채점된 회차의 제출 번호와 실제 당첨번호를 대조표로 싣는다", () => {
+  const p = buildEvolvePrompt(ctx);
+  assert.match(p, /1235회차 \(2026-08-01\)/);
+  assert.match(p, /당첨번호 1, 11, 20, 21, 31, 36 \+ 보너스 43/);
+  // 적중한 번호는 굵게 표시된다(1번 세트의 11·20 등).
+  assert.match(p, /\*\*11\*\*/);
+  // 10세트 전부 들어간다.
+  assert.match(p, /\| 10 \|/);
+  assert.match(p, /최고적중 \*\*3개\*\*/);
+});
+
+/**
+ * 주간 운영의 가장 큰 위험은 **회차 1개에 맞춰 매주 노브를 흔드는 것**이다(사용자가 반복
+ * 학습을 중단한 이유). 프롬프트가 '유지도 정답'이라고 말하지 않으면 모델은 매주 무언가를
+ * 바꾼다 — 그래서 이 문구를 테스트로 못박는다.
+ */
+test("표본 1회차로 사양을 흔들지 말라는 제약이 프롬프트에 들어 있다", () => {
+  const p = buildEvolvePrompt(ctx);
+  assert.match(p, /표본 1/);
+  assert.match(p, /그대로 반복해서 출력하고 changed 를 빈 배열로/);
+  assert.match(p, /매주 한 번/);
+});
+
+test("전체·최근 구간 요약을 표준오차와 함께 두 벌 싣는다", () => {
+  const p = buildEvolvePrompt(ctx);
+  assert.match(p, /전체: 1234회차/);
+  assert.match(p, new RegExp(`최근 ${LOTTO_AGENT_WINDOW}회차: 100회차`));
+  assert.match(p, /±\d+\.\d%p/);
+});
+
+test("이미 시도한 전략을 실어 같은 방향을 반복하지 않게 한다", () => {
+  const p = buildEvolvePrompt(ctx);
+  assert.match(p, /이미 시도한 전략/);
+  assert.match(p, /v169 \| 1201~ \| fullCover=false overlap≤6 search=0 explore=1/);
 });
 
 /**
@@ -107,10 +156,11 @@ test("대조군(점수·3+세트수)임을 명시해 개선 지표로 오인하�
   assert.match(p, new RegExp(LOTTO_BASELINE_PER_ROUND.toFixed(2).replace(".", "\\.")));
 });
 
-test("바퀴별·세대별 성적표가 가중 점수를 주인공으로 표에 들어간다", () => {
-  const p = buildEvolvePrompt(ctx);
-  assert.match(p, /\| 1 \(진행중\) \| 50 \| v1~v1 \| \*\*0\.4000\*\* \| 32\.0% \| 2 \| 0 \|/);
-  assert.match(p, /\| 1 \| 1~50 \| 50 \| \*\*0\.4000\*\* \| 32\.0% \| 2 \| 19 \| 4 \|/);
+test("채점할 회차가 없는 재시도에서도 프롬프트가 성립한다", () => {
+  // 토큰 한도로 미룬 갱신을 4시간 뒤 재시도하는 경로. latest 가 null 이어도 터지면 안 된다.
+  const p = buildEvolvePrompt({ ...ctx, latest: null });
+  assert.match(p, /새로 채점된 회차가 없다/);
+  assert.match(p, /1236회차/);
 });
 
 test("토큰 한도 오류를 알아본다", () => {
@@ -125,9 +175,8 @@ test("토큰 한도 오류를 알아본다", () => {
  * 번들 CLI 는 `You've hit your ${라벨}` 로 한도를 통보하고 라벨이 6종이다.
  * 예전에는 `You'?ve hit your limit` 한 종류만 실패로 승격돼, **Opus 5 에서 가장 유력한
  * 두 라벨(Opus limit · session limit)이 통째로 미탐**이었다. 그러면 한도 소진이
- * "JSON 미발견" 으로 둔갑해 4시간 대기 대신 '사양 승계' 세대가 찍히고, 남은 진화 호출이
- * 전부 같은 방식으로 실패해 이후 세대가 전원 직전 사양의 복사본이 된다 — 완주할 때까지
- * 아무 신호도 없다. 4시간 자동 재개가 이 한 줄에 걸려 있으므로 6종 전부를 못박는다.
+ * "JSON 미발견" 으로 둔갑해 재시도 예약 없이 '사양 유지'로 넘어가고, 그 주의 전략 갱신이
+ * 조용히 사라진다. 4시간 재시도가 이 한 줄에 걸려 있으므로 6종 전부를 못박는다.
  */
 test("한도 통보 6종이 모두 실패로 승격되고 한도로 분류된다", () => {
   const labels = ["limit", "session limit", "Opus limit", "weekly limit", "Sonnet limit", "usage limit"];
@@ -148,7 +197,7 @@ test("정상 큐레이션 결과를 한도 통보로 오인하지 않는다", ()
 });
 
 test("한도가 아닌 실패를 한도로 오인하지 않는다", () => {
-  // 오인하면 실험이 4시간마다 되살아나며 같은 실패를 반복한다.
+  // 오인하면 4시간마다 같은 실패를 반복한다.
   assert.equal(isLottoUsageLimit(new Error("JSON 미발견")), false);
   assert.equal(isLottoUsageLimit(new Error("Agent 응답 시간 초과(600s)")), false);
   assert.equal(isLottoUsageLimit(new Error("Agent 비정상 종료(error_max_turns)")), false);

@@ -1,9 +1,19 @@
 /**
- * 로또 예측 실험 — 서버/프론트 공용 타입과 **채점 규칙**.
+ * 로또 예측 — 서버/프론트 공용 타입과 **채점 규칙**.
  *
- * 채점 규칙이 여기 한 곳에만 있는 이유: 점수는 세 곳에서 필요하다(실험 엔진이 매길 때,
- * API 가 요약할 때, 화면이 기준선을 그릴 때). 규칙이 복제되면 화면의 "기준선 -11.0"과
- * 엔진의 실제 채점이 조용히 갈라지고, 그러면 차트가 거짓말을 한다.
+ * 채점 규칙이 여기 한 곳에만 있는 이유: 점수는 두 곳에서 필요하다(주간 사이클이 매길 때,
+ * 에이전트 프롬프트가 성적을 요약할 때). 규칙이 복제되면 사용자가 보는 표와 모델이 보는 표가
+ * 조용히 갈라진다.
+ *
+ * ## 2026-07-30 전환 — 백테스트 실험 → 주간 자동 운영
+ * 1회차부터 최신 회차까지 walk-forward 로 걸으며 전략을 진화시키던 **반복 학습(run)을
+ * 중단했다**(사용자 지시: 과잉 정합성). 지금 이 모듈이 지탱하는 것은 하나뿐이다 —
+ *
+ *   매주 일요일 10:00 → 새 추첨 결과 수집 → **지난주에 저장해 둔 추천 번호** 채점 →
+ *   그 결과를 에이전트에 전달해 전략 갱신 → 다음 회차 번호 추출·저장
+ *
+ * 그래서 세대 이력·바퀴별 성적표·차트용 시계열 타입은 전부 제거했다. 반면 채점과 목표 지표의
+ * 수학은 그대로 남는다 — 에이전트가 최적화할 대상이 그것이기 때문이다.
  */
 
 /** 한 회차 당첨 결과. numbers 는 본번호 6개(오름차순), bonus 는 보너스 1개. */
@@ -29,7 +39,7 @@ export const LOTTO_ZERO_PENALTY = -6;
 /**
  * ⚠️ **보너스 번호를 당첨번호로 인정한다**(2026-07-29 인터뷰 결정).
  * 따라서 대조 대상은 6개가 아니라 **7개**다. 이 한 줄이 기대점수를 -16.03 → -11.00 으로
- * 바꾸므로, 기준선을 다시 계산하지 않고 이 상수만 뒤집으면 차트가 틀어진다.
+ * 바꾸므로, 기준선을 다시 계산하지 않고 이 상수만 뒤집으면 채점 전체가 틀어진다.
  */
 export const LOTTO_BONUS_COUNTS = true;
 
@@ -56,9 +66,8 @@ export function roundScore(matchesPerSet: readonly number[]): number {
 
 // ── 무작위 기준선 ──
 //
-// 이 값이 실험의 **유일한 판정 기준**이다. "알고리즘이 좋아졌다"는 말은 이 선을 유의하게
-// 넘었다는 뜻이어야 하고, 넘지 못했다면 그것도 결과다. 하드코딩하지 않고 매번 계산하는
-// 이유는 위의 LOTTO_BONUS_COUNTS 같은 규칙 변경이 기준선에 자동 반영되게 하기 위해서다.
+// 하드코딩하지 않고 매번 계산하는 이유는 위의 LOTTO_BONUS_COUNTS 같은 규칙 변경이 기준선에
+// 자동 반영되게 하기 위해서다.
 
 function combinations(n: number, k: number): number {
   if (k < 0 || k > n) return 0;
@@ -92,56 +101,24 @@ export const LOTTO_BASELINE_PER_SET = matchProbabilities().reduce(
  *
  * ⚠️ 수학적으로 이 값은 **어떤 전략을 쓰든 동일하다.** 당첨번호가 균등 무작위이므로 고정된
  * 6개 집합이 맞힐 개수의 분포는 그 집합이 무엇이든 같은 초기하분포다. 전략이 바꿀 수 있는
- * 것은 기대값이 아니라 **분산**뿐이다(세트를 서로 겹치지 않게 깔면 점수가 이 선 근처로
- * 모이고, 10세트를 똑같이 찍으면 크게 흔들린다).
- * 이 사실을 숨기지 않고 차트에 선으로 그려 두는 것이 이 실험의 요점이다 — 에이전트가
- * 무엇을 제안하든 곡선은 이 선으로 수렴해야 하고, 수렴하지 않으면 그건 발견이 아니라 버그다.
+ * 것은 기대값이 아니라 **분산**뿐이다. 1234회차 실측에서도 전 전략이 |z| < 1.5 였다.
+ * 에이전트 프롬프트가 이 값을 '대조군'으로 인용한다.
  */
 export const LOTTO_BASELINE_PER_ROUND = LOTTO_BASELINE_PER_SET * LOTTO_SET_COUNT;
 
-// ── 실험의 목표: 3+ 적중 회차 비율 ──
-//
-// 2026-07-29 목표 전환. 점수(위)는 **어떤 전략을 써도 기대값이 같다**는 것이 실데이터 1234회차로
-// 확인됐고(전 전략 |z| < 1.5), 엔진이 쓰는 6개 특징의 예측 AUC 도 전부 0.50 이었다.
-// 즉 '예측 정확도' 축에는 올릴 것이 없다.
-//
-// 반면 **"10세트 중 최소 1세트가 3개 이상 맞힌 회차의 비율"** 은 실제로 움직인다.
-// 3+ 세트의 **총 개수**는 여전히 고정이지만(기대값 선형성), 그것을 여러 회차에 흩뿌릴지 한 회차에
-// 몰아넣을지는 디자인이 정한다. 실측 범위는 5.6%(극단 집중) ~ 36.4%(최적)로 6배가 넘는다.
-
-/** 세트 1개가 3개 이상 맞힐 확률. 아래 두 상수의 출처이자 상한의 근거. */
+/** 세트 1개가 3개 이상 맞힐 확률. 이 값은 어떤 번호를 고르든 같다(에이전트 프롬프트가 인용). */
 export const LOTTO_P_THREE_PLUS = matchProbabilities()
   .slice(3)
   .reduce((a, p) => a + p, 0);
 
-/**
- * 무작위로 10세트를 뽑았을 때의 3+ 적중 회차 비율. **기준선.**
- * 닫힌 해가 없어(세트끼리 같은 당첨번호를 공유해 독립이 아니다) 몬테카를로로 측정했다:
- * 무작위 디자인 20개 × 40만 회 추첨 = 33.36%.
- */
-export const LOTTO_HIT3_RANDOM = 0.3336;
-
-/**
- * 도달 가능한 **천장**. 40만 회 검증표본에서 국소탐색이 6회 재시작 모두 36.26~36.43% 로
- * 수렴했다. 구조적으로는 (1) 45개 번호를 전부 덮고 (2) 어떤 두 세트도 번호를 1개까지만
- * 공유할 때 나오는 값이다(그때 10세트가 덮는 서로 다른 3조합이 이론 최대인 200개가 된다).
- *
- * ⚠️ 이 값을 에이전트 프롬프트에 넣지 않는다 — 답을 알려주면 실험이 아니라 받아쓰기가 된다.
- *    화면에만 그려 사용자가 '어디까지 왔는지'를 볼 수 있게 한다.
- */
-export const LOTTO_HIT3_CEILING = 0.3643;
-
-// ── 가중 회차 점수 (2026-07-29 목표 정련) ──
+// ── 목표 지표: 가중 회차 점수 ──
 //
-// 사용자 요청: "3개 이상 맞추는 횟수가 많을수록 좋고, 4개 이상은 더 높은 점수, 5개 이상은 더 높은 점수."
-//
-// ⚠️ 여기서 **'횟수'는 최적화할 수 없다.** 세트 단위로 더하는 모든 지표는 기대값이 디자인과
-//    무관하게 고정이기 때문이다(실측: 회차당 3+ 세트 수가 무작위 0.39364 / 전커버 0.39410 /
-//    풀10집중 0.39184, 이론 0.39370 — 전부 같다). 점수표를 지수(1/2/4/8/16/32)로 바꿔도
-//    마찬가지다. 회차당 기대점수가 -11.003 에서 -10.509 로 상수만 바뀌고 디자인 의존성은 0이다.
+// ⚠️ **세트 단위로 더하는 지표는 최적화할 수 없다.** 기대값이 디자인과 무관하게 고정이기
+//    때문이다(실측: 회차당 3+ 세트 수가 무작위 0.39364 / 전커버 0.39410 / 풀10집중 0.39184,
+//    이론 0.39370 — 전부 같다). 점수표를 지수로 바꿔도 상수만 달라지고 디자인 의존성은 0이다.
 //
 // 그래서 '높을수록 더 좋다'를 **회차 단위 지시함수의 가중합**으로 옮긴다. 이건 비선형이라
-// 최적화가 가능하다:
+// 최적화가 가능하다(같은 총 적중량을 한 회차에 몰지 않고 여러 회차에 흩뿌리는 문제가 된다):
 //     회차 점수 = 1·[3+ 있음] + 2·[4+ 있음] + 4·[5+ 있음] + 8·[6 있음]   (0 ~ 15)
 export const LOTTO_HIT_WEIGHTS: ReadonlyArray<{ k: number; w: number }> = [
   { k: 3, w: 1 },
@@ -154,30 +131,6 @@ export const LOTTO_HIT_WEIGHTS: ReadonlyArray<{ k: number; w: number }> = [
 export function weightedHitScore(bestMatch: number): number {
   return LOTTO_HIT_WEIGHTS.reduce((s, { k, w }) => s + (bestMatch >= k ? w : 0), 0);
 }
-
-/**
- * 가중 점수의 **수학적 상한** = Σ w_k · E[k+ 세트 개수].
- *
- * P(회차에 k+ 가 1개 이상) <= E[k+ 세트 개수] 이기 때문이다 — 같은 회차에 두 번 터지면
- * 회차 지표에서는 낭비된다. 최적화란 그 낭비를 줄이는 일이 전부이고, 따라서 **희귀한 사건일수록
- * 여지가 없다**(4+ 는 무작위가 이미 상한에 붙어 있다: 3.073% vs 상한 3.120%).
- */
-export const LOTTO_WEIGHTED_BOUND = LOTTO_HIT_WEIGHTS.reduce(
-  (s, { k, w }) => s + w * LOTTO_SET_COUNT * matchProbabilities().slice(k).reduce((a, p) => a + p, 0),
-  0
-);
-
-/** 무작위 디자인의 가중 회차 점수 평균(실측, 60만 표본). */
-export const LOTTO_WEIGHTED_RANDOM = 0.3976;
-
-/**
- * 도달 가능한 천장(실측). 상한(46.0%)의 93.4% 지점이다.
- *
- * ⚠️ 3+ 단독일 때의 상대 여지(+8.6%)보다 **작다**(+8.1%). 높은 적중에 가중치를 줄수록
- *    희귀 사건의 비중이 커지는데 그쪽은 최적화 여지가 없기 때문이다. 목표를 이렇게 바꾸는 것은
- *    '더 원하는 것을 재는 것'이지 '더 잘할 수 있게 되는 것'이 아니다.
- */
-export const LOTTO_WEIGHTED_CEILING = 0.4298;
 
 // ── 전략 사양 ──
 
@@ -214,15 +167,9 @@ export interface LottoStrategySpec {
   /** 균등분포와의 혼합 비율. 1이면 특징을 전부 무시한 순수 무작위. */
   explore: number;
   /**
-   * **10세트의 배치 구조.** 목표가 3+ 적중 회차 비율로 바뀌면서 성능을 좌우하는 축이
-   * 여기로 옮겨졌다 — 번호 선택 확률(위의 weights/temperature/explore)은 실측 예측력이
-   * AUC 0.50 으로 무력하다는 것이 1234회차로 확인됐다.
-   *
-   * 예전의 `coverage: independent|partition|max-coverage` 를 대체한다. 세 모드가 전부
-   * 아래 두 노브의 특수한 조합이라 표현력이 더 넓다:
-   *   independent  ≡ { fullCover: false, maxSetOverlap: 6 }
-   *   max-coverage ≡ { fullCover: true,  maxSetOverlap: 6 }
-   *   partition    ≈ { fullCover: true,  maxSetOverlap: 1 }
+   * **10세트의 배치 구조.** 목표가 가중 회차 점수인 이상 성능을 좌우하는 축은 여기다 —
+   * 번호 선택 확률(위의 weights/temperature/explore)은 실측 예측력이 AUC 0.50 으로
+   * 무력하다는 것이 1234회차로 확인됐다.
    */
   design: {
     /** 45개 번호가 10세트 전체에서 최소 1회씩 등장하도록 강제할지. */
@@ -233,8 +180,8 @@ export interface LottoStrategySpec {
      * 목적함수에 대한 **국소탐색 스텝 수**(0이면 탐색 안 함).
      *
      * ⚠️ 이 탐색은 **미래 회차를 보지 않는다.** 당첨번호가 균등 무작위라는 사실만으로
-     * 목적함수(3+ 적중 확률)를 사전에 계산할 수 있어서, 고정 시드로 뽑은 가상 추첨 표본
-     * 위에서 디자인을 다듬는다. walk-forward 규칙을 어기지 않는다.
+     * 목적함수를 사전에 계산할 수 있어서, 고정 시드로 뽑은 가상 추첨 표본 위에서 디자인을
+     * 다듬는다. walk-forward 규칙을 어기지 않는다.
      */
     searchSteps: number;
   };
@@ -256,41 +203,10 @@ export interface LottoStrategySpec {
   };
 }
 
-/**
- * 반복 1회(= 전 회차를 한 바퀴 돈 것)의 요약.
- *
- * '실험 반복'은 초기화가 아니다. 전략 세대는 계속 이어지고 이전 반복의 기록도 남는다.
- * 따라서 반복 간 비교가 이 실험의 핵심 증거가 된다 — 2회차 바퀴가 1회차 바퀴보다 나은가?
- */
-export interface LottoRunStat {
-  run: number;
-  fromRound: number;
-  toRound: number;
-  rounds: number;
-  /** 이 반복에서 쓰인 전략 세대 범위 */
-  firstVersion: number;
-  lastVersion: number;
-  /** **목표 지표** */
-  hit3Rate: number;
-  hit3Rounds: number;
-  /** 대조군(전략과 무관하게 고정되어야 한다) */
-  avgScore: number;
-  avgMatches: number;
-  bestMatch: number;
-  /** **목표 지표** — 가중 회차 점수 평균 */
-  weightedRate: number;
-  hit4Rounds: number;
-  hit5Rounds: number;
-  /** 3+ 를 달성한 **세트 수**. 전략과 무관하게 고정 — 대조군이다. */
-  hit3Sets: number;
-  /** 아직 진행 중인 반복인지 */
-  inProgress: boolean;
-}
-
-/** 전략 세대 1개. */
+/** 전략 세대 1개. 주간 운영에서는 **한 주에 한 세대**가 만들어진다. */
 export interface LottoStrategy {
   version: number;
-  /** 이 세대가 만들어진 반복 회차 */
+  /** 이 세대가 만들어진 반복 회차(백테스트 시절의 스코프. 지금은 고정) */
   run: number;
   /** 이 세대가 적용되기 시작한 회차 */
   fromRound: number;
@@ -317,16 +233,16 @@ export interface LottoRoundResult {
   matches: number[];
   /** 회차 점수 */
   score: number;
-  /** 누적 점수 */
+  /** 누적 점수. 회차를 건너뛰지 않았다는 증거로 함께 저장한다 */
   cumScore: number;
 }
 
 /**
- * 최근 회차 상세 — 채점 결과에 **그 회차 당첨번호**를 얹은 것.
+ * 지난 회차 비교 결과 — 채점 결과에 **그 회차 당첨번호**를 얹은 것.
  *
- * LottoRoundResult 에 당첨번호를 넣지 않은 이유: 그건 lotto_draws 의 값이고 예측 기록이 아니다.
- * 다만 화면에서 "어느 번호가 맞았는지" 배지를 찍으려면 둘이 한자리에 있어야 해서, 최근 몇
- * 회차에 한해 조인해 내려준다(전 회차에 붙이면 스냅샷이 몇 배로 부푼다).
+ * LottoRoundResult 에 당첨번호를 넣지 않은 이유: 그건 lotto_draws 의 값이고 예측 기록이
+ * 아니다. 다만 화면에서 "어느 번호가 맞았는지" 배지를 찍으려면 둘이 한자리에 있어야 해서,
+ * 최근 몇 회차에 한해 조인해 내려준다.
  */
 export interface LottoRecentRound extends LottoRoundResult {
   /** 당첨 본번호 6개(오름차순) */
@@ -335,143 +251,92 @@ export interface LottoRecentRound extends LottoRoundResult {
   drawBonus: number;
 }
 
-/** 스냅샷에 싣는 최근 회차 상세 개수. 화면의 '최근 회차' 표와 같은 값. */
-export const LOTTO_RECENT_LIMIT = 20;
+/** 화면과 스냅샷이 함께 쓰는 '지난 회차' 표시 개수(2026-07-30 사용자 지시로 20 → 10). */
+export const LOTTO_RECENT_LIMIT = 10;
 
-/** 차트 한 점. 회차 수가 1000을 넘으므로 필드를 최소로 유지한다. */
-export interface LottoScorePoint {
-  round: number;
-  drawDate: string;
-  score: number;
-  cumScore: number;
-  /** 최근 50회차 이동평균(회차당 점수) */
-  movingAvg: number;
-  version: number;
-  /** 이 회차에 3개 이상 맞힌 세트가 하나라도 있었는가(= 목표 지표의 1회 관측) */
-  hit3: boolean;
-  /** 최근 LOTTO_HIT3_WINDOW 회차의 3+ 적중 회차 비율. **이 실험의 주인공 계열.** */
-  hit3Rate: number;
-  /** 1회차부터의 누적 3+ 적중 회차 비율 */
-  cumHit3Rate: number;
-  /** 이 회차에서 한 세트가 맞힌 최대 개수 */
-  bestMatch: number;
-  /** **목표 지표** — 가중 회차 점수(0~15) */
-  weighted: number;
-  /** 최근 LOTTO_HIT3_WINDOW 회차의 가중 점수 평균 */
-  weightedRate: number;
-  /** 1회차부터의 누적 가중 점수 평균 */
-  cumWeightedRate: number;
-}
-
-/** 세대별 성적 요약. 에이전트 프롬프트와 화면이 같은 표를 본다. */
-export interface LottoGenerationStat {
-  version: number;
-  fromRound: number;
-  toRound: number;
+/**
+ * 채점 기록 요약. **에이전트 프롬프트 전용**이다(화면에는 성적표가 없다).
+ *
+ * 여기 두는 이유는 계산 위치를 한 곳으로 묶기 위해서다 — 저장소가 집계하고 프롬프트가 인용한다.
+ */
+export interface LottoSummary {
   rounds: number;
-  totalScore: number;
   avgScore: number;
-  bestScore: number;
-  worstScore: number;
-  /** 세트당 평균 맞힌 개수 */
   avgMatches: number;
-  /** 0개 맞힌 세트의 비율 (0~1) */
-  zeroSetRate: number;
-  /** **목표 지표** — 3개 이상 맞힌 세트가 있었던 회차의 비율 (0~1) */
-  hit3Rate: number;
-  /** 3+ 적중 회차 수 */
   hit3Rounds: number;
-  /** 3+ 를 달성한 세트의 총 개수(기대값은 전략과 무관하게 고정 — 대조군) */
-  hit3Sets: number;
-  /** 이 세대에서 한 세트가 맞힌 최대 개수 */
-  bestMatch: number;
-  /** **목표 지표** — 가중 회차 점수 평균 */
-  weightedRate: number;
-  /** 4+ / 5+ 적중 회차 수 (가중 점수의 구성 요소) */
   hit4Rounds: number;
   hit5Rounds: number;
+  /** 3+ 를 달성한 **세트 수**. 전략과 무관하게 기대값이 고정 — 대조군이다 */
+  hit3Sets: number;
+  hit3Rate: number;
+  weightedRate: number;
+  bestMatch: number;
 }
 
-/** 실험 진행 상태. */
-export type LottoStatus = "idle" | "running" | "paused" | "done";
+/**
+ * **아직 추첨되지 않은 다음 회차의 확정 추천 번호.**
+ *
+ * ⚠️ 이 값이 저장되어야 하는 이유가 이 기능의 전부다. 화면을 열 때마다 번호를 다시 생성하면
+ * 다음 주에 채점할 대상이 매번 달라져 "추천했던 번호와 실제 추첨 결과를 비교"라는 말 자체가
+ * 성립하지 않는다(전에는 실제로 매 요청마다 재생성했다). 추첨 전에 한 번 뽑아 못박고,
+ * 그 뒤로는 읽기만 한다.
+ */
+export interface LottoUpcoming {
+  round: number;
+  /** 10세트 × 6번호 */
+  sets: number[][];
+  /** 이 번호를 뽑은 전략 세대 */
+  version: number;
+  createdAt: string;
+}
 
-/** 멈춘 이유. usage-limit 만 자동 재개 대상이다. */
-export type LottoPauseReason = "usage-limit" | "manual" | "error" | null;
-
+/**
+ * 주간 자동 사이클의 상태.
+ *
+ * 사용자 조작 버튼(시작·정지·동기화·초기화·반복)이 전부 없어졌으므로 여기 남는 것은
+ * '자동 사이클이 언제 무엇을 했는가'뿐이다. status 머신(idle/running/paused/done)도
+ * 함께 사라졌다 — 멈춰 있을 상태가 없다.
+ */
 export interface LottoState {
-  status: LottoStatus;
   /**
-   * 지금 몇 번째 바퀴인가(1부터). '실험 반복'을 누를 때마다 +1.
-   * ⚠️ 초기화(reset)와 다르다 — 반복은 이전 기록과 전략 세대를 그대로 두고 새 바퀴만 시작한다.
+   * 예측 기록의 스코프. 과거 백테스트가 1~1234회차를 8바퀴 돌았고 그 기록이 (run, round) 로
+   * 남아 있다. 라이브 예측은 **마지막 바퀴를 그대로 이어서** 쌓으므로 이 값은 더 이상
+   * 증가하지 않는다(반복 기능 제거).
    */
   run: number;
-  pauseReason: LottoPauseReason;
-  /** 토큰 한도로 멈췄을 때 자동 재개 예정 시각(ISO). 그 외에는 null. */
-  resumeAt: string | null;
+  /** 마지막으로 주간 사이클을 시도한 시각(성공·실패 무관). 놓친 실행을 판정하는 기준이다. */
+  lastCycleAt: string | null;
+  /** 마지막으로 채점을 마친 회차 */
+  lastScoredRound: number | null;
+  /**
+   * **에이전트가 결과를 반영한 마지막 회차.**
+   *
+   * 이 값이 따로 필요한 이유: 전략을 갱신할지 판정하는 유일한 기준이기 때문이다. 전략 행의
+   * `from_round` 로 재면 안 된다 — 한도 소진으로 갱신을 미룬 주에는 이미 못박은 번호 때문에
+   * from_round 가 회차를 건너뛰어(다음 회차부터 적용) 조건이 영구히 거짓이 되고, 그러면
+   * 그 주의 결과가 **영원히 반영되지 않는다**.
+   */
+  lastEvolvedRound: number | null;
+  /** 마지막 사이클이 남긴 오류. 성공하면 null */
   lastError: string | null;
-  startedAt: string | null;
-  /** 최신 회차까지 완주한 시각 */
-  finishedAt: string | null;
-  /** 사용자가 완주 배너를 확인했는지. 확인 전까지 배너를 계속 띄운다. */
-  doneAcknowledged: boolean;
+  /** 오류·토큰 한도로 미룬 재시도 예정 시각(ISO). 스케줄러가 30분마다 확인한다 */
+  retryAt: string | null;
   updatedAt: string;
 }
 
 /** 로또 탭이 한 번에 받아 가는 전체 스냅샷. */
 export interface LottoSnapshot {
-  state: LottoState;
-  /** 채점을 마친 마지막 회차 */
-  scoredThrough: number | null;
-  /** DB 에 확보한 가장 오래된/최신 회차 */
-  firstDraw: number | null;
-  latestDraw: number | null;
-  /** 다음에 예측할 회차. null 이면 더 읽을 회차가 없다(= 완주). */
-  nextRound: number | null;
-  /** 남은 회차 수 */
-  remaining: number;
-  totalScored: number;
-  cumScore: number;
-  /** 회차당 평균 점수 */
-  avgScore: number | null;
-  /** 무작위 기준선(회차당 점수) — 이제는 '전략이 못 움직인다'를 보여주는 대조군이다 */
-  baselinePerRound: number;
-  /** **목표 지표** — 전체 3+ 적중 회차 비율 */
-  hit3Rate: number | null;
-  /** 3+ 적중 회차 수 */
-  hit3Rounds: number;
-  /** 무작위 디자인의 3+ 적중 회차 비율(기준선) */
-  hit3Random: number;
-  /** 도달 가능한 천장 */
-  hit3Ceiling: number;
-  /** **목표 지표** — 가중 회차 점수 평균 */
-  weightedRate: number | null;
-  weightedRandom: number;
-  weightedCeiling: number;
-  /** 수학적 상한(= Σ w_k·E[k+ 세트 수]). 최적화로도 넘을 수 없다. */
-  weightedBound: number;
-  strategies: LottoStrategy[];
-  generations: LottoGenerationStat[];
-  /** 반복별 요약(오래된 순). 반복이 1회뿐이면 항목 1개. */
-  runs: LottoRunStat[];
-  /** 차트용 점 — **현재 반복**만. 반복이 쌓여도 차트가 뒤엉키지 않게 한다. */
-  points: LottoScorePoint[];
-  /** 최근 회차 상세(당첨번호 포함). 최신이 뒤에 오는 오름차순. */
+  /** **다음 회차 예상 번호.** 추첨 전에 저장해 둔 값 그대로(재생성하지 않는다) */
+  upcoming: LottoUpcoming | null;
+  /** 지난 회차 비교 결과 — **최신이 앞**, 최대 LOTTO_RECENT_LIMIT 건 */
   recentResults: LottoRecentRound[];
-  /** 아직 추첨되지 않은 다음 회차에 대한 추천 번호(완주했을 때만 채워진다) */
-  upcoming: { round: number; sets: number[][] } | null;
+  /** DB 가 확보한 최신 추첨 회차 */
+  latestDraw: number | null;
+  /** 현재 전략 세대 */
+  version: number | null;
+  state: LottoState;
+  /** 지금 주간 사이클이 돌고 있는지 */
+  busy: boolean;
+  /** 다음 자동 실행 예정 시각(ISO) */
+  nextCycleAt: string;
 }
-
-/** 몇 회차마다 에이전트가 전략을 개정하는지(2026-07-29 인터뷰 결정). */
-export const LOTTO_EVOLVE_EVERY = 50;
-
-/** 이동평균 창. 차트와 세대 요약이 같은 값을 쓴다. */
-export const LOTTO_MOVING_AVG_WINDOW = 50;
-
-/**
- * 3+ 적중률 이동평균 창.
- *
- * 점수(50)보다 넓게 잡는다. 목표 지표는 회차마다 0/1 뿐이라, 기준선 33.4% 와 천장 36.4% 의
- * 차이(3%p)를 보려면 표본이 훨씬 많아야 한다 — 50회차 창의 표준오차는 6.7%p 로 차이의
- * 두 배가 넘어 곡선이 의미 없이 요동친다. 200회차면 3.3%p 로 줄어든다.
- */
-export const LOTTO_HIT3_WINDOW = 200;

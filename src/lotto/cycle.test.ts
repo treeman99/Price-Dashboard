@@ -1,8 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { historyBefore, shouldEvolve } from "./experiment.ts";
+import {
+  LOTTO_CYCLE_CRON,
+  historyBefore,
+  lastCycleBoundary,
+  nextCycleAt,
+  shouldRunCycle,
+} from "./cycle.ts";
 import { SEED_SPEC, estimateHit3Rate, generateSets, makeRng, normalizeSpec } from "./strategy.ts";
-import type { LottoDraw } from "../../shared/lotto.ts";
+import type { LottoDraw, LottoState } from "../../shared/lotto.ts";
 import {
   LOTTO_BASELINE_PER_ROUND,
   countMatches,
@@ -15,6 +21,18 @@ const draw = (round: number): LottoDraw => ({
   drawDate: "2020-01-01",
   numbers: [1, 2, 3, 4, 5, 6],
   bonus: 7,
+});
+
+/** 상태 기본값 — 테스트마다 필요한 필드만 덮어쓴다. */
+const state = (patch: Partial<LottoState> = {}): LottoState => ({
+  run: 1,
+  lastCycleAt: null,
+  lastScoredRound: null,
+  lastEvolvedRound: null,
+  lastError: null,
+  retryAt: null,
+  updatedAt: "2026-07-30T00:00:00.000Z",
+  ...patch,
 });
 
 test("historyBefore 는 대상 회차와 그 이후를 절대 포함하지 않는다", () => {
@@ -31,27 +49,78 @@ test("historyBefore 는 회차가 끊겨 있어도 경계를 지킨다", () => {
   assert.deepEqual(historyBefore(draws, 5).map((d) => d.round), [1, 2]);
 });
 
-/**
- * **실험 반복 회귀 테스트.**
- *
- * 개정 시점을 `strategy.fromRound` 로 재던 시절, 반복(run 2)에서 직전 바퀴의 세대를 물려받으면
- * fromRound 가 1201 인데 새 커서는 1이라 `1 - 1201 >= 50` 이 영원히 거짓이었다.
- * 결과: 2바퀴째가 **진화 0회로 136ms 만에 완주**했다(2026-07-29 실측). 사용자 눈에는
- * "반복을 누르면 바로 종료로 간다"로 보였다. 기준을 '이번 바퀴에서 이 세대가 시작한 회차'로
- * 바꾼 것이 수정이고, 아래가 그 계약이다.
- */
-test("세대 개정은 '이번 바퀴에서 세대가 시작한 회차' 기준으로 50회차마다 발화한다", () => {
-  // 옛 방식이 만들던 상태 — 물려받은 fromRound(1201)를 그대로 쓰면 발화하지 않는다.
-  assert.equal(shouldEvolve(1, 1201), false);
-  assert.equal(shouldEvolve(1234, 1201), false);
+// ── 주간 스케줄 경계 ──
+//
+// cron 은 맥이 자고 있으면 통째로 사라진다. 그래서 '놓친 실행'을 시각 계산으로 판정하는데,
+// 그 계산이 하루라도 어긋나면 사이클이 매 30분 점검마다 다시 돌거나(중복) 다음 주까지
+// 안 돌아온다(누락). 요일·시각 경계가 이 파일에서 못박히는 이유다.
+// ⚠️ 로컬 시각 기준이므로 테스트도 반드시 로컬 생성자(new Date(y, m, d, h))를 쓴다.
 
-  // 이번 바퀴 시작(1) 기준이면 51회차에서 정상 발화한다.
-  assert.equal(shouldEvolve(50, 1), false);
-  assert.equal(shouldEvolve(51, 1), true);
+test("cron 식과 경계 계산이 같은 시각(일요일 10:00)을 가리킨다", () => {
+  assert.equal(LOTTO_CYCLE_CRON, "0 10 * * 0");
+});
 
-  // 세대가 51에서 시작했으면 101에서 다음 개정.
-  assert.equal(shouldEvolve(100, 51), false);
-  assert.equal(shouldEvolve(101, 51), true);
+test("직전 경계는 지나간 가장 최근의 일요일 10:00 이다", () => {
+  // 2026-07-30 은 목요일 → 직전 경계는 7/26(일) 10:00
+  const thu = lastCycleBoundary(new Date(2026, 6, 30, 12, 34));
+  assert.equal(thu.getDay(), 0);
+  assert.equal(thu.getDate(), 26);
+  assert.equal(thu.getHours(), 10);
+
+  // 일요일 09:00 은 **아직 그 주 경계 전**이라 한 주 전이 직전 경계다.
+  const sunEarly = lastCycleBoundary(new Date(2026, 7, 2, 9, 59));
+  assert.equal(sunEarly.getDate(), 26);
+  assert.equal(sunEarly.getMonth(), 6);
+
+  // 정각은 경계에 포함된다.
+  const sunSharp = lastCycleBoundary(new Date(2026, 7, 2, 10, 0));
+  assert.equal(sunSharp.getDate(), 2);
+  assert.equal(sunSharp.getMonth(), 7);
+});
+
+test("다음 실행 예정은 항상 미래의 일요일 10:00 이다", () => {
+  for (const now of [
+    new Date(2026, 6, 30, 12, 0), // 목
+    new Date(2026, 7, 2, 9, 59), // 일 09:59
+    new Date(2026, 7, 2, 10, 1), // 일 10:01
+  ]) {
+    const next = nextCycleAt(now);
+    assert.equal(next.getDay(), 0);
+    assert.equal(next.getHours(), 10);
+    assert.ok(next.getTime() > now.getTime(), `${next.toString()} 가 미래가 아니다`);
+  }
+});
+
+test("경계를 지난 뒤 아직 안 돌았으면 보충하고, 이미 돌았으면 다시 돌지 않는다", () => {
+  const now = new Date(2026, 7, 2, 11, 0); // 일요일 11:00 (경계 = 같은 날 10:00)
+  const before = new Date(2026, 6, 26, 10, 5).toISOString();
+  const after = new Date(2026, 7, 2, 10, 2).toISOString();
+
+  assert.equal(shouldRunCycle(now, state({ lastCycleAt: before }), true), true);
+  assert.equal(shouldRunCycle(now, state({ lastCycleAt: after }), true), false);
+  // 한 번도 안 돈 상태
+  assert.equal(shouldRunCycle(now, state(), true), true);
+});
+
+test("다음 회차 번호가 비어 있으면 일요일이 아니어도 즉시 돈다", () => {
+  // 배포 직후·DB 신규 생성 직후가 이 상태다. 다음 일요일까지 빈 화면을 두지 않는다.
+  const now = new Date(2026, 6, 30, 12, 0);
+  const justRan = state({ lastCycleAt: new Date(2026, 6, 30, 11, 0).toISOString() });
+  assert.equal(shouldRunCycle(now, justRan, true), false);
+  assert.equal(shouldRunCycle(now, justRan, false), true);
+});
+
+test("예약된 재시도 시각이 지나면 돈다 (토큰 한도·수집 실패 복구)", () => {
+  const now = new Date(2026, 6, 30, 12, 0);
+  const justRan = { lastCycleAt: new Date(2026, 6, 30, 8, 0).toISOString() };
+  assert.equal(
+    shouldRunCycle(now, state({ ...justRan, retryAt: new Date(2026, 6, 30, 16, 0).toISOString() }), true),
+    false
+  );
+  assert.equal(
+    shouldRunCycle(now, state({ ...justRan, retryAt: new Date(2026, 6, 30, 11, 0).toISOString() }), true),
+    true
+  );
 });
 
 /** 균등 무작위 추첨 회차를 만든다(시드 고정 — 테스트가 흔들리지 않게). */

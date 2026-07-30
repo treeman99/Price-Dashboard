@@ -192,13 +192,14 @@ CREATE INDEX IF NOT EXISTS idx_pulse_fp ON stock_pulse_alerts(fingerprint, creat
 CREATE INDEX IF NOT EXISTS idx_pulse_date ON stock_pulse_alerts(date, status);
 CREATE INDEX IF NOT EXISTS idx_pulse_created ON stock_pulse_alerts(created_at);
 
--- ── 로또 예측 실험 ──
+-- ── 로또 예측 ──
 --
--- 다른 탭과 성격이 다르다. 나머지는 '오늘의 상태'를 수집하지만 여기는 **재현 가능한 실험 기록**이라
--- 과거 행을 절대 덮어쓰지 않는다. 회차 r 의 예측은 r-1 회차까지의 정보만으로 만들어졌다는 것이
--- 이 실험의 유일한 성립 조건이고, 그 증거가 아래 세 표의 append-only 성질이다.
+-- 다른 탭과 성격이 다르다. 나머지는 '오늘의 상태'를 수집하지만 여기는 **되돌아볼 수 있는 예측
+-- 기록**이라 과거 행을 절대 덮어쓰지 않는다. 회차 r 의 예측이 r-1 회차까지의 정보만으로,
+-- 그것도 **추첨 전에** 만들어졌다는 것이 이 기록의 유일한 성립 조건이고, 그 증거가 아래 네 표의
+-- append-only 성질이다(lotto_upcoming 만 예외 — 채점되면 predictions 로 옮겨지고 비워진다).
 
--- 동행복권 회차 원본. 실험의 정답지이자, 예측 시점에 '읽을 수 있었던 과거'의 원천이다.
+-- 동행복권 회차 원본. 채점의 정답지이자, 예측 시점에 '읽을 수 있었던 과거'의 원천이다.
 -- 회차는 불변이므로 재수집해도 값이 바뀔 일이 없다(정정 사례 없음) → PK 충돌 시 무시한다.
 CREATE TABLE IF NOT EXISTS lotto_draws (
   round      INTEGER PRIMARY KEY,      -- 회차 (1 = 2002-12-07)
@@ -213,7 +214,8 @@ CREATE TABLE IF NOT EXISTS lotto_draws (
   fetched_at TEXT NOT NULL
 );
 
--- 전략 세대. 50회차마다 에이전트가 한 행을 추가한다(version 1 은 무작위 시드 세대).
+-- 전략 세대. 주간 사이클이 새 추첨 결과를 채점한 뒤 에이전트가 한 행을 추가한다
+-- (= 한 주에 한 세대. version 1 은 무작위 시드 세대).
 -- spec_json 은 엔진이 해석하는 선언형 사양이다 — 코드 문자열이 아니다(eval 금지).
 CREATE TABLE IF NOT EXISTS lotto_strategies (
   version    INTEGER PRIMARY KEY,      -- 1부터 증가. **반복(run)을 넘어서도 계속 증가한다**
@@ -229,10 +231,10 @@ CREATE TABLE IF NOT EXISTS lotto_strategies (
 
 -- 회차별 채점 결과. cum_score 를 저장해 두는 이유는 1200행을 매 조회마다 누적 계산하지
 -- 않기 위해서가 아니라(그건 싸다), **중간에 회차를 건너뛰지 않았다는 증거**로 쓰기 위해서다.
--- ⚠️ PK 가 (run, round) 인 이유: 사용자가 초기화 없이 **전체 회차를 다시 한 바퀴** 돌릴 수
--- 있어야 한다('실험 반복'). 그때 1회차부터 다시 예측하는데, round 만 PK 면 이전 반복의 기록을
--- 덮어써 반복 간 비교가 불가능해진다. run 은 1부터 증가하고 전략 세대(version)는 반복을
--- 넘어서도 계속 이어진다 — 초기화가 아니라 '이어서 더 도는 것'이기 때문이다.
+-- ⚠️ PK 가 (run, round) 인 이유: (구)'실험 반복'이 1회차부터 몇 바퀴씩 다시 예측했고, round 만
+-- PK 면 이전 바퀴의 기록을 덮어써 비교가 불가능했다. 반복 기능은 2026-07-30 에 제거됐지만
+-- 그 시절의 8바퀴 기록이 그대로 남아 있어 PK 는 유지한다. 라이브 예측은 **마지막 바퀴(run)를
+-- 이어서** 쌓으므로 run 은 더 이상 증가하지 않는다.
 CREATE TABLE IF NOT EXISTS lotto_predictions (
   run          INTEGER NOT NULL DEFAULT 1,
   round        INTEGER NOT NULL REFERENCES lotto_draws(round) ON DELETE CASCADE,
@@ -246,6 +248,22 @@ CREATE TABLE IF NOT EXISTS lotto_predictions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_lotto_pred_version ON lotto_predictions(version);
+
+-- **다음 회차 추천 번호(추첨 전).** 항상 0행 또는 1행이다.
+--
+-- ⚠️ lotto_predictions 에 미리 넣을 수 없다. 그 표는 round 가 lotto_draws 를 참조하는데
+-- 아직 추첨되지 않은 회차는 lotto_draws 에 없다(FK 위반). 게다가 cursor 를 그 표에서
+-- 유도하므로 미채점 행이 섞이면 커서가 회차를 건너뛴다. 그래서 별도 표를 둔다.
+--
+-- 이 표가 없으면 "추천했던 번호와 실제 추첨 결과를 비교"가 성립하지 않는다 — 화면을 열 때마다
+-- 번호를 다시 뽑으면 다음 주에 채점할 대상이 매번 달라지기 때문이다(2026-07-30 전환 전의 버그).
+CREATE TABLE IF NOT EXISTS lotto_upcoming (
+  round      INTEGER PRIMARY KEY,      -- 아직 추첨되지 않은 회차
+  run        INTEGER NOT NULL,         -- 채점될 때 들어갈 예측 스코프
+  version    INTEGER NOT NULL,         -- 이 번호를 뽑은 전략 세대
+  sets_json  TEXT NOT NULL,            -- JSON: number[10][6]
+  created_at TEXT NOT NULL
+);
 -- ⚠️ (run, round) 인덱스는 여기 두면 안 된다. schema.sql 은 migrate() **이전**에 실행되는데,
 -- run 컬럼이 없는 옛 표가 남아 있는 DB 에서는 이 CREATE INDEX 가 "no such column: run" 으로
 -- 터지고 그 순간 서버 부팅 자체가 죽는다(실측 2026-07-29). 표를 다시 만든 직후,

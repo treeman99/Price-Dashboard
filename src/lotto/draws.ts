@@ -254,28 +254,11 @@ export interface SyncResult {
  * 그건 수집이 아니라 크롤링 부하다.
  */
 /**
- * 동기화 진행 여부.
- *
- * 첫 백필은 124요청 · 수십 초가 걸린다. 그 사이에 실험이 시작되면 반쯤 찬 이력을 스냅샷으로
- * 떠 선두 결손을 만드는데, 프론트의 버튼 비활성만으로는 못 막는다(새로고침 한 번이면 풀린다).
- * 서버가 아는 사실이므로 서버가 노출하고, experiment.runExperiment 가 이 값을 보고 거절한다.
+ * ⚠️ 동시 실행 가드는 여기 없다 — 호출부(`cycle.ts`)의 사이클 플래그가 유일한 진입점을
+ * 지키고 있고, 그 함수가 이것을 `await` 한다. 예전에는 '동기화 중'을 노출해 실험 시작 버튼이
+ * 반쯤 찬 이력을 읽는 것을 막았지만, 버튼이 없어져 그 경로 자체가 사라졌다.
  */
-let syncing = false;
-
-export function isSyncingDraws(): boolean {
-  return syncing;
-}
-
 export async function syncDraws(opts: { force?: boolean } = {}): Promise<SyncResult> {
-  syncing = true;
-  try {
-    return await syncDrawsInner(opts);
-  } finally {
-    syncing = false;
-  }
-}
-
-async function syncDrawsInner(opts: { force?: boolean }): Promise<SyncResult> {
   const latest = await findLatestRound();
   const have = opts.force ? new Set<number>() : savedRounds();
 

@@ -15,12 +15,11 @@ import { describeSlotRoles } from "../stock/slot-role.ts";
 import { slotHandled, slotNeedsCatchup } from "../stock/notify-ledger.ts";
 import { localDate } from "../util/date.ts";
 import {
-  checkLottoResume,
-  isExperimentDone,
-  isExperimentRunning,
-  reconcileLottoState,
-  syncLottoDraws,
-} from "../lotto/experiment.ts";
+  LOTTO_CYCLE_CRON,
+  LOTTO_CYCLE_LABEL,
+  catchUpWeeklyCycle,
+  runWeeklyCycle,
+} from "../lotto/cycle.ts";
 import {
   PRIMARY_AGENT_MODEL,
   WEEKLY_RESET_CRON,
@@ -369,42 +368,31 @@ async function safeFlushPulseQueue(trigger: string) {
   }
 }
 
-// ── 로또 회차 동기화 ──
+// ── 로또 주간 사이클 ──
 //
-// 다른 탭과 두 가지가 다르다. (1) **주 1회**다 — 추첨이 토요일 20:45경 한 번뿐이라 매일 도는 건
-// 무의미한 요청이다. (2) 실험 자체는 여기서 굴리지 않는다 — 사용자가 버튼으로 시작한다
-// (인터뷰 결정). 스케줄러는 '새 회차를 확보해 두는 일'과 '한도로 멈춘 실험을 되살리는 일'만 한다.
-const LOTTO_SYNC_CRON = "30 21 * * 6"; // 토요일 21:30
-const LOTTO_SYNC_LABEL = "토요일 21:30";
+// 다른 탭과 다른 점은 **주 1회**라는 것뿐이다 — 추첨이 토요일 20:45경 한 번뿐이라 매일 도는 건
+// 무의미한 요청이다. 사이클 하나가 수집·채점·전략 갱신·다음 회차 번호 확정을 전부 한다
+// (`src/lotto/cycle.ts`). 시각(일요일 10:00)은 사용자 지시이고, cron 식은 cycle.ts 가 소유한다 —
+// 경계 계산(놓친 실행 판정)이 같은 상수를 봐야 하기 때문이다.
 
-async function safeSyncLottoDraws(trigger: string) {
-  // ⚠️ **완주하면 자동 동기화도 멈춘다**(2026-07-29 사용자 지시: "전체 회차를 1번 다 돌면 모든
-  // 동작을 멈추고 알려라"). 여기서 새 회차를 계속 받아 오면 (1) 완주 배너의 '더 이상 읽을 회차가
-  // 없습니다'가 거짓이 되고, (2) 다음 동작을 정하기 전에 실험 조건이 조용히 바뀐다.
-  // 사용자가 다음 동작(반복 / 주간 증분)을 정하면 이 가드를 그 결정에 맞게 푼다.
-  // 수동 [회차 동기화] 버튼은 이 가드를 타지 않는다 — 사용자가 직접 누른 것까지 막을 이유는 없다.
-  if (isExperimentDone()) return;
+async function safeRunLottoCycle(trigger: string) {
   try {
-    const r = await syncLottoDraws();
-    if (r.added > 0) log.info(`로또 회차 신규 ${r.added}건 확보 [${trigger}] — 최신 ${r.latest}회차`);
+    await runWeeklyCycle(trigger);
   } catch (e) {
-    log.error(`로또 회차 동기화 오류 [${trigger}]: ${(e as Error).message}`);
+    // runWeeklyCycle 은 스스로 예외를 삼키지만, 그 약속이 깨져도 스케줄러가 죽지 않게 한 겹 더.
+    log.error(`로또 주간 사이클 오류 [${trigger}]: ${(e as Error).message}`);
   }
 }
 
 /**
- * 로또 실험 상태 점검. 두 가지를 이 순서로 한다.
- * 1) 잔류 running 강등 — 실행 중 프로세스가 죽으면 파일에 running 이 남아 화면이 영구 '진행중' 이 된다.
- * 2) 토큰 한도 자동 재개 — 4시간 대기가 끝났는지 확인.
- * 순서가 중요하다: 강등이 먼저여야 잔류 running 이 재개 판정을 가리지 않는다.
+ * 놓친 사이클 보충. 일요일 10:00 에 맥이 자고 있었으면 cron 이 통째로 사라지므로, 다른 탭과
+ * 같은 catch-up 을 붙인다(기동 직후 + 30분마다). 실패해 예약된 재시도도 여기서 걸린다.
  */
-async function safeCheckLottoResume() {
-  if (isExperimentRunning()) return;
+async function safeCatchUpLottoCycle() {
   try {
-    reconcileLottoState();
-    await checkLottoResume();
+    await catchUpWeeklyCycle();
   } catch (e) {
-    log.error(`로또 실험 재개 점검 오류: ${(e as Error).message}`);
+    log.error(`로또 사이클 보충 점검 오류: ${(e as Error).message}`);
   }
 }
 
@@ -480,13 +468,13 @@ function registerCrons() {
   );
   log.info(`스케줄러: 수집 모델 주간 복귀 매주 ${WEEKLY_RESET_LABEL} → ${PRIMARY_AGENT_MODEL}`);
 
-  // 로또 회차 동기화(주 1회). 추첨 직후에 새 회차만 받아 온다.
+  // 로또 주간 사이클(주 1회). 채점 → 전략 갱신 → 다음 회차 번호 확정까지 한 번에 한다.
   tasks.push(
-    cron.schedule(LOTTO_SYNC_CRON, () => void safeSyncLottoDraws("schedule"), {
-      name: "dp-lotto-sync",
+    cron.schedule(LOTTO_CYCLE_CRON, () => void safeRunLottoCycle("schedule"), {
+      name: "dp-lotto-cycle",
     })
   );
-  log.info(`스케줄러: 로또 회차 동기화 매주 ${LOTTO_SYNC_LABEL}`);
+  log.info(`스케줄러: 로또 주간 사이클 매주 ${LOTTO_CYCLE_LABEL}`);
 }
 
 /** 주간 복귀 catch-up. 파일 판정이라 실패해도 스케줄러가 죽지 않게 감싼다. */
@@ -528,9 +516,9 @@ export function startScheduler() {
   // 일요일 21:00 에 맥이 꺼져 있거나 자고 있었으면 주간 복귀가 통째로 사라진다 —
   // 그러면 한도 소진 전환이 영구화되므로 다른 탭과 같은 catch-up 을 붙인다.
   safeCheckWeeklyModelReset();
-  // 로또: 토큰 한도로 멈춘 실험이 있으면 기동 즉시 시각을 확인한다. 4시간 대기 중에 맥이
-  // 자거나 서비스가 재시작돼도 재개 시각은 상태 파일에 남아 있으므로 여기서 복구된다.
-  void safeCheckLottoResume();
+  // 로또: 놓친 일요일 사이클(맥이 자고 있었던 경우)과 예약된 재시도를 기동 즉시 확인한다.
+  // 다음 회차 추천 번호가 아직 없는 상태(배포 직후)도 여기서 채워진다.
+  void safeCatchUpLottoCycle();
   // 펄스 자체는 catch-up 하지 않지만(위 주석) **보류 큐는 다르다.** 큐에 있는 건 이미 판정이
   // 끝나 "아침에 보내겠다"고 약속한 알림이라, 07:00 에 서버가 꺼져 있었다면 반드시 보충해야
   // 한다. 그러지 않으면 밤사이 판정이 디스크에 영원히 갇힌다.
@@ -552,6 +540,6 @@ export function startScheduler() {
     void checkStockCatchup("kr");
     void checkStockCatchup("us");
     safeCheckWeeklyModelReset();
-    void safeCheckLottoResume();
+    void safeCatchUpLottoCycle();
   }, 30 * 60 * 1000);
 }
