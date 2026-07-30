@@ -24,7 +24,12 @@ import {
 } from "../db/repo.ts";
 import { parseSourceInput } from "./sources.ts";
 import { resolveCandidates } from "./resolve.ts";
-import { runCollection, isPriceCollecting } from "../collector/collect.ts";
+import {
+  runCollection,
+  isPriceCollecting,
+  collectingProducts,
+  isProductCollecting,
+} from "../collector/collect.ts";
 import { getEventsSnapshot, refreshEvents, isEventsCollecting } from "../events/events.ts";
 import { getNewsSnapshot, refreshNews, isNewsCollecting } from "../news/news.ts";
 import {
@@ -256,7 +261,16 @@ api.get("/products/:id/history", (req, res) => {
   res.json(h);
 });
 
-/** 상품 추가 → 즉시 1차 수집으로 추적 시작 (F4) */
+/**
+ * 상품 추가 → 즉시 1차 수집으로 추적 시작 (F4).
+ *
+ * 1차 수집은 **백그라운드로 시작**하고 즉시 201 을 반환한다(POST /collect 와 같은 계약).
+ * 예전엔 수집 완료까지 await 했는데, 그 수집에는 LLM 리뷰 리서치가 포함돼 실측 90~120초
+ * (가드 타임아웃은 60분)가 걸린다. 그동안 응답이 없어 추가 다이얼로그의 스피너가 멈춘 채로
+ * 남았고, 상품 행은 이미 저장돼 있어 "리프레쉬하면 추가돼 있는데 로딩이 안 끝난다"로 보였다.
+ * 가격 포인트도 리서치 **전에** 저장되므로(collectProduct), 기다린 2분은 리뷰 때문이었다.
+ * 프론트는 /collect/status 의 productIds 를 폴링해 카드별 '수집 중'을 표시한다.
+ */
 api.post("/products", async (req, res) => {
   const body = (req.body ?? {}) as Partial<CreateProductInput>;
   // dedup 검사 전에 trim: 저장은 trim된 name으로 하므로 raw name으로 검사하면 공백 차이로 우회된다.
@@ -281,13 +295,12 @@ api.post("/products", async (req, res) => {
     return res.status(409).json({ error: "이미 존재하는 상품명" });
   }
 
-  // 즉시 1차 수집 (알림 없이 해당 상품만)
-  try {
-    await runCollection({ date: today(), trigger: "manual", onlyProductId: product.id });
-  } catch (e) {
-    log.warn(`신규 상품 1차 수집 실패 [${product.name}]: ${(e as Error).message}`);
-  }
-  res.status(201).json(getProductSummary(product.id));
+  // 즉시 1차 수집 (알림 없이 해당 상품만) — 백그라운드. runCollection 은 첫 await 전에
+  // '수집 중' 집합에 상품을 넣으므로, 아래 응답 시점에 이미 collecting 상태가 노출된다.
+  void runCollection({ date: today(), trigger: "manual", onlyProductId: product.id }).catch((e) =>
+    log.warn(`신규 상품 1차 수집 실패 [${product.name}]: ${(e as Error).message}`)
+  );
+  res.status(201).json({ ...(getProductSummary(product.id) ?? {}), collecting: true });
 });
 
 /**
@@ -357,18 +370,23 @@ api.patch("/products/:id", (req, res) => {
 
 /**
  * 단일 상품만 즉시 재수집. 매칭 규칙(검색어/포함·제외/최소가)을 고친 뒤 오늘 가격을
- * 바로 정정할 때 사용. 이메일은 보내지 않고(onlyProductId 경로) 갱신된 요약을 반환.
+ * 바로 정정할 때 사용. 이메일은 보내지 않는다(onlyProductId 경로).
+ *
+ * POST /products 와 같은 이유로 **백그라운드 시작 + 즉시 202**다(수집이 1~2분+ 걸린다).
+ * 같은 상품이 이미 수집 중이면 409 — 겹쳐 돌면 LLM 리서치가 두 번 나가고 같은 행의 가격이
+ * 나중 실행에 덮인다(isProductCollecting 주석 참고).
  */
-api.post("/products/:id/collect", async (req, res) => {
+api.post("/products/:id/collect", (req, res) => {
   const id = Number(req.params.id);
   const product = getProduct(id);
   if (!product) return res.status(404).json({ error: "상품 없음" });
-  try {
-    await runCollection({ date: today(), trigger: "manual", onlyProductId: id });
-    res.json(getProductSummary(id));
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
+  if (isProductCollecting(id)) {
+    return res.status(409).json({ error: "이미 이 상품의 수집이 진행 중입니다.", collecting: true });
   }
+  void runCollection({ date: today(), trigger: "manual", onlyProductId: id }).catch((e) =>
+    log.warn(`상품 재수집 실패 [${product.name}]: ${(e as Error).message}`)
+  );
+  res.status(202).json({ started: true, collecting: true });
 });
 
 // ── 상품 × 소스 ref (watchlist / pcode 확정) ──────────────
@@ -467,9 +485,12 @@ api.post("/collect", (_req, res) => {
   res.status(202).json({ started: true, collecting: true });
 });
 
-/** 가격 수집 진행 상태(프론트 폴링용). */
+/**
+ * 가격 수집 진행 상태(프론트 폴링용).
+ * collecting = 전체 수집(수동/정시) → 전역 배너. productIds = 단일 상품 즉시수집 → 카드별 배지.
+ */
 api.get("/collect/status", (_req, res) => {
-  res.json({ collecting: isPriceCollecting() });
+  res.json({ collecting: isPriceCollecting(), productIds: collectingProducts() });
 });
 
 // ── 팝업 · 전시 게시판 ──

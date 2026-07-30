@@ -106,7 +106,10 @@ export function EditProductDialog({
     onChanged();
     if (recollect) {
       try {
-        // 매칭 규칙을 바로 반영해 오늘 가격을 정정하려면 이 상품만 즉시 재수집.
+        // 매칭 규칙을 바로 반영해 오늘 가격을 정정하려면 이 상품만 재수집.
+        // 서버가 백그라운드로 시작하고 즉시 202를 주므로 여기서 수집을 기다리지 않는다
+        // (수집은 LLM 리뷰 리서치까지 1~2분+ 걸린다). 진행 상황은 카드의 '수집 중' 배지로 보인다.
+        // 이미 이 상품이 수집 중이면 409 → { busy: true }로 조용히 통과(중복 실행 방지).
         await api.collectProduct(product.id);
       } catch (e) {
         setErr(`저장은 완료됐지만 재수집에 실패했습니다: ${(e as Error).message}`);
@@ -189,7 +192,7 @@ export function EditProductDialog({
             variant="outline"
             onClick={() => submit(true)}
             disabled={busy}
-            title="저장한 뒤 이 상품만 즉시 다시 수집해 오늘 가격을 정정합니다"
+            title="저장한 뒤 이 상품만 다시 수집해 오늘 가격을 정정합니다(백그라운드, 1~2분)"
           >
             {pending === "recollect" && <Loader2 className="h-4 w-4 animate-spin" />}
             저장 후 재수집

@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronUp, ChevronDown, Minus, Trash2, Star } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronUp,
+  ChevronDown,
+  Loader2,
+  Minus,
+  Trash2,
+  Star,
+} from "lucide-react";
 import type { ProductSummary, ProductHistory, PeriodDays } from "@shared/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -63,12 +72,18 @@ function SourceBadge({ source }: { source: string }) {
 export function ProductCard({
   summary,
   onChanged,
+  collecting = false,
   canUp,
   canDown,
   onMove,
 }: {
   summary: ProductSummary;
   onChanged: () => void;
+  /**
+   * 이 상품의 즉시수집(추가 직후 1차 수집 / 재수집)이 백그라운드로 진행 중.
+   * 수집은 1~2분 걸리므로 그동안 카드에 아직 값이 없거나 낡은 값이 보인다 — 그 이유를 배지로 알린다.
+   */
+  collecting?: boolean;
   /** 목록에서 앞으로 이동 가능(첫 카드가 아님) */
   canUp: boolean;
   /** 목록에서 뒤로 이동 가능(마지막 카드가 아님) */
@@ -113,7 +128,17 @@ export function ProductCard({
     <Card>
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
-          <CardTitle className="flex items-center gap-2">{product.name}</CardTitle>
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            {product.name}
+            {collecting && (
+              <Badge
+                className="gap-1 border-blue-200 bg-blue-50 px-1.5 py-0 text-[10px] font-normal text-blue-700"
+                title="가격·리뷰를 수집하는 중입니다. 1~2분 걸리며 완료되면 자동으로 반영됩니다."
+              >
+                <Loader2 className="h-3 w-3 animate-spin" /> 수집 중…
+              </Badge>
+            )}
+          </CardTitle>
           <div className="flex shrink-0 items-center">
             <Button
               variant="ghost"

@@ -45,6 +45,12 @@ export interface AppConfig {
   warnings: string[];
 }
 
+/** 가격 수집 진행 상태. 전체 수집(전역)과 단일 상품 즉시수집(상품별)을 분리해 본다. */
+export interface CollectStatus {
+  collecting: boolean;
+  productIds: number[];
+}
+
 export const api = {
   config: () => fetch("/api/config").then((r) => j<AppConfig>(r)),
 
@@ -77,12 +83,16 @@ export const api = {
       body: JSON.stringify({ model }),
     }).then((r) => j<AgentModelSettings>(r)),
 
+  /**
+   * 상품 추가. 1차 수집은 서버가 백그라운드로 시작하므로 곧바로(201) 돌아온다 —
+   * collecting:true 는 "이 상품은 지금 수집 중"이라는 뜻이고, 진행 상황은 collectStatus() 폴링으로 본다.
+   */
   addProduct: (input: CreateProductInput) =>
     fetch("/api/products", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
-    }).then((r) => j<ProductSummary>(r)),
+    }).then((r) => j<ProductSummary & { collecting: boolean }>(r)),
 
   /** 상품 정보 수정(검색어/포함·제외 규칙/최소가). 부분 수정 가능. 수정된 요약 반환. */
   updateProduct: (id: number, patch: UpdateProductInput) =>
@@ -92,9 +102,17 @@ export const api = {
       body: JSON.stringify(patch),
     }).then((r) => j<ProductSummary>(r)),
 
-  /** 단일 상품만 즉시 재수집(매칭 규칙 수정 후 오늘 가격 정정). 갱신된 요약 반환. */
-  collectProduct: (id: number) =>
-    fetch(`/api/products/${id}/collect`, { method: "POST" }).then((r) => j<ProductSummary>(r)),
+  /**
+   * 단일 상품만 재수집(매칭 규칙 수정 후 오늘 가격 정정)을 백그라운드로 시작(202)하고 즉시 반환.
+   * 이 상품이 이미 수집 중이면 409 → { busy: true }(중복 수집이 아니므로 오류가 아니다).
+   * 완료 여부는 collectStatus().productIds 폴링으로 확인한다.
+   */
+  collectProduct: async (id: number): Promise<{ started: boolean; busy: boolean }> => {
+    const res = await fetch(`/api/products/${id}/collect`, { method: "POST" });
+    if (res.status === 409) return { started: false, busy: true };
+    await j<{ started: boolean }>(res); // 202; 비정상(4xx/5xx)이면 throw
+    return { started: true, busy: false };
+  },
 
   /** 영구 삭제(가격 이력 포함). 오삭제 방지로 상품명을 confirm 으로 전달. */
   deleteProduct: (id: number, name: string) =>
@@ -121,8 +139,9 @@ export const api = {
     return { started: true, busy: false };
   },
 
+  /** collecting=전체 수집 진행 중(전역 배너), productIds=즉시수집 진행 중인 상품(카드별 배지). */
   collectStatus: () =>
-    fetch("/api/collect/status").then((r) => j<{ collecting: boolean }>(r)),
+    fetch("/api/collect/status").then((r) => j<CollectStatus>(r)),
 
   // ── 상품 × 소스 ref (pcode 확정) ──
   listSources: (id: number) =>

@@ -214,6 +214,14 @@ async function fetchResearchReviews(
 let priceCollecting = false;
 
 /**
+ * 단일 상품 즉시수집(상품 추가 1차 수집 / 재수집)이 진행 중인 상품 id.
+ * 이 수집은 백그라운드로 도는데(§API POST /products, /products/:id/collect 는 즉시 응답한다)
+ * 진행 중임을 알 방법이 없으면 프론트는 '언제 끝나는지 모르는 빈 카드'를 보여줄 수밖에 없다.
+ * 카드별 '수집 중' 배지와 중복 요청 차단(409)의 유일한 근거다.
+ */
+const collectingProductIds = new Set<number>();
+
+/**
  * 현재 가격 '전체 수집'(수동/정시)이 진행 중인지. 프론트 '수집 중' 배너·상태 폴링에 사용.
  * 단일 상품 즉시수집(onlyProductId)은 대시보드 전역 배너 대상이 아니므로 제외한다.
  * 수동·정시 수집 모두 runCollection 을 거치므로 두 경우 다 반영된다.
@@ -222,15 +230,40 @@ export function isPriceCollecting(): boolean {
   return priceCollecting;
 }
 
+/** 즉시수집이 진행 중인 상품 id 목록(프론트 카드별 '수집 중' 폴링용). */
+export function collectingProducts(): number[] {
+  return [...collectingProductIds];
+}
+
+/**
+ * 그 상품의 즉시수집이 이미 진행 중인지.
+ *
+ * 중복 실행을 막아야 하는 이유: §11 당일 캐시는 **시작 시점에 조회하고 끝에 저장**하므로
+ * 진행 중인 요청을 감지하지 못한다. 같은 상품을 겹쳐 돌리면 LLM 리뷰 리서치(90~120초)가
+ * 그대로 두 번 나가고, 두 실행이 같은 (product_id,date) 행에 가격을 써서 나중에 끝난 쪽이
+ * 이긴다 — 실측(2026-07-30): 아블러가 겹쳐 돌아 49,000 → 39,600 으로 덮였다.
+ */
+export function isProductCollecting(productId: number): boolean {
+  return collectingProductIds.has(productId);
+}
+
 /**
  * 하루치 수집 실행. (product_id,date) upsert 라 같은 날 재실행해도 덮어쓰기(멱등).
  * 상품별 실패는 격리하고 나머지를 계속 진행한다.
  * 상품 간 순차 처리 + 2~5s 랜덤 지터(매너 §8).
- * 전체 수집일 때만 '수집 중' 플래그를 세운다(예외가 나도 finally 로 반드시 해제).
+ * 전체 수집은 전역 '수집 중' 플래그, 단일 상품 즉시수집은 상품별 집합으로 표시한다
+ * (둘 다 예외가 나도 finally 로 반드시 해제).
  */
 export async function runCollection(opts: CollectOptions): Promise<CollectResult> {
-  const isFullRun = !opts.onlyProductId;
-  if (!isFullRun) return runCollectionInner(opts);
+  const onlyId = opts.onlyProductId;
+  if (onlyId != null) {
+    collectingProductIds.add(onlyId);
+    try {
+      return await runCollectionInner(opts);
+    } finally {
+      collectingProductIds.delete(onlyId);
+    }
+  }
   priceCollecting = true;
   try {
     return await runCollectionInner(opts);

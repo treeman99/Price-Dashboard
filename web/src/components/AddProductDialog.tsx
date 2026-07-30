@@ -81,7 +81,8 @@ export function AddProductDialog({ onAdded }: { onAdded: () => void }) {
         <DialogHeader>
           <DialogTitle>관심 상품 추가</DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
-            추가 즉시 1차 수집으로 추적을 시작합니다.
+            추가하면 곧바로 목록에 나타나고, 1차 수집(가격·리뷰)은 백그라운드로 1~2분 진행됩니다.
+            카드의 '수집 중' 배지가 사라지면 완료입니다.
           </DialogDescription>
         </DialogHeader>
 
