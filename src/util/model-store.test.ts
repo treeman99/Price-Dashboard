@@ -50,7 +50,7 @@ test("저장 전에는 기본값을 반환", () => {
   const s = getModelSettings();
   assert.deepEqual(s.options, AGENT_MODEL_OPTIONS);
   assert.equal(s.fallback, null);
-  assert.equal(s.weeklyResetLabel, "일요일 21:00");
+  assert.equal(s.weeklyResetLabel, "수요일 21:00");
 });
 
 test("허용된 모델 저장 후 그 값을 반환", () => {
@@ -97,20 +97,21 @@ test("주간 복귀는 기본 모델로 되돌리고 전환 상태를 지운다"
   assert.equal(restoreWeeklyPrimary("test"), false);
 });
 
-test("주간 복귀 cron 식은 일요일 21:00", () => {
-  assert.equal(WEEKLY_RESET_CRON, "0 21 * * 0");
+test("주간 복귀 cron 식은 수요일 21:00 (Codex 한도 리셋 요일)", () => {
+  // node-cron 의 요일 번호는 0=일요일 체계라 수요일은 3이다.
+  assert.equal(WEEKLY_RESET_CRON, "0 21 * * 3");
 });
 
-test("previousWeeklyResetAt — 가장 최근 지난 일요일 21:00", () => {
+test("previousWeeklyResetAt — 가장 최근 지난 수요일 21:00", () => {
   const at = (iso: string) => previousWeeklyResetAt(new Date(iso));
-  // 월요일 저녁 → 하루 전 일요일 21:00
-  assert.equal(at("2026-07-27T22:00:00").toISOString(), new Date("2026-07-26T21:00:00").toISOString());
-  // 일요일 20:59 → 아직 이번 주 복귀 전이므로 **지난주** 일요일
-  assert.equal(at("2026-07-26T20:59:00").toISOString(), new Date("2026-07-19T21:00:00").toISOString());
-  // 일요일 21:00 정각 → 이번 주
-  assert.equal(at("2026-07-26T21:00:00").toISOString(), new Date("2026-07-26T21:00:00").toISOString());
-  // 토요일 → 6일 전 일요일
-  assert.equal(at("2026-08-01T09:00:00").toISOString(), new Date("2026-07-26T21:00:00").toISOString());
+  // 목요일 저녁 → 하루 전 수요일 21:00
+  assert.equal(at("2026-07-30T22:00:00").toISOString(), new Date("2026-07-29T21:00:00").toISOString());
+  // 수요일 20:59 → 아직 이번 주 복귀 전이므로 **지난주** 수요일
+  assert.equal(at("2026-07-29T20:59:00").toISOString(), new Date("2026-07-22T21:00:00").toISOString());
+  // 수요일 21:00 정각 → 이번 주
+  assert.equal(at("2026-07-29T21:00:00").toISOString(), new Date("2026-07-29T21:00:00").toISOString());
+  // 토요일 → 3일 전 수요일
+  assert.equal(at("2026-08-01T09:00:00").toISOString(), new Date("2026-07-29T21:00:00").toISOString());
 });
 
 test("catch-up: 기준선이 없으면 되돌리지 않고 심기만 한다", () => {
@@ -121,13 +122,14 @@ test("catch-up: 기준선이 없으면 되돌리지 않고 심기만 한다", ()
 });
 
 test("catch-up: 예정 시각을 놓친 뒤 첫 점검에서 1회만 복귀한다", () => {
-  // 기준선을 예정(2026-07-26 21:00)보다 앞선 시각으로 심는다 = 일요일에 서버가 꺼져 있었던 상황.
+  // now(2026-07-27 월) 기준 예정 시각은 직전 수요일인 2026-07-22 21:00 이다.
+  // 기준선을 그보다 앞선 시각으로 심는다 = 그 수요일에 서버가 꺼져 있었던 상황.
   fs.writeFileSync(
     storePath,
     JSON.stringify({
       model: "claude-opus-5",
-      fallback: { from: "gpt-5.6-sol", at: "2026-07-24T12:00:00.000Z", reason: "한도" },
-      lastWeeklyResetAt: new Date("2026-07-19T21:00:00").toISOString(),
+      fallback: { from: "gpt-5.6-sol", at: "2026-07-20T12:00:00.000Z", reason: "한도" },
+      lastWeeklyResetAt: new Date("2026-07-15T21:00:00").toISOString(),
     }),
     "utf8"
   );

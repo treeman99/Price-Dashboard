@@ -513,8 +513,8 @@ export function startScheduler() {
   void checkYoutubeCatchup();
   void checkStockCatchup("kr");
   void checkStockCatchup("us");
-  // 일요일 21:00 에 맥이 꺼져 있거나 자고 있었으면 주간 복귀가 통째로 사라진다 —
-  // 그러면 한도 소진 전환이 영구화되므로 다른 탭과 같은 catch-up 을 붙인다.
+  // 주간 복귀 예정 시각(WEEKLY_RESET_LABEL)에 맥이 꺼져 있거나 자고 있었으면 복귀가 통째로
+  // 사라진다 — 그러면 한도 소진 전환이 영구화되므로 다른 탭과 같은 catch-up 을 붙인다.
   safeCheckWeeklyModelReset();
   // 로또: 놓친 일요일 사이클(맥이 자고 있었던 경우)과 예약된 재시도를 기동 즉시 확인한다.
   // 다음 회차 추천 번호가 아직 없는 상태(배포 직후)도 여기서 채워진다.

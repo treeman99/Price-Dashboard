@@ -43,17 +43,31 @@ export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
 /** 기본 모델 = 목록 첫 항목(Codex 5.6 Sol). 주간 복귀도 이 값으로 되돌린다. */
 export const DEFAULT_AGENT_MODEL = AGENT_MODEL_OPTIONS[0].id;
 
-/** 평상시 모델. 일요일 21:00 주간 복귀가 되돌리는 대상. */
+/** 평상시 모델. 주간 복귀가 되돌리는 대상. */
 export const PRIMARY_AGENT_MODEL = DEFAULT_AGENT_MODEL;
 
 /** 한도 소진 시 자동으로 넘어갈 모델. Codex 와 다른 제공자여야 의미가 있다. */
 export const FALLBACK_AGENT_MODEL = "claude-opus-5";
 
-/** 주간 복귀 시각: 일요일(0) 21시. cron 식과 catch-up 계산이 이 상수를 공유한다. */
-export const WEEKLY_RESET_DAY = 0;
+/**
+ * 주간 복귀 시각: **수요일(3) 21시**. cron 식과 catch-up 계산이 이 상수를 공유한다.
+ *
+ * 왜 수요일인가: 이 복귀는 "Codex 주간 한도가 리셋됐으니 기본 모델로 돌아간다"는 뜻이고,
+ * 기준이 되는 것은 달력의 주 시작이 아니라 **Codex 쪽 한도 리셋 요일**이다. 처음에는 일요일로
+ * 잡았으나 실제 리셋이 수요일이라, 일요일에 복귀하면 한도가 아직 안 찬 상태로 기본 모델에
+ * 돌아가 곧바로 폴백으로 튕기는 구간이 생겼다(2026-08-01 정정).
+ *
+ * ⚠️ 요일을 다시 옮길 때는 이 상수만 바꾸면 된다 — cron 식·catch-up 계산(previousWeeklyResetAt)·
+ * 화면 라벨이 전부 여기서 파생된다. node-cron 의 요일 번호와 JS `Date.getDay()` 는 둘 다
+ * 0=일요일 체계라 같은 값을 그대로 쓸 수 있다.
+ */
+export const WEEKLY_RESET_DAY = 3;
 export const WEEKLY_RESET_HOUR = 21;
 export const WEEKLY_RESET_CRON = `0 ${WEEKLY_RESET_HOUR} * * ${WEEKLY_RESET_DAY}`;
-export const WEEKLY_RESET_LABEL = `일요일 ${String(WEEKLY_RESET_HOUR).padStart(2, "0")}:00`;
+/** 라벨도 상수에서 파생한다 — 요일명을 하드코딩하면 DAY 를 옮길 때 화면만 조용히 어긋난다. */
+const WEEKDAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"] as const;
+export const WEEKLY_RESET_LABEL =
+  `${WEEKDAY_NAMES[WEEKLY_RESET_DAY]}요일 ${String(WEEKLY_RESET_HOUR).padStart(2, "0")}:00`;
 
 /** data/model.json 의 스키마. `model` 만 있던 옛 파일도 그대로 읽힌다. */
 interface ModelState {
@@ -61,7 +75,7 @@ interface ModelState {
   /** 자동 전환 중이면 그 내역. 수동 선택·주간 복귀 시 null 로 지운다. */
   fallback: AgentModelFallbackState | null;
   /**
-   * 마지막 주간 복귀 시각(ISO). 서버가 일요일 21:00 에 꺼져 있었는지 판정하는 유일한 근거다.
+   * 마지막 주간 복귀 시각(ISO). 서버가 복귀 예정 시각에 꺼져 있었는지 판정하는 유일한 근거다.
    * null 이면 '아직 한 번도 복귀한 적 없음' 이 아니라 '기준선 미설정' 으로 보고, 즉시 되돌리는
    * 대신 지금 시각을 기준선으로 심는다 — 설치 직후 catch-up 이 사용자의 수동 선택을 덮어쓰지
    * 않게 하려는 것이다.
@@ -173,9 +187,9 @@ export function recordUsageLimitFallback(fromModel: string, reason: string): boo
 /**
  * 주간 복귀: 기본 모델로 되돌리고 복귀 시각을 남긴다.
  *
- * 사용자가 수동으로 다른 모델을 골라 뒀어도 되돌린다 — "매주 일요일 21시에 다시 기본 모델로"가
- * 이 기능의 요구사항 자체이기 때문이다. 되돌릴 게 없으면 시각만 갱신한다(그래야 catch-up 이
- * 같은 주에 재발화하지 않는다).
+ * 사용자가 수동으로 다른 모델을 골라 뒀어도 되돌린다 — "매주 한도 리셋 시각에 다시 기본
+ * 모델로"가 이 기능의 요구사항 자체이기 때문이다. 되돌릴 게 없으면 시각만 갱신한다(그래야
+ * catch-up 이 같은 주에 재발화하지 않는다).
  */
 export function restoreWeeklyPrimary(trigger: string): boolean {
   const state = readState();
@@ -196,7 +210,7 @@ export function restoreWeeklyPrimary(trigger: string): boolean {
 }
 
 /**
- * `now` 기준으로 **가장 최근에 지난** 주간 복귀 시각(일요일 21:00)을 구한다.
+ * `now` 기준으로 **가장 최근에 지난** 주간 복귀 시각(WEEKLY_RESET_DAY 요일 21:00)을 구한다.
  * catch-up 판정에만 쓰이므로 순수 함수로 분리해 테스트로 못박는다.
  */
 export function previousWeeklyResetAt(now: Date): Date {
@@ -208,7 +222,7 @@ export function previousWeeklyResetAt(now: Date): Date {
 }
 
 /**
- * 주간 복귀 catch-up: 서버가 일요일 21:00 에 꺼져 있었으면 켜진 뒤에 1회 보충한다.
+ * 주간 복귀 catch-up: 서버가 복귀 예정 시각에 꺼져 있었으면 켜진 뒤에 1회 보충한다.
  *
  * 기준선(lastWeeklyResetAt)이 없으면 **되돌리지 않고 지금 시각만 심는다.** 설치·업데이트 직후
  * 첫 기동에서 사용자의 수동 선택을 말없이 덮어쓰는 것이 이 기능의 유일한 오작동 시나리오라,
