@@ -128,7 +128,7 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 ### .env (비밀값 — 절대 커밋 금지, `.gitignore` 처리됨)
 | 키 | 필수 | 설명 |
 |---|---|---|
-| `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 선택 | 네이버 검색 API(webkr/blog). 팝업·전시 보강용, 없으면 그 보강만 건너뛴다 |
+| `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 팝업·전시에 필수 | 네이버 검색 API(webkr/blog). 팝업·전시 원본 코퍼스 = LLM 씨앗 + 링크 진실원 + 폴백. 없으면 그 탭이 빈 화면이 된다(다른 탭은 무관) |
 | `ANTHROPIC_API_KEY` | 선택 | Opus 5 큐레이션용. Codex 선택 시에는 불필요 |
 | `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`. 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |

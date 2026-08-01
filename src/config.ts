@@ -227,11 +227,15 @@ export function validateConfig(): { warnings: string[] } {
   config.stockPulseTimes.forEach((t) => parseCollectTime(t));
 
   // 네이버 키는 이제 **팝업/전시 탭 전용**이다(webkr/blog 검색). 가격 수집이 쓰던 쇼핑 검색
-  // API 는 2026-07-31 종료돼 그 경로 자체가 사라졌다. 없어도 나머지 탭은 정상이고 팝업/전시도
-  // 빈 결과로 접히므로, 기동을 막는 throw 가 아니라 경고로 알린다.
+  // API 는 2026-07-31 종료돼 그 경로 자체가 사라졌다.
+  //
+  // 기동을 막는 throw 가 아니라 경고로 알린다 — 나머지 6개 탭은 이 키 없이도 정상이라
+  // 대시보드 전체를 세울 이유가 없다. 다만 팝업/전시에는 **선택 사항이 아니다**: 이 검색으로
+  // 만드는 코퍼스가 LLM 큐레이터의 씨앗이자 환각 URL 을 거르는 링크 진실원이고 LLM 실패 시
+  // 폴백 스냅샷이라, 키가 없으면 그 탭은 사실상 빈 화면이 된다. 문구로 그 차이를 드러낸다.
   if (!config.naver.clientId || !config.naver.clientSecret) {
     warnings.push(
-      "NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정 → 팝업·전시 탭의 네이버 검색 보강을 건너뜁니다."
+      "NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정 → 팝업·전시 탭이 빈 화면이 됩니다(다른 탭은 정상)."
     );
   }
 
