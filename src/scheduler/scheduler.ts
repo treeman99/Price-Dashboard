@@ -2,8 +2,7 @@ import cron from "node-cron";
 import { parseCollectTime } from "../config.ts";
 import { getSchedule } from "./schedule-store.ts";
 import { log } from "../util/log.ts";
-import { runCollection } from "../collector/collect.ts";
-import { hasSuccessfulRun } from "../db/repo.ts";
+import { pruneOldData } from "../db/repo.ts";
 import { refreshEvents, hasTodaySnapshot } from "../events/events.ts";
 import { refreshNews, getNewsSnapshot } from "../news/news.ts";
 import { refreshYoutube, getYoutubeSnapshot, getYoutubeLastAttempt } from "../youtube/youtube.ts";
@@ -26,21 +25,17 @@ function today(): string {
   return localDate();
 }
 
-let running = false;
+/** 보존 정책 실행 시각. 어느 탭 수집과도 겹치지 않는 새벽으로 둔다. */
+const RETENTION_LABEL = "04:30";
+const RETENTION_CRON = "30 4 * * *";
 
-/** 동시 실행 방지 래퍼 */
-async function safeRun(trigger: "schedule" | "catchup") {
-  if (running) {
-    log.warn(`수집이 이미 진행 중 → ${trigger} 건너뜀`);
-    return;
-  }
-  running = true;
+/** 보존 정책 1회. DB 오류가 스케줄러를 죽이지 않게 감싼다. */
+function safePruneOldData() {
   try {
-    await runCollection({ date: today(), trigger });
+    const pruned = pruneOldData(config.historyRetentionDays);
+    if (pruned > 0) log.info(`보존 정책: 오래된 증시 시계열 ${pruned}개 삭제`);
   } catch (e) {
-    log.error(`수집 실행 오류 [${trigger}]: ${(e as Error).message}`);
-  } finally {
-    running = false;
+    log.error(`보존 정책 실행 오류: ${(e as Error).message}`);
   }
 }
 
@@ -49,19 +44,6 @@ function pastTime(hhmm: string): boolean {
   const { hour, minute } = parseCollectTime(hhmm);
   const now = new Date();
   return now.getHours() > hour || (now.getHours() === hour && now.getMinutes() >= minute);
-}
-
-/**
- * catch-up: 잠자기/재시작으로 정시를 놓쳤어도, 예정 시각이 지났고
- * 오늘 성공 수집이 없으면 1회 보충한다.
- */
-async function checkCatchup() {
-  if (running) return;
-  if (hasSuccessfulRun(today())) return;
-  if (getSchedule().price.some((t) => pastTime(t))) {
-    log.info(`오늘(${today()}) 가격 수집 누락 감지 → catch-up 실행`);
-    await safeRun("catchup");
-  }
 }
 
 // ── 팝업/전시 이벤트 스케줄 ──
@@ -423,7 +405,6 @@ function scheduleGroup(kind: string, times: string[], label: string, run: (t: st
 /** 현재 스케줄 설정으로 모든 정시 cron 을 등록(전 탭 복수 시각). */
 function registerCrons() {
   const s = getSchedule();
-  scheduleGroup("price", s.price, "가격", () => void safeRun("schedule"));
   scheduleGroup("events", s.events, "팝업/전시", () => void safeRefreshEvents("schedule", true));
   scheduleGroup("news", s.news, "뉴스 다이제스트", () => void safeRefreshNews("schedule", true));
   scheduleGroup("youtube", s.youtube, "유튜브 소식", () => void safeRefreshYoutube("schedule", true));
@@ -451,6 +432,16 @@ function registerCrons() {
     })
   );
   log.info(`스케줄러: 증시 펄스 야간 보류 묶음 발송 매일 ${flushAt}`);
+
+  // 보존 정책. 예전에는 가격 수집이 끝날 때마다 pruneOldData 를 불렀는데, 가격 탭을 제거하면서
+  // (2026-08-01) 그 유일한 호출자가 사라졌다 — 그대로 뒀다면 증시 시계열과 펄스 원장이 영원히
+  // 누적된다. 어느 탭에도 매달지 않고 독립 cron 으로 둔다(수집이 없는 새벽 시간).
+  tasks.push(
+    cron.schedule(RETENTION_CRON, () => safePruneOldData(), { name: "dp-retention" })
+  );
+  log.info(
+    `스케줄러: 보존 정책 매일 ${RETENTION_LABEL} (증시 ${config.historyRetentionDays}일 초과분 정리)`
+  );
 
   // ⚠️ 수집 모델 '주간 복귀' cron 은 없다(2026-08-01 제거). Codex 복귀를 요일에 고정하니
   // 그 시각에 맥이 꺼져 있거나 Codex 가 예정과 다르게 살아나면 어긋났다. 지금은 실행할 때마다
@@ -486,7 +477,6 @@ export function startScheduler() {
   registerCrons();
 
   // 기동 직후 1회 + 30분마다 누락 점검 (잠자기 복귀 대응)
-  void checkCatchup();
   void checkEventsCatchup();
   void checkNewsCatchup();
   void checkYoutubeCatchup();
@@ -511,7 +501,6 @@ export function startScheduler() {
     void safeFlushPulseQueue("startup");
   }
   setInterval(() => {
-    void checkCatchup();
     void checkEventsCatchup();
     void checkNewsCatchup();
     void checkYoutubeCatchup();

@@ -15,7 +15,6 @@ import { api } from "@/lib/api";
 import type { ScheduleSettings } from "@shared/types";
 
 export type ScheduleKind =
-  | "price"
   | "events"
   | "news"
   | "youtube"
@@ -24,7 +23,6 @@ export type ScheduleKind =
   | "stockPulse";
 
 const KIND_LABEL: Record<ScheduleKind, string> = {
-  price: "가격",
   events: "팝업·전시",
   news: "뉴스",
   youtube: "유튜브",
@@ -41,8 +39,6 @@ const HHMM = /^\d{2}:\d{2}$/;
 /** kind 별 patch 구성(타입 안전). */
 function patchFor(kind: ScheduleKind, times: string[]): Partial<ScheduleSettings> {
   switch (kind) {
-    case "price":
-      return { price: times };
     case "events":
       return { events: times };
     case "news":

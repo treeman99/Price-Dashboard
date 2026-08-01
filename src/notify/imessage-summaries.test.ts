@@ -1,34 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { priceIMessageText } from "./email.ts";
 import { eventsIMessageText, sendEventsIMessage } from "./events-email.ts";
 import { youtubeIMessageText, sendYoutubeIMessage } from "./youtube-email.ts";
 import { newsIMessageText, sendNewsIMessage } from "./news-email.ts";
 import type {
-  ProductSummary,
   EventsSnapshot,
   YoutubeSnapshot,
   NewsSnapshot,
 } from "../../shared/types.ts";
-
-test("priceIMessageText: 상품별 최저가 + 변동(▼/▲) 표기", () => {
-  const summaries = [
-    {
-      product: { id: 1, name: "맥북 프로 14" },
-      latest: { overallLowest: 1_144_000 },
-      change: { direction: "down", amount: 2000, percent: 0.2 },
-    },
-    {
-      product: { id: 2, name: "드론" },
-      latest: { overallLowest: 895_000 },
-      change: { direction: "flat", amount: null, percent: null },
-    },
-  ] as unknown as ProductSummary[];
-  const t = priceIMessageText(summaries, "2026-07-17");
-  assert.match(t, /관심 물건 최저가 — 2026-07-17/);
-  assert.match(t, /맥북 프로 14: 1,144,000원 ▼2,000원 0\.2%/);
-  assert.match(t, /드론: 895,000원$/m); // 변동없음 → 화살표 없음
-});
 
 test("eventsIMessageText: 카운트 + 신규 강조 + 팝업 이름", () => {
   const s = {

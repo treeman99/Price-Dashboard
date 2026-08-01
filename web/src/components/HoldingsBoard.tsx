@@ -14,7 +14,7 @@ const MARKETS: StockMarket[] = ["kr", "us"];
 
 /**
  * ⚠️ 등락·손익 색은 **한국 증시 관례**다: 상승=빨강, 하락=파랑.
- * 가격 대시보드(하락=좋음=초록)와 규칙이 정반대이므로 절대 섞지 말 것
+ * 쇼핑 관점(하락=좋음=초록)과 규칙이 정반대이므로 절대 섞지 말 것
  * (src/notify/stock-email.ts 상단 주석과 같은 경고다).
  */
 function toneClass(pct: number | null): string {

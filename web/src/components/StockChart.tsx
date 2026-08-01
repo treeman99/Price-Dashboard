@@ -11,7 +11,7 @@ import type { StockPoint } from "@shared/types";
 import { formatPrice, changeTone } from "@shared/stock";
 
 /**
- * 축 눈금 표기. PriceChart 의 formatMan(만원)은 주가에 못 쓴다 —
+ * 축 눈금 표기. 만원 단위 축약은 주가에 못 쓴다 —
  * 애플 $295 를 만원 단위로 나누면 "0만"이 되어 눈금이 전부 뭉갠다.
  * KRW 는 천단위 구분만(원 표시는 눈금에서 생략해 폭을 아낀다), USD 는 $ + 소수 2자리.
  */

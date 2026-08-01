@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "맥북 로컬 가격 추적 대시보드 (Cowork daily-price 로컬 이전)",
+  "description": "맥북 로컬 데일리 대시보드 (팝업·전시 / 뉴스 / 유튜브 / 증시 / 보유주식 / 로또)",
   "engines": {
     "node": ">=18"
   },
@@ -11,8 +11,6 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "import": "tsx src/cli.ts import",
-    "collect": "tsx src/cli.ts collect",
     "web:dev": "npm --prefix web run dev",
     "web:build": "npm --prefix web run build",
     "build": "npm run web:build",

@@ -1,10 +1,4 @@
 import type {
-  ProductSummary,
-  ProductHistory,
-  CreateProductInput,
-  UpdateProductInput,
-  CollectResult,
-  PeriodDays,
   EventsSnapshot,
   NewsSnapshot,
   NewsCategoryDef,
@@ -13,9 +7,6 @@ import type {
   BlockedChannel,
   WatchedVideo,
   DismissedVideo,
-  ProductSource,
-  UpsertProductSourceInput,
-  ResolveResult,
   ScheduleSettings,
   AgentModelSettings,
   StockMarket,
@@ -38,29 +29,7 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export interface AppConfig {
-  port: number;
-  collectTime: string;
-  notify: { email: boolean };
-  warnings: string[];
-}
-
-/** 가격 수집 진행 상태. 전체 수집(전역)과 단일 상품 즉시수집(상품별)을 분리해 본다. */
-export interface CollectStatus {
-  collecting: boolean;
-  productIds: number[];
-}
-
 export const api = {
-  config: () => fetch("/api/config").then((r) => j<AppConfig>(r)),
-
-  products: () => fetch("/api/products").then((r) => j<ProductSummary[]>(r)),
-
-  history: (id: number, days: PeriodDays) =>
-    fetch(`/api/products/${id}/history?days=${days}`).then((r) => j<ProductHistory>(r)),
-
-  runToday: () => fetch("/api/runs/today").then((r) => j<CollectResult | null>(r)),
-
   /** 탭별 자동 수집 시각(스케줄) 조회. */
   schedule: () => fetch("/api/schedule").then((r) => j<ScheduleSettings>(r)),
 
@@ -82,89 +51,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model }),
     }).then((r) => j<AgentModelSettings>(r)),
-
-  /**
-   * 상품 추가. 1차 수집은 서버가 백그라운드로 시작하므로 곧바로(201) 돌아온다 —
-   * collecting:true 는 "이 상품은 지금 수집 중"이라는 뜻이고, 진행 상황은 collectStatus() 폴링으로 본다.
-   */
-  addProduct: (input: CreateProductInput) =>
-    fetch("/api/products", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    }).then((r) => j<ProductSummary & { collecting: boolean }>(r)),
-
-  /** 상품 정보 수정(검색어/포함·제외 규칙/최소가). 부분 수정 가능. 수정된 요약 반환. */
-  updateProduct: (id: number, patch: UpdateProductInput) =>
-    fetch(`/api/products/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    }).then((r) => j<ProductSummary>(r)),
-
-  /**
-   * 단일 상품만 재수집(매칭 규칙 수정 후 오늘 가격 정정)을 백그라운드로 시작(202)하고 즉시 반환.
-   * 이 상품이 이미 수집 중이면 409 → { busy: true }(중복 수집이 아니므로 오류가 아니다).
-   * 완료 여부는 collectStatus().productIds 폴링으로 확인한다.
-   */
-  collectProduct: async (id: number): Promise<{ started: boolean; busy: boolean }> => {
-    const res = await fetch(`/api/products/${id}/collect`, { method: "POST" });
-    if (res.status === 409) return { started: false, busy: true };
-    await j<{ started: boolean }>(res); // 202; 비정상(4xx/5xx)이면 throw
-    return { started: true, busy: false };
-  },
-
-  /** 영구 삭제(가격 이력 포함). 오삭제 방지로 상품명을 confirm 으로 전달. */
-  deleteProduct: (id: number, name: string) =>
-    fetch(`/api/products/${id}?confirm=${encodeURIComponent(name)}`, {
-      method: "DELETE",
-    }).then((r) => j(r)),
-
-  /** 대시보드 카드 표시 순서 변경(전체 상품 id 순서 전달). 재정렬된 요약 목록 반환. */
-  reorderProducts: (ids: number[]) =>
-    fetch("/api/products/order", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    }).then((r) => j<ProductSummary[]>(r)),
-
-  /**
-   * 전체 수집을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
-   * 완료 여부는 collectStatus() 폴링으로 확인한다.
-   */
-  collectNow: async (): Promise<{ started: boolean; busy: boolean }> => {
-    const res = await fetch("/api/collect", { method: "POST" });
-    if (res.status === 409) return { started: false, busy: true };
-    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
-    return { started: true, busy: false };
-  },
-
-  /** collecting=전체 수집 진행 중(전역 배너), productIds=즉시수집 진행 중인 상품(카드별 배지). */
-  collectStatus: () =>
-    fetch("/api/collect/status").then((r) => j<CollectStatus>(r)),
-
-  // ── 상품 × 소스 ref (pcode 확정) ──
-  listSources: (id: number) =>
-    fetch(`/api/products/${id}/sources`).then((r) => j<ProductSource[]>(r)),
-
-  /** pcode 확정/수정 (멱등). productId 는 경로에서 채워지므로 본문에서 생략. */
-  upsertSource: (id: number, input: Omit<UpsertProductSourceInput, "productId">) =>
-    fetch(`/api/products/${id}/sources`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    }).then((r) => j<ProductSource>(r)),
-
-  deleteSource: (id: number, source: string) =>
-    fetch(`/api/products/${id}/sources/${encodeURIComponent(source)}`, {
-      method: "DELETE",
-    }).then((r) => j<{ ok: boolean }>(r)),
-
-  /** resolve 프록시: 사람이 고를 pcode 후보 목록. 실패/차단 시 candidates:[] + note. */
-  resolveSource: (id: number, source = "danawa") =>
-    fetch(`/api/products/${id}/resolve?source=${encodeURIComponent(source)}`).then((r) =>
-      j<ResolveResult>(r)
-    ),
 
   serviceStatus: () =>
     fetch("/api/service/status").then((r) => j<{ installed: boolean; label: string }>(r)),

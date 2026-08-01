@@ -2,14 +2,18 @@
 
 맥북 로컬에서 매일 정보를 자동 수집해 **localhost 대시보드(탭형 게시판)**로 보여주는 서비스.
 
+> **가격 대시보드 탭은 2026-08-01 제거됐다.** 네이버 개발자센터의 검색 **쇼핑** API 가
+> 2026-07-31 부로 영구 종료(유예 기간 없음, 기존 키도 차단, 대체 API 미제공)되어 판매처별
+> 가격 리스팅을 얻을 정식 경로가 사라졌다. 남은 수단은 robots·이용약관이 금지하는 크롤링뿐이라
+> 기능을 접었다. 과거 가격 이력은 DB(`price_points`/`listings`/`reviews`)에 그대로 보존돼 있다.
+
 탭 구성:
-1. **가격 대시보드** — 관심 물건 최저가 추적(네이버 쇼핑 API + 웹리서치 + 모델 매칭/필터링). 매일 09:00 수집, 시계열 저장.
-2. **팝업·전시** — 팝업스토어 + 서울/경기 전시·박람회(코엑스·세텍·킨텍스·수원컨벤션센터). 매일 10:00 갱신, **이력 저장 없이 최신 스냅샷만** 캐시.
-3. **뉴스** — 카테고리별 데일리 다이제스트. 하루 2회(08:00·17:00).
-4. **유튜브 소식** — 채널·주제별 신규 영상 큐레이션.
-5. **증시** — 한국장(08:00 개장 전 프리뷰)·미국장(18:00) 브리핑. 지수·뉴스·등록 종목 분석 + **내 포지션 점검**.
-6. **보유 주식** — 실제 보유 포지션(수량·평단가·목표가·손절가·투자기간·메모). 등록하면 관심 종목에 자동 포함되고, **시간당 실시간 취합(펄스)**의 영향도 판정 대상이 된다.
-7. **로또** — 매주 일요일 10:00 자동으로 새 추첨 결과를 받아 **지난주에 미리 확정해 둔 추천 번호**를 채점하고, 그 결과로 전략을 갱신한 뒤 다음 회차 번호를 뽑는다. 화면은 다음 회차 예상 번호 + 지난 10회차 비교 결과뿐이다.
+1. **팝업·전시** — 팝업스토어 + 서울/경기 전시·박람회(코엑스·세텍·킨텍스·수원컨벤션센터). 매일 10:00 갱신, **이력 저장 없이 최신 스냅샷만** 캐시.
+2. **뉴스** — 카테고리별 데일리 다이제스트. 하루 2회(08:00·17:00).
+3. **유튜브 소식** — 채널·주제별 신규 영상 큐레이션.
+4. **증시** — 한국장(08:00 개장 전 프리뷰)·미국장(18:00) 브리핑. 지수·뉴스·등록 종목 분석 + **내 포지션 점검**.
+5. **보유 주식** — 실제 보유 포지션(수량·평단가·목표가·손절가·투자기간·메모). 등록하면 관심 종목에 자동 포함되고, **시간당 실시간 취합(펄스)**의 영향도 판정 대상이 된다.
+6. **로또** — 매주 일요일 10:00 자동으로 새 추첨 결과를 받아 **지난주에 미리 확정해 둔 추천 번호**를 채점하고, 그 결과로 전략을 갱신한 뒤 다음 회차 번호를 뽑는다. 화면은 다음 회차 예상 번호 + 지난 10회차 비교 결과뿐이다.
 
 새 게시판은 `web/src/App.tsx`의 `TABS` 배열에 항목을 추가해 확장한다.
 
@@ -77,10 +81,9 @@
 ⚠️ 천장과 최적 구조는 **에이전트 프롬프트에 넣지 않는다.** 답을 알려주면 실험이 아니라 받아쓰기가 된다(테스트로 못박음). 2026-07-30 전환으로 이 값들을 그리던 차트가 없어졌으므로, 지금 이 표가 그 지식이 남아 있는 유일한 곳이다.
 
 ## 구성
-- **collector/** 네이버 쇼핑 API(결정적) + 가격비교 소스 폴백(다나와 → 에누리 → AI 웹리서치) + 필터링 + 멱등 저장
-- **importer/** 기존 `price_history.json` → SQLite 1회 멱등 임포트
-- **scheduler/** in-process 정시 수집 + 잠자기/재시작 누락 catch-up
-- **api/** 상품 CRUD · 히스토리/기간필터 · "지금 수집" · 프론트 정적 서빙
+- **events/ news/ youtube/ stock/ lotto/** 탭별 수집·큐레이션
+- **scheduler/** in-process 정시 수집 + 잠자기/재시작 누락 catch-up + 보존 정책(매일 04:30)
+- **api/** 탭별 조회·갱신 엔드포인트 · 프론트 정적 서빙
 - **web/** React+TS+Vite+shadcn+Tailwind+recharts 대시보드
 - **service/** launchd 등록/제거 스크립트
 
@@ -88,8 +91,8 @@
 
 ## 사전 요구사항
 - **macOS** (launchd 서비스 등록 기준) / **Node.js 18 이상** (`node -v`로 확인, 권장 20+)
-- 네이버 개발자센터 검색 API 키 (필수) — https://developers.naver.com/
-- (선택) Anthropic Console API 키 — 웹리서치(비교가/리뷰)용
+- (선택) 네이버 개발자센터 검색 API 키 — 팝업·전시 탭의 webkr/blog 보강용. https://developers.naver.com/
+- (선택) Anthropic Console API 키 — Opus 5 큐레이션용
 - Codex CLI + ChatGPT 로그인 — **기본 모델(Codex 5.6 Sol)** 이 정액제 크레딧을 쓴다
 - (선택) Python 3 — 팝업/전시 날짜 검증(insane-engine)용. `bash tools/insane-engine/setup.sh` 1회 실행
 - 별도 DB 설치 불필요 (Node 내장 SQLite 사용)
@@ -97,11 +100,10 @@
 ## 빠른 시작 (TL;DR)
 ```bash
 npm install && npm install --prefix web   # 1) 의존성 설치
-cp .env.example .env                       # 2) .env 에 네이버 키 입력
+cp .env.example .env                       # 2) .env 에 키 입력
 bash tools/insane-engine/setup.sh          # 2-1) (선택) 날짜 검증 엔진 venv 준비
-npm run import                             # 3) 기존 이력 임포트(최초 1회)
-npm run web:build                          # 4) 프론트 빌드
-npm start                                  # 5) http://localhost:7777 접속
+npm run web:build                          # 3) 프론트 빌드
+npm start                                  # 4) http://localhost:7777 접속
 ```
 
 ## npm 스크립트 한눈에 보기
@@ -109,13 +111,11 @@ npm start                                  # 5) http://localhost:7777 접속
 |---|---|
 | `npm install` | 백엔드 의존성 설치 |
 | `npm install --prefix web` | 프론트(web) 의존성 설치 |
-| `npm run import` | `price_history.json` → SQLite 임포트(멱등) |
 | `npm run web:build` | **프론트 빌드** → `web/dist` 생성 (서버가 이걸 서빙) |
 | `npm run build` | `web:build` 별칭 |
 | `npm start` | 백엔드+스케줄러 기동 (프론트 dist 정적 서빙) |
 | `npm run dev` | 백엔드 watch 모드 |
 | `npm run web:dev` | 프론트 Vite dev 서버(핫리로드) |
-| `npm run collect` | 지금 즉시 전체 수집(CLI) |
 | `npm run typecheck` | 백엔드 타입체크 |
 
 ## 1. 설치
@@ -128,11 +128,10 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 ### .env (비밀값 — 절대 커밋 금지, `.gitignore` 처리됨)
 | 키 | 필수 | 설명 |
 |---|---|---|
-| `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | ✅ | 네이버 쇼핑 검색 API. 없으면 수집 fail-fast |
-| `ANTHROPIC_API_KEY` | 선택 | Opus 5 가격 웹리서치용. Codex 선택 시에는 불필요 |
+| `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 선택 | 네이버 검색 API(webkr/blog). 팝업·전시 보강용, 없으면 그 보강만 건너뛴다 |
+| `ANTHROPIC_API_KEY` | 선택 | Opus 5 큐레이션용. Codex 선택 시에는 불필요 |
 | `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`. 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
-| `COLLECT_TIME` | 기본 09:00 | 매일 가격 수집 시각(로컬) |
 | `EVENTS_COLLECT_TIME` | 기본 10:00 | 매일 팝업/전시 갱신 시각(로컬) |
 | `NOTIFY_EMAIL` / `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | 선택 | 이메일 리포트 알림 |
 
@@ -156,12 +155,7 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 > PlayMCP가 연결된 claude.ai/Claude Code 측 스케줄 에이전트가 대시보드(`/api/runs/today`)를 읽어
 > 메모를 보내는 방식으로 구성해야 한다. (대시보드가 1차 출력, 알림은 부가)
 
-## 2. 기존 데이터 임포트 (최초 1회, 멱등)
-```bash
-npm run import         # price_history.json → SQLite (없으면 폴백 시드 8종)
-```
-
-## 3. 빌드 & 실행
+## 2. 빌드 & 실행
 
 ### A. 프로덕션 (권장 — 단일 서버가 API + 대시보드 모두 서빙)
 ```bash
@@ -179,15 +173,14 @@ npm run web:dev        # 터미널2: 프론트 dev 서버(5173) — /api 는 777
 ```
 → 브라우저에서 **http://localhost:5173** 접속.
 
-### 포트/수집 시각 바꾸기
+### 포트 바꾸기
 `.env`에서 변경 후 재시작:
 ```bash
 PORT=8080
-COLLECT_TIME=08:00     # HH:mm (24시간, 로컬 시각)
 ```
 
-## 4. 상시 서비스 등록 (launchd)
-로그인 시 자동 기동 + 상시 유지 + 매일 `COLLECT_TIME` 자동 수집:
+## 3. 상시 서비스 등록 (launchd)
+로그인 시 자동 기동 + 상시 유지 + 탭별 정시 자동 수집:
 ```bash
 ./service/install.sh   # plist 생성·로드 (프론트 미빌드 시 자동 빌드)
 ./service/uninstall.sh # 제거 (DB/로그는 보존)
@@ -196,36 +189,15 @@ COLLECT_TIME=08:00     # HH:mm (24시간, 로컬 시각)
 
 ## 수동 조작
 ```bash
-npm run collect                 # 지금 즉시 전체 수집 (CLI)
-curl -X POST localhost:7777/api/collect   # 지금 수집 (API) — 대시보드 "지금 수집" 버튼과 동일
-
-# 다나와/에누리 ref(pcode·modelno) 조사·확정
-npx tsx src/cli.ts link                    # 조사만 (DB 변경 없음) — 어느 상품이 연결되는지 리포트
-npx tsx src/cli.ts link --apply            # 검증 통과한 후보를 확정 저장
-npx tsx src/cli.ts link --apply --product=15   # 특정 상품만
+curl -X POST localhost:7777/api/events/refresh   # 팝업/전시 지금 갱신
+curl -X POST localhost:7777/api/news/refresh     # 뉴스 지금 갱신
+curl -X POST localhost:7777/api/youtube/refresh  # 유튜브 지금 갱신
+npx tsx src/cli.ts config                        # 현재 설정·경고 확인
 ```
-
-### 종합 최저가는 어떻게 정해지나
-`종합 최저가 = min(네이버 최저가, 확정된 가격비교 소스의 전체최저가)` 이고, **그 금액이 적힌
-페이지 링크(`lowest_url`)를 값과 한 쌍으로** 저장한다. 네이버가 최저면 네이버 Top1 리스팅,
-다나와/에누리가 최저면 그 소스가 조회한 페이지로 연결된다.
-
-가격 소스는 **네이버 + 확정된 다나와/에누리 스크래핑뿐**이다. LLM 웹검색은 리뷰 전용이며
-가격을 내지 않는다 — 2026-07-29 라이브 실측에서 LLM 이 보고한 최저가가 자기가 준 비교
-페이지의 실제 최저가와 일치한 건 10건 중 2건뿐이었고, 나머지는 카드할인·적립 반영가라
-화면 금액과 링크 착지 금액이 어긋났다. `product_sources` 에 확정된 ref 가 없는 상품은
-네이버 단독으로 수집한다(`npx tsx src/cli.ts link` 로 연결 가능 여부를 확인).
 
 ## 주요 API
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/api/products` | 활성 상품 요약(카드). `?all=1` 비활성 포함 |
-| GET | `/api/products/:id/history?days=7\|30\|90` | 기간별 추이 |
-| POST | `/api/products` | 상품 추가 + 즉시 1차 수집 |
-| DELETE | `/api/products/:id` | 추적 중지(soft). `?hard=1&confirm=<상품명>` 영구 삭제 |
-| POST | `/api/products/:id/reactivate` | 추적 재개 |
-| POST | `/api/collect` | 지금 수집(가격) |
-| GET | `/api/runs/today` | 오늘 가격 수집 상태 |
 | GET | `/api/events` | 최신 팝업/전시 스냅샷 |
 | POST | `/api/events/refresh` | 팝업/전시 지금 갱신 |
 | GET | `/api/stock/:market` | 최신 증시 브리핑 스냅샷 (kr\|us) |
@@ -240,20 +212,19 @@ npx tsx src/cli.ts link --apply --product=15   # 특정 상품만
 | POST | `/api/lotto/cycle` | 주간 사이클 수동 실행 (**운영·검증용**, 화면에 버튼 없음. 응답 즉시) |
 
 ## 동작 메모
-- **멱등성**: `(product_id, date)` UNIQUE → 같은 날 재수집은 덮어쓰기. 알림은 하루 1회.
 - **catch-up**: 기동 직후 + 30분마다 점검, 예정 시각이 지났고 오늘 성공 수집이 없으면 1회 보충.
+- **보존 정책**: 매일 04:30 에 `HISTORY_RETENTION_DAYS` 초과 증시 시계열·펄스 원장을 정리한다.
+  (예전에는 가격 수집이 끝날 때 돌았고, 가격 탭 제거 후 독립 cron 으로 옮겼다.
+  보존 아카이브가 된 가격 표는 정리 대상에서 뺐다.)
 - **날짜**: 모든 "오늘" 판정은 로컬(KST) 기준.
-- **DoD**: 백엔드/프론트 타입체크 통과 · 로컬 동작 · 임포트 멱등/수집/스케줄/CRUD E2E 검증 완료.
+- **DoD**: 백엔드/프론트 타입체크 통과 · 로컬 동작 · 최소 테스트.
 
 ## 트러블슈팅
 | 증상 | 원인 / 해결 |
 |---|---|
-| 기동 시 `NAVER_CLIENT_ID ... 없습니다` 오류 | `.env`에 네이버 키 미입력 → 키 입력 후 재시작 |
 | 대시보드에 "프론트가 아직 빌드되지 않았습니다" | `npm run web:build` 실행 후 새로고침 |
-| Opus 선택 시 카드에 비교가/리뷰가 안 보임 | `ANTHROPIC_API_KEY` 미설정 → 네이버 결과만 표시. 키를 넣거나 Codex를 선택 |
 | 모델 버튼에 "→ Opus 5 임시 대체" 배지 | Codex를 지금 못 쓰는 상태(로그인 초기화 / 정액제 한도 소진). 배지 안에 사유·시작 시각이 있다. 선택은 Codex 그대로이고, 다음 수집에서 Codex가 응답하면 저절로 풀린다. 로그인이 원인이면 `codex login` 후 다음 수집을 기다리거나 "지금 갱신"을 누르면 된다 |
 | Codex 수집이 로그인 오류로 실패 | `codex login` 실행 후 `codex login status`가 `Logged in using ChatGPT`인지 확인. API 키 로그인은 의도적으로 거부. 로그인이 풀린 동안에도 수집은 Opus 5로 대체 실행되므로 결과가 비지는 않는다 |
-| 특정 상품 후보 0개(최저가 "-") | 모델 매칭이 엄격하거나 시장 매물 없음 → 상품의 포함/제외/최소가 조정 |
 | `ExperimentalWarning: SQLite ...` | Node 내장 SQLite 경고(무해). 서비스는 `NODE_NO_WARNINGS=1`로 숨김 |
 | 포트 충돌 | `.env`의 `PORT` 변경 후 재시작 |
 | launchd 서비스 상태 확인 | `launchctl print gui/$(id -u)/com.daegun.dailyprice \| head` / 로그: `logs/stderr.log` |

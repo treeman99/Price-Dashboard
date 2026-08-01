@@ -36,7 +36,6 @@ function pulseThreshold(v: string | undefined): "urgent" | "important" | "info" 
 
 export interface AppConfig {
   port: number;
-  collectTime: string; // HH:mm (가격 수집)
   eventsCollectTime: string; // HH:mm (팝업/전시 수집)
   newsCollectTimes: string[]; // HH:mm[] (뉴스 다이제스트 수집, 복수 시간 지원)
   youtubeCollectTimes: string[]; // HH:mm[] (유튜브 소식 수집, 복수 시간 지원)
@@ -117,7 +116,6 @@ export interface AppConfig {
 
 export const config: AppConfig = {
   port: int(process.env.PORT, 7777),
-  collectTime: process.env.COLLECT_TIME?.trim() || "09:00",
   eventsCollectTime: process.env.EVENTS_COLLECT_TIME?.trim() || "10:00",
   newsCollectTimes: parseCollectTimes(
     process.env.NEWS_COLLECT_TIMES?.trim() || "08:00,17:00",
@@ -217,13 +215,10 @@ function parseCollectTimes(s: string, label: string): string[] {
  * - 수집에 반드시 필요한 값(네이버)이 없으면 throw (fail-fast).
  * - 선택 기능(에이전트, 알림) 미설정은 경고 목록으로만 반환.
  */
-export function validateConfig(opts: { forCollect?: boolean } = {}): {
-  warnings: string[];
-} {
+export function validateConfig(): { warnings: string[] } {
   const warnings: string[] = [];
 
   // 수집 시각 형식 검증
-  parseCollectTime(config.collectTime);
   parseCollectTime(config.eventsCollectTime);
   config.newsCollectTimes.forEach((t) => parseCollectTime(t));
   config.youtubeCollectTimes.forEach((t) => parseCollectTime(t));
@@ -231,18 +226,13 @@ export function validateConfig(opts: { forCollect?: boolean } = {}): {
   config.stockUsCollectTimes.forEach((t) => parseCollectTime(t));
   config.stockPulseTimes.forEach((t) => parseCollectTime(t));
 
-  if (opts.forCollect) {
-    if (!config.naver.clientId || !config.naver.clientSecret) {
-      throw new Error(
-        "[설정 오류] NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 가 .env 에 없습니다. " +
-          "네이버 쇼핑 API 없이는 1차 가격 수집이 불가능합니다."
-      );
-    }
-    if (!config.anthropicApiKey) {
-      warnings.push(
-        "ANTHROPIC_API_KEY 미설정 → Opus 5 선택 시 가격 웹리서치는 건너뜁니다. Codex 선택에는 이 키가 필요 없습니다."
-      );
-    }
+  // 네이버 키는 이제 **팝업/전시 탭 전용**이다(webkr/blog 검색). 가격 수집이 쓰던 쇼핑 검색
+  // API 는 2026-07-31 종료돼 그 경로 자체가 사라졌다. 없어도 나머지 탭은 정상이고 팝업/전시도
+  // 빈 결과로 접히므로, 기동을 막는 throw 가 아니라 경고로 알린다.
+  if (!config.naver.clientId || !config.naver.clientSecret) {
+    warnings.push(
+      "NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정 → 팝업·전시 탭의 네이버 검색 보강을 건너뜁니다."
+    );
   }
 
   if (config.notify.email) {

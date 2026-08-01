@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { PricePoint } from "../../shared/types.ts";
-import { renderLineChartPng, renderPriceChartPng } from "./chart.ts";
+import { renderLineChartPng } from "./chart.ts";
 
 // 차트 생성 실패는 email.ts 가 warn 만 하고 메일을 그대로 보내므로
 // 회귀가 나도 아무도 모른다. 경계 입력에서 throw 없이 PNG 가 나오는지를 고정한다.
@@ -15,63 +14,6 @@ function assertPng(buf: Buffer) {
 }
 
 /** naver = 네이버 최저가, compare = 가격비교 소스 최저가. 종합 최저가는 둘 중 최저. */
-function point(date: string, naver: number | null, compare: number | null): PricePoint {
-  const vals = [naver, compare].filter((v): v is number => v != null);
-  const lowest = vals.length ? Math.min(...vals) : null;
-  return {
-    date,
-    naverLowest: naver,
-    danawaLowest: compare,
-    avgPrice: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null,
-    overallLowest: lowest,
-    lowestSource: lowest == null ? "" : lowest === naver ? "naver" : "danawa",
-  };
-}
-
-test("renderPriceChartPng: 빈 배열이어도 PNG", () => {
-  assertPng(renderPriceChartPng([], "빈 데이터"));
-});
-
-test("renderPriceChartPng: 전부 null 이어도 PNG", () => {
-  const points = [point("2026-07-01", null, null), point("2026-07-02", null, null)];
-  assertPng(renderPriceChartPng(points, "전부 null"));
-});
-
-test("renderPriceChartPng: 단일 포인트 (n===1 로 xAt 분모 0 위험)", () => {
-  assertPng(renderPriceChartPng([point("2026-07-01", 1_990_000, null)], "단일"));
-});
-
-test("renderPriceChartPng: min===max 평탄 (range 0 나눗셈 위험)", () => {
-  const points = [
-    point("2026-07-01", 1_500_000, 1_500_000),
-    point("2026-07-02", 1_500_000, 1_500_000),
-  ];
-  assertPng(renderPriceChartPng(points, "평탄"));
-});
-
-test("renderPriceChartPng: 정상 다중 시리즈", () => {
-  const points = [
-    point("2026-07-01", 1_990_000, 2_050_000),
-    point("2026-07-02", 1_950_000, 2_010_000),
-    point("2026-07-03", 1_880_000, 1_990_000),
-  ];
-  assertPng(renderPriceChartPng(points, "맥북 가격 추이 (최근 30일)"));
-});
-
-test("renderPriceChartPng: 중간 구간 null 이 섞여도 PNG", () => {
-  const points = [
-    point("2026-07-01", 1_990_000, 2_050_000),
-    point("2026-07-02", null, null),
-    point("2026-07-03", 1_880_000, null),
-  ];
-  assertPng(renderPriceChartPng(points, "결측 혼재"));
-});
-
-test("renderPriceChartPng: 네이버가 전 구간 null 이어도(종합 최저가만) PNG", () => {
-  const points = [point("2026-07-01", null, 2_050_000), point("2026-07-02", null, 1_990_000)];
-  assertPng(renderPriceChartPng(points, "종합 최저가 단독"));
-});
-
 // ── renderLineChartPng (일반화된 진입점) ──
 
 test("renderLineChartPng: labels 가 비면 안내 텍스트 PNG", () => {

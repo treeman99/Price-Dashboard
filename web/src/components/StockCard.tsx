@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * 등락 배지 — 한국 증시 관례(상승 빨강 / 하락 파랑 / 보합 회색).
- * ⚠️ 가격 탭 ProductCard 의 배색(하락 초록)을 그대로 가져오면 안 된다. 저긴 쇼핑 관점이다.
+ * ⚠️ 쇼핑 관점의 배색(하락=싸짐=초록)을 그대로 가져오면 안 된다. 증시는 한국 관례를 따른다.
  */
 function ChangeBadge({ pct }: { pct: number | null }) {
   const tone = changeTone(pct);
@@ -75,7 +75,7 @@ export function StockCard({
   const [history, setHistory] = useState<StockPoint[] | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // 등록 종목은 ProductCard 관례대로 차트 데이터를 따로 불러온다.
+  // 등록 종목은 카드가 열릴 때 차트 데이터를 따로 불러온다.
   // 실패하거나 비면 스냅샷에 실려온 history 로 폴백 — 차트가 통째로 비는 것보다 낫다.
   useEffect(() => {
     if (!ticker) return;

@@ -3,7 +3,6 @@ import { Loader2, PowerOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Dashboard } from "@/components/Dashboard";
 import { EventsBoard } from "@/components/EventsBoard";
 import { NewsBoard } from "@/components/NewsBoard";
 import { YoutubeBoard } from "@/components/YoutubeBoard";
@@ -22,8 +21,12 @@ interface TabDef {
 }
 
 // 새 게시판은 여기에 항목만 추가하면 탭이 늘어난다. color는 탭 고유색.
+//
+// ⚠️ 가격 대시보드 탭은 2026-08-01 제거했다. 네이버 쇼핑 검색 API 가 2026-07-31 부로
+// 영구 종료(유예·대체 API 없음)되어 판매처별 가격 리스팅을 얻을 정식 경로가 사라졌고,
+// 남은 경로는 robots·약관이 금지하는 크롤링뿐이라 기능을 접었다. 과거 가격 이력은
+// DB(price_points/listings)에 그대로 보존돼 있다.
 const TABS: TabDef[] = [
-  { id: "price", label: "가격 대시보드", color: "#2563eb", content: <Dashboard /> },
   { id: "events", label: "팝업·전시", color: "#db2777", content: <EventsBoard /> },
   { id: "news", label: "뉴스", color: "#d97706", content: <NewsBoard /> },
   { id: "youtube", label: "유튜브 소식", color: "#dc2626", content: <YoutubeBoard /> },

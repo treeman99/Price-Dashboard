@@ -14,7 +14,6 @@ const STORE_PATH = path.join(path.dirname(config.dbPath), "schedule.json");
  */
 function defaults(): ScheduleSettings {
   return {
-    price: normalizeList([config.collectTime]),
     events: normalizeList([config.eventsCollectTime]),
     news: normalizeList(config.newsCollectTimes),
     youtube: normalizeList(config.youtubeCollectTimes),
@@ -87,7 +86,6 @@ export function getSchedule(): ScheduleSettings {
   const def = defaults();
   const raw = readStored();
   return {
-    price: lenientMulti(raw.price, def.price),
     events: lenientMulti(raw.events, def.events),
     news: lenientMulti(raw.news, def.news),
     youtube: lenientMulti(raw.youtube, def.youtube),
@@ -105,7 +103,6 @@ export function getSchedule(): ScheduleSettings {
 export function saveSchedule(patch: Partial<ScheduleSettings>): ScheduleSettings {
   const stored = readStored();
 
-  if (patch.price !== undefined) stored.price = strictMulti(patch.price, "price");
   if (patch.events !== undefined) stored.events = strictMulti(patch.events, "events");
   if (patch.news !== undefined) stored.news = strictMulti(patch.news, "news");
   if (patch.youtube !== undefined) stored.youtube = strictMulti(patch.youtube, "youtube");
