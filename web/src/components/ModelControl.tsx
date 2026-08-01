@@ -13,7 +13,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { AgentModelSettings } from "@shared/types";
 
-/** ISO → "7/27 20:31". 자동 전환 시각은 '언제부터 한도였나'만 알면 되므로 초는 버린다. */
+/** ISO → "7/27 20:31". 대체 시작 시각은 '언제부터 못 쓰나'만 알면 되므로 초는 버린다. */
 function shortTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -27,8 +27,9 @@ function shortTime(iso: string): string {
  * 가격·뉴스·유튜브·팝업/전시·증시 등 모든 자동 수집·큐레이션에 공통 적용되며,
  * 변경은 다음 수집부터 반영된다(서버 재시작 불필요).
  *
- * 한도 소진 자동 전환은 사용자가 고르지 않은 변경이므로, 왜 바뀌었고 언제 되돌아오는지
- * 화면에 남긴다 — 그러지 않으면 "내가 고른 모델이 아닌데?"만 남는다.
+ * 선택은 그대로 두고 **실행할 때만** 대체 모델로 도는 구간이 있으므로(Codex 로그인 초기화·
+ * 한도 소진), 지금 무엇이 실제로 돌고 있고 왜 그런지를 화면에 남긴다 — 그러지 않으면
+ * "고른 대로 도는 줄 알았는데?"가 된다.
  */
 export function ModelControl() {
   const [settings, setSettings] = useState<AgentModelSettings | null>(null);
@@ -53,6 +54,11 @@ export function ModelControl() {
   const fallback = settings?.fallback ?? null;
   const fromLabel =
     settings?.options.find((o) => o.id === fallback?.from)?.label ?? fallback?.from ?? "";
+  /** 대체 중 실제로 실행되는 모델. 선택(model)은 그대로이므로 이걸 따로 보여줘야 한다. */
+  const fallbackLabel =
+    settings?.options.find((o) => o.id === settings.fallbackModel)?.label ??
+    settings?.fallbackModel ??
+    "";
 
   async function pick(id: string) {
     if (!settings || id === settings.model) {
@@ -86,7 +92,7 @@ export function ModelControl() {
           )}
           <span>
             AI 모델: <span className="text-foreground">{label}</span>
-            {fallback && <span className="ml-1 text-up">자동 전환</span>}
+            {fallback && <span className="ml-1 text-up">→ {fallbackLabel} 임시 대체</span>}
           </span>
         </button>
       </DialogTrigger>
@@ -102,11 +108,12 @@ export function ModelControl() {
         {fallback && settings && (
           <div className="rounded-md border border-up/40 bg-up/10 px-3 py-2 text-xs text-up">
             <p className="font-medium">
-              {fromLabel} 한도 소진({shortTime(fallback.at)}) → {label}(으)로 자동 전환됨
+              {fromLabel} 사용 불가({shortTime(fallback.at)}부터) → 지금은 {fallbackLabel}(으)로
+              임시 대체 실행 중
             </p>
             <p className="mt-1 text-muted-foreground">
-              매주 {settings.weeklyResetLabel}에 자동으로 되돌아갑니다. 지금 바로 되돌리려면 아래에서
-              직접 고르세요.
+              선택은 {fromLabel} 그대로입니다. 수집을 실행할 때마다 {fromLabel}를 먼저 확인해,
+              다시 응답하는 순간 별도 조작 없이 되돌아갑니다.
             </p>
             {fallback.reason && (
               <p className="mt-1 break-words font-mono text-[11px] text-muted-foreground">
@@ -155,7 +162,7 @@ export function ModelControl() {
                       {selected && <span className="text-xs text-primary">현재</span>}
                       {o.id === settings.primary && (
                         <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                          기본 · 매주 {settings.weeklyResetLabel} 복귀
+                          기본 · 사용 불가 시 {fallbackLabel} 임시 대체
                         </span>
                       )}
                       <span className="font-mono text-[11px] text-muted-foreground">{o.id}</span>

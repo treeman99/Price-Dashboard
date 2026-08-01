@@ -1,12 +1,7 @@
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "./log.ts";
-import { isCodexModel, isUsageLimitError, runCodexQueryText } from "./codex-query.ts";
-import {
-  FALLBACK_AGENT_MODEL,
-  PRIMARY_AGENT_MODEL,
-  WEEKLY_RESET_LABEL,
-  recordUsageLimitFallback,
-} from "./model-store.ts";
+import { isCodexModel, isCodexUnavailableError, runCodexQueryText } from "./codex-query.ts";
+import { FALLBACK_AGENT_MODEL, clearCodexFallback, recordCodexFallback } from "./model-store.ts";
 
 /** 로그용 한 줄 미리보기(개행 제거 + 길이 제한). 원문이 길어도 로그가 터지지 않게. */
 export function preview(text: string, max = 400): string {
@@ -45,6 +40,10 @@ export function isFailureSignal(text: string): boolean {
 /**
  * 선택 모델에 따라 Claude Agent SDK 또는 Codex CLI를 실행해 마지막 결과 텍스트를 반환한다.
  *
+ * Codex 를 골랐으면 **실행할 때마다 Codex 가용성을 먼저 확인**하고(runCodexQueryText 첫 단계),
+ * 못 쓰는 상태면 그 실행만 대체 모델로 살린다. 사용자의 선택은 그대로 두고 다음 실행에서 다시
+ * 확인하므로 복귀 시점을 달력에 고정할 필요가 없다 — 예전의 주간 복귀 cron 이 하던 일이다.
+ *
  * Claude 경로의 핵심: **타임아웃/중단 가드**. query 가 응답을 받지 못하고 멈추면(transport 정지 등)
  * `for await` 루프가 영원히 대기하고, 호출부의 `running` 플래그가 영구히 잠겨
  * 이후 모든 수집(수동 '지금 갱신' 포함)이 막힌다. timeoutMs 초과 시 AbortController 로
@@ -61,23 +60,27 @@ export async function runAgentQueryText(
   }
 
   const startedAt = Date.now();
+  let finalText: string;
   try {
-    const finalText = await runCodexQueryText(prompt, options, timeoutMs, label);
-    return validateFinalText(finalText, label);
+    finalText = await runCodexQueryText(prompt, options, timeoutMs, label);
   } catch (e) {
-    if (!isUsageLimitError(e)) throw e;
-    return runUsageLimitFallback(prompt, options, timeoutMs, label, startedAt, e as Error);
+    // 가용성 문제(로그인 초기화·CLI 없음·한도)만 대체로 넘긴다. 나머지는 진짜 실패라 그대로 올린다.
+    if (!isCodexUnavailableError(e)) throw e;
+    return runOnFallbackModel(prompt, options, timeoutMs, label, startedAt, e);
   }
+  // 여기까지 왔다 = Codex 가 살아서 답했다. 대체 상태 해제는 오직 이 성공에만 걸어 둔다.
+  clearCodexFallback();
+  return validateFinalText(finalText, label);
 }
 
 /**
- * Codex 정액제 한도 소진 → 대체 모델(Opus 5)로 전환하고 **이번 실행도 그 모델로 살린다.**
+ * Codex 를 쓸 수 없을 때 **이번 실행만** 대체 모델(Opus 5)로 살린다.
  *
- * 저장만 하고 던지면 오늘 그 수집은 통째로 빈 스냅샷이 된다 — 한도는 정오에도 소진되므로
- * "다음 수집부터 정상"은 하루치 결과를 버리는 것과 같다. 남은 시간이 너무 적으면(< 1분)
- * 재시도가 또 타임아웃으로 죽을 뿐이라 전환만 기록하고 실패시킨다.
+ * 기록만 하고 던지면 그 수집은 통째로 빈 스냅샷이 된다 — 로그인은 아무 때나 풀리고 한도는
+ * 정오에도 소진되므로 "다음 수집부터 정상"은 하루치 결과를 버리는 것과 같다. 남은 시간이 너무
+ * 적으면(< 1분) 재시도가 또 타임아웃으로 죽을 뿐이라 기록만 남기고 실패시킨다.
  */
-async function runUsageLimitFallback(
+async function runOnFallbackModel(
   prompt: string,
   options: Omit<Options, "abortController">,
   timeoutMs: number,
@@ -86,10 +89,10 @@ async function runUsageLimitFallback(
   cause: Error
 ): Promise<string> {
   const from = String(options.model);
-  const switched = recordUsageLimitFallback(from, cause.message);
-  const note = switched
-    ? `${from} 한도 소진 → ${FALLBACK_AGENT_MODEL} 로 전환 (${WEEKLY_RESET_LABEL} 에 ${PRIMARY_AGENT_MODEL} 복귀)`
-    : `${from} 한도 소진 (이미 ${FALLBACK_AGENT_MODEL} 로 전환된 상태)`;
+  const first = recordCodexFallback(from, cause.message);
+  const note = first
+    ? `${from} 사용 불가 → 이번 실행은 ${FALLBACK_AGENT_MODEL} 로 대체 (다음 실행에서 재확인)`
+    : `${from} 사용 불가 지속 → 이번 실행도 ${FALLBACK_AGENT_MODEL} 로 대체`;
 
   const remaining = timeoutMs - (Date.now() - startedAt);
   if (remaining < 60_000) {
@@ -100,7 +103,7 @@ async function runUsageLimitFallback(
     prompt,
     { ...options, model: FALLBACK_AGENT_MODEL },
     remaining,
-    `${label}(한도 대체)`
+    `${label}(임시 대체)`
   );
 }
 

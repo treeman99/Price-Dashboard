@@ -213,13 +213,16 @@ export interface AgentModelOption {
   description?: string;
 }
 
-/** 한도 소진으로 자동 전환된 상태. 수동 선택이나 주간 복귀가 일어나면 해제된다. */
+/**
+ * Codex 를 쓸 수 없어 임시로 대체 모델이 실행되고 있는 상태.
+ * 다음 실행에서 Codex 가 정상 응답하거나 사용자가 직접 모델을 고르면 해제된다.
+ */
 export interface AgentModelFallbackState {
-  /** 전환 직전에 쓰던 모델 ID(= 한도가 소진된 쪽). */
+  /** 대체된 쪽 = 사용자가 골라 뒀지만 지금 쓸 수 없는 모델 ID. */
   from: string;
-  /** 전환 시각(ISO). */
+  /** 처음 사용 불가를 확인한 시각(ISO). 대체가 이어지는 동안 갱신하지 않는다. */
   at: string;
-  /** 한도 판단 근거가 된 오류 원문 요약. */
+  /** 사용 불가 판단의 근거가 된 오류 원문 요약(로그인 초기화 / 한도 소진 등). */
   reason: string;
 }
 
@@ -228,18 +231,16 @@ export interface AgentModelFallbackState {
  * data/model.json 에 사용자가 고른 값이 저장되고, 없으면 목록 첫 항목(기본값)을 쓴다.
  */
 export interface AgentModelSettings {
-  /** 현재 선택된 모델 ID. */
+  /** 사용자가 고른 모델 ID. 자동 대체가 이 값을 덮어쓰지 않는다. */
   model: string;
   /** 선택 가능한 모델 목록(백엔드가 단일 진실원). */
   options: AgentModelOption[];
-  /** 평상시 기본 모델 ID(주간 복귀가 되돌리는 대상). */
+  /** 평상시 기본 모델 ID. */
   primary: string;
-  /** 한도 소진 시 자동으로 넘어갈 모델 ID. */
+  /** 선택 모델을 쓸 수 없을 때 대신 실행할 모델 ID. */
   fallbackModel: string;
-  /** 자동 전환 중이면 그 내역, 아니면 null. */
+  /** 임시 대체 중이면 그 내역, 아니면 null. */
   fallback: AgentModelFallbackState | null;
-  /** 주간 복귀 시각 설명(예: "일요일 21:00"). UI 안내 문구용. */
-  weeklyResetLabel: string;
 }
 
 // ── 팝업스토어 · 전시회 보드 (이력 저장 없음, 최신 스냅샷만) ──

@@ -20,13 +20,6 @@ import {
   catchUpWeeklyCycle,
   runWeeklyCycle,
 } from "../lotto/cycle.ts";
-import {
-  PRIMARY_AGENT_MODEL,
-  WEEKLY_RESET_CRON,
-  WEEKLY_RESET_LABEL,
-  checkWeeklyResetCatchup,
-  restoreWeeklyPrimary,
-} from "../util/model-store.ts";
 import type { StockMarket } from "../../shared/types.ts";
 
 function today(): string {
@@ -459,14 +452,9 @@ function registerCrons() {
   );
   log.info(`스케줄러: 증시 펄스 야간 보류 묶음 발송 매일 ${flushAt}`);
 
-  // 수집·큐레이션 모델 주간 복귀. 다른 항목과 달리 **주 1회**라 cronExpr(매일)을 쓰지 않는다.
-  // 한도 소진으로 Opus 5 에 눌러앉은 상태를 매주 기본 모델로 되돌리는 유일한 장치다.
-  tasks.push(
-    cron.schedule(WEEKLY_RESET_CRON, () => restoreWeeklyPrimary("schedule"), {
-      name: "dp-model-weekly-reset",
-    })
-  );
-  log.info(`스케줄러: 수집 모델 주간 복귀 매주 ${WEEKLY_RESET_LABEL} → ${PRIMARY_AGENT_MODEL}`);
+  // ⚠️ 수집 모델 '주간 복귀' cron 은 없다(2026-08-01 제거). Codex 복귀를 요일에 고정하니
+  // 그 시각에 맥이 꺼져 있거나 Codex 가 예정과 다르게 살아나면 어긋났다. 지금은 실행할 때마다
+  // Codex 를 확인해 그 실행만 대체하므로(agent-query.ts) 되돌릴 스케줄 자체가 필요 없다.
 
   // 로또 주간 사이클(주 1회). 채점 → 전략 갱신 → 다음 회차 번호 확정까지 한 번에 한다.
   tasks.push(
@@ -475,15 +463,6 @@ function registerCrons() {
     })
   );
   log.info(`스케줄러: 로또 주간 사이클 매주 ${LOTTO_CYCLE_LABEL}`);
-}
-
-/** 주간 복귀 catch-up. 파일 판정이라 실패해도 스케줄러가 죽지 않게 감싼다. */
-function safeCheckWeeklyModelReset() {
-  try {
-    checkWeeklyResetCatchup();
-  } catch (e) {
-    log.error(`모델 주간 복귀 점검 오류: ${(e as Error).message}`);
-  }
 }
 
 /**
@@ -513,9 +492,8 @@ export function startScheduler() {
   void checkYoutubeCatchup();
   void checkStockCatchup("kr");
   void checkStockCatchup("us");
-  // 주간 복귀 예정 시각(WEEKLY_RESET_LABEL)에 맥이 꺼져 있거나 자고 있었으면 복귀가 통째로
-  // 사라진다 — 그러면 한도 소진 전환이 영구화되므로 다른 탭과 같은 catch-up 을 붙인다.
-  safeCheckWeeklyModelReset();
+  // 모델 복귀 catch-up 은 없다 — 복귀가 시각이 아니라 '다음 실행의 Codex 확인'에 달려 있어
+  // 서버가 꺼져 있던 구간에 놓칠 이벤트 자체가 없다.
   // 로또: 놓친 일요일 사이클(맥이 자고 있었던 경우)과 예약된 재시도를 기동 즉시 확인한다.
   // 다음 회차 추천 번호가 아직 없는 상태(배포 직후)도 여기서 채워진다.
   void safeCatchUpLottoCycle();
@@ -539,7 +517,6 @@ export function startScheduler() {
     void checkYoutubeCatchup();
     void checkStockCatchup("kr");
     void checkStockCatchup("us");
-    safeCheckWeeklyModelReset();
     void safeCatchUpLottoCycle();
   }, 30 * 60 * 1000);
 }

@@ -95,10 +95,25 @@ export function isCodexUsageLimitNotice(finalText: string): boolean {
 }
 
 /**
- * 한도 소진 전용 오류 타입. 호출부(agent-query)가 '그냥 실패'와 구분해 대체 모델로
- * 전환하려면 메시지 문자열 재파싱이 아니라 타입으로 구분되어야 한다.
+ * **지금 Codex 를 쓸 수 없다**는 뜻의 오류 타입. 호출부(agent-query)가 '그냥 실패'와 구분해
+ * 이번 실행만 대체 모델로 살리려면 메시지 문자열 재파싱이 아니라 타입으로 구분되어야 한다.
+ *
+ * 여기에 해당하는 것은 **Codex 쪽 가용성 문제뿐**이다: 로그인 초기화, CLI 미설치, 정액제 한도
+ * 소진. 프롬프트 오류·네트워크 오류 같은 '진짜 실패'는 일반 Error 로 남겨 그대로 실패해야 한다
+ * — 그것까지 대체로 넘기면 Codex 경로의 버그가 Opus 실행에 묻혀 영원히 드러나지 않는다.
  */
-export class UsageLimitError extends Error {
+export class CodexUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexUnavailableError";
+  }
+}
+
+/**
+ * 한도 소진. 가용성 문제의 하위 종류라 CodexUnavailableError 를 상속한다 — 호출부는 대개
+ * '대체 모델로 살린다'만 판단하면 되고, 한도인지 로그인인지 구분이 필요할 때만 이 타입을 본다.
+ */
+export class UsageLimitError extends CodexUnavailableError {
   constructor(message: string) {
     super(message);
     this.name = "UsageLimitError";
@@ -108,6 +123,11 @@ export class UsageLimitError extends Error {
 /** 잡은 예외가 한도 소진인지. */
 export function isUsageLimitError(e: unknown): e is UsageLimitError {
   return e instanceof UsageLimitError;
+}
+
+/** 잡은 예외가 'Codex 를 지금 못 쓴다'(로그인 초기화·CLI 없음·한도 소진)인지. */
+export function isCodexUnavailableError(e: unknown): e is CodexUnavailableError {
+  return e instanceof CodexUnavailableError;
 }
 
 /**
@@ -348,8 +368,34 @@ function errorPreview(text: string, max = 700): string {
 }
 
 /**
- * 저장된 Codex CLI의 ChatGPT 로그인을 사용해 실행한다.
+ * **실행 전 Codex 확인.** 저장된 ChatGPT 정액제 로그인이 살아 있을 때만 통과시킨다.
  * 상태가 API 키 로그인이면 절대 실행하지 않아 Platform 종량 과금으로 빠질 가능성을 차단한다.
+ *
+ * 확인 실패는 CodexUnavailableError 로 올린다 — 일반 Error 로 던지면 로그인이 초기화됐을 때
+ * (실측: 예고 없이 풀린다) 그날 수집이 통째로 빈 스냅샷이 된다. 호출부가 이번 실행만 대체
+ * 모델로 살리고 다음 실행에서 다시 확인하게 하는 것이 이 타입의 목적이다.
+ */
+async function assertCodexReady(timeoutMs: number): Promise<void> {
+  let auth: CapturedProcess;
+  try {
+    auth = await runCaptured(["login", "status"], "", Math.min(timeoutMs, 15_000));
+  } catch (e) {
+    // spawn 자체가 실패 = CLI 미설치(ENOENT)나 실행 불가. 확인 단계에서 걸리므로 가용성 문제다.
+    throw new CodexUnavailableError(`Codex CLI 실행 실패 — ${(e as Error).message}`);
+  }
+  const authText = `${auth.stdout}\n${auth.stderr}`;
+  if (auth.code !== 0 || !isChatGptAuthStatus(authText)) {
+    throw new CodexUnavailableError(
+      "Codex ChatGPT 정액제 로그인이 확인되지 않습니다(로그인 초기화 등). 터미널에서 `codex login` 후 " +
+        "`codex login status`가 'Logged in using ChatGPT'인지 확인하세요. " +
+        `현재 상태: ${errorPreview(authText, 160) || `code=${auth.code}`}`
+    );
+  }
+}
+
+/**
+ * 저장된 Codex CLI의 ChatGPT 로그인을 사용해 실행한다.
+ * 실행에 앞서 반드시 assertCodexReady 로 Codex 가용성을 먼저 확인한다.
  */
 export async function runCodexQueryText(
   prompt: string,
@@ -359,14 +405,7 @@ export async function runCodexQueryText(
 ): Promise<string> {
   fs.mkdirSync(CODEX_WORK_DIR, { recursive: true });
 
-  const auth = await runCaptured(["login", "status"], "", Math.min(timeoutMs, 15_000));
-  const authText = `${auth.stdout}\n${auth.stderr}`;
-  if (auth.code !== 0 || !isChatGptAuthStatus(authText)) {
-    throw new Error(
-      "Codex는 ChatGPT 정액제 로그인일 때만 실행합니다. 터미널에서 `codex login` 후 " +
-        "`codex login status`가 'Logged in using ChatGPT'인지 확인하세요."
-    );
-  }
+  await assertCodexReady(timeoutMs);
 
   const model = String(options.model);
   const toolNames = Array.isArray(options.tools)

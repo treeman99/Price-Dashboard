@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  CodexUnavailableError,
   UsageLimitError,
   buildCodexArgs,
   buildCodexPrompt,
   codexSubscriptionEnv,
   isChatGptAuthStatus,
   isCodexModel,
+  isCodexUnavailableError,
   isCodexUsageLimitNotice,
   isCodexUsageLimitText,
   isUsageLimitError,
@@ -150,4 +152,15 @@ test("한도 오류는 타입으로 구분된다", () => {
   assert.equal(isUsageLimitError(new UsageLimitError("한도")), true);
   assert.equal(isUsageLimitError(new Error("한도")), false);
   assert.equal(isUsageLimitError("한도"), false);
+});
+
+test("가용성 오류(로그인 초기화·한도)만 대체 대상으로 분류한다", () => {
+  // 로그인이 풀린 경우와 한도 소진은 모두 '지금 Codex 를 못 쓴다' → 이번 실행만 대체한다.
+  assert.equal(isCodexUnavailableError(new CodexUnavailableError("로그인 초기화")), true);
+  assert.equal(isCodexUnavailableError(new UsageLimitError("한도")), true);
+  // 나머지 실패는 진짜 실패라 그대로 올라가야 한다 — 대체로 넘기면 Codex 버그가 묻힌다.
+  assert.equal(isCodexUnavailableError(new Error("JSON 파싱 실패")), false);
+  assert.equal(isCodexUnavailableError("로그인 초기화"), false);
+  // 한도는 가용성 문제의 하위 종류지, 그 반대가 아니다.
+  assert.equal(isUsageLimitError(new CodexUnavailableError("로그인 초기화")), false);
 });

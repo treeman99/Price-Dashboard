@@ -26,12 +26,12 @@ export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
   {
     id: "gpt-5.6-sol",
     label: "Codex 5.6 Sol",
-    description: "기본값 — ChatGPT 정액제 Codex, 한도 소진 시 Opus 5로 자동 전환",
+    description: "기본값 — ChatGPT 정액제 Codex, 못 쓰는 동안만 Opus 5로 임시 대체",
   },
   {
     id: "claude-opus-5",
     label: "Opus 5",
-    description: "한도 소진 시 자동 전환 대상 — 가장 높은 수집·큐레이션 품질",
+    description: "Codex를 못 쓸 때 대신 실행 — 가장 높은 수집·큐레이션 품질",
   },
   {
     id: "gpt-5.6-terra",
@@ -40,47 +40,30 @@ export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
   },
 ];
 
-/** 기본 모델 = 목록 첫 항목(Codex 5.6 Sol). 주간 복귀도 이 값으로 되돌린다. */
+/** 기본 모델 = 목록 첫 항목(Codex 5.6 Sol). */
 export const DEFAULT_AGENT_MODEL = AGENT_MODEL_OPTIONS[0].id;
 
-/** 평상시 모델. 주간 복귀가 되돌리는 대상. */
+/** 평상시 모델. 저장된 선택이 없을 때의 값이자 UI 의 '기본' 표식. */
 export const PRIMARY_AGENT_MODEL = DEFAULT_AGENT_MODEL;
 
-/** 한도 소진 시 자동으로 넘어갈 모델. Codex 와 다른 제공자여야 의미가 있다. */
+/** Codex 를 쓸 수 없을 때 대신 실행할 모델. Codex 와 다른 제공자여야 의미가 있다. */
 export const FALLBACK_AGENT_MODEL = "claude-opus-5";
 
 /**
- * 주간 복귀 시각: **수요일(3) 21시**. cron 식과 catch-up 계산이 이 상수를 공유한다.
+ * data/model.json 의 스키마.
  *
- * 왜 수요일인가: 이 복귀는 "Codex 주간 한도가 리셋됐으니 기본 모델로 돌아간다"는 뜻이고,
- * 기준이 되는 것은 달력의 주 시작이 아니라 **Codex 쪽 한도 리셋 요일**이다. 처음에는 일요일로
- * 잡았으나 실제 리셋이 수요일이라, 일요일에 복귀하면 한도가 아직 안 찬 상태로 기본 모델에
- * 돌아가 곧바로 폴백으로 튕기는 구간이 생겼다(2026-08-01 정정).
+ * ⚠️ `model` 은 **사용자가 고른 값 하나뿐**이다. 자동 대체는 이 값을 절대 덮어쓰지 않는다 —
+ * 예전에는 한도 소진 시 여기를 Opus 로 바꿔 놓고 주간 cron(수요일 21:00)이 되돌렸는데,
+ * 그 복귀 시각에 맥이 꺼져 있거나 Codex 가 예정보다 일찍/늦게 살아나면 선택이 실제 상태와
+ * 어긋난 채 남았다(2026-08-01: Codex 로그인이 초기화되자 그대로 수집이 죽었다).
+ * 지금은 실행할 때마다 Codex 를 확인해 그 실행만 대체하므로 복귀에 달력이 필요 없다.
  *
- * ⚠️ 요일을 다시 옮길 때는 이 상수만 바꾸면 된다 — cron 식·catch-up 계산(previousWeeklyResetAt)·
- * 화면 라벨이 전부 여기서 파생된다. node-cron 의 요일 번호와 JS `Date.getDay()` 는 둘 다
- * 0=일요일 체계라 같은 값을 그대로 쓸 수 있다.
+ * `model` 만 있던 옛 파일, `lastWeeklyResetAt` 이 남은 파일도 그대로 읽힌다(무시).
  */
-export const WEEKLY_RESET_DAY = 3;
-export const WEEKLY_RESET_HOUR = 21;
-export const WEEKLY_RESET_CRON = `0 ${WEEKLY_RESET_HOUR} * * ${WEEKLY_RESET_DAY}`;
-/** 라벨도 상수에서 파생한다 — 요일명을 하드코딩하면 DAY 를 옮길 때 화면만 조용히 어긋난다. */
-const WEEKDAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"] as const;
-export const WEEKLY_RESET_LABEL =
-  `${WEEKDAY_NAMES[WEEKLY_RESET_DAY]}요일 ${String(WEEKLY_RESET_HOUR).padStart(2, "0")}:00`;
-
-/** data/model.json 의 스키마. `model` 만 있던 옛 파일도 그대로 읽힌다. */
 interface ModelState {
   model: string;
-  /** 자동 전환 중이면 그 내역. 수동 선택·주간 복귀 시 null 로 지운다. */
+  /** 지금 Codex 를 못 써서 대체 실행 중이면 그 내역. 다시 성공하면 null 로 지운다. */
   fallback: AgentModelFallbackState | null;
-  /**
-   * 마지막 주간 복귀 시각(ISO). 서버가 복귀 예정 시각에 꺼져 있었는지 판정하는 유일한 근거다.
-   * null 이면 '아직 한 번도 복귀한 적 없음' 이 아니라 '기준선 미설정' 으로 보고, 즉시 되돌리는
-   * 대신 지금 시각을 기준선으로 심는다 — 설치 직후 catch-up 이 사용자의 수동 선택을 덮어쓰지
-   * 않게 하려는 것이다.
-   */
-  lastWeeklyResetAt: string | null;
 }
 
 /** id 가 허용 목록에 있으면 그대로, 아니면 null. */
@@ -101,17 +84,21 @@ function readState(): ModelState {
   try {
     if (fs.existsSync(STORE_PATH)) {
       const raw = JSON.parse(fs.readFileSync(STORE_PATH, "utf8")) as Record<string, unknown>;
-      return {
-        model: validModel(raw?.model) ?? DEFAULT_AGENT_MODEL,
-        fallback: validFallback(raw?.fallback),
-        lastWeeklyResetAt:
-          typeof raw?.lastWeeklyResetAt === "string" ? raw.lastWeeklyResetAt : null,
-      };
+      const fallback = validFallback(raw?.fallback);
+      let model = validModel(raw?.model) ?? DEFAULT_AGENT_MODEL;
+      // 옛 스키마 이관: 예전 자동 전환은 `model` 자체를 대체 모델로 덮어썼고 주간 cron 이
+      // 되돌렸다. 그 cron 이 사라졌으므로 남아 있는 덮어쓰기를 원래 선택(fallback.from)으로
+      // 돌려놓는다 — 그러지 않으면 고른 적 없는 Opus 5 에 영원히 눌러앉는다.
+      // (수동 선택은 fallback 을 null 로 지우므로 사용자가 직접 고른 Opus 는 여기 걸리지 않는다.)
+      if (fallback && model === FALLBACK_AGENT_MODEL) {
+        model = validModel(fallback.from) ?? model;
+      }
+      return { model, fallback };
     }
   } catch (e) {
     log.warn(`model.json 읽기 실패 → 기본 모델 사용: ${(e as Error).message}`);
   }
-  return { model: DEFAULT_AGENT_MODEL, fallback: null, lastWeeklyResetAt: null };
+  return { model: DEFAULT_AGENT_MODEL, fallback: null };
 }
 
 function writeState(state: ModelState): void {
@@ -120,14 +107,17 @@ function writeState(state: ModelState): void {
 }
 
 /**
- * 현재 유효 모델 ID. 각 수집/큐레이션 실행 시작 시 호출해 최신 선택을 반영한다
+ * 사용자가 고른 모델 ID. 각 수집/큐레이션 실행 시작 시 호출해 최신 선택을 반영한다
  * (스케줄과 동일하게 파일에서 매번 새로 읽어, 서버 재시작 없이 **다음 수집부터** 적용).
+ *
+ * ⚠️ 이건 '선택'이지 '이번 실행에 실제로 쓰인 모델'이 아니다. Codex 를 고른 상태에서 Codex 가
+ * 죽어 있으면 runAgentQueryText 가 그 실행만 FALLBACK_AGENT_MODEL 로 돌린다(agent-query.ts).
  */
 export function getAgentModel(): string {
   return readState().model;
 }
 
-/** GET 응답용: 현재 모델 + 선택지 목록 + 자동 전환 상태. */
+/** GET 응답용: 현재 선택 + 선택지 목록 + 임시 대체 상태. */
 export function getModelSettings(): AgentModelSettings {
   const state = readState();
   return {
@@ -136,7 +126,6 @@ export function getModelSettings(): AgentModelSettings {
     primary: PRIMARY_AGENT_MODEL,
     fallbackModel: FALLBACK_AGENT_MODEL,
     fallback: state.fallback,
-    weeklyResetLabel: WEEKLY_RESET_LABEL,
   };
 }
 
@@ -159,87 +148,44 @@ export function saveAgentModel(id: unknown): AgentModelSettings {
 }
 
 /**
- * 한도 소진 감지 → 대체 모델로 자동 전환하고 그 사실을 기록한다.
+ * Codex 를 못 쓴다는 사실을 기록한다(로그인 초기화·CLI 없음·정액제 한도 소진).
  *
- * 반환값은 '이 호출이 실제로 모델을 바꿨는지'다. 이미 대체 모델을 쓰고 있으면 아무것도 하지
- * 않고 false — 같은 전환을 반복 기록하면 `at`(최초 전환 시각)이 계속 밀려 언제부터 한도에
- * 걸렸는지 알 수 없게 된다.
+ * **선택 모델은 건드리지 않는다.** 실제 대체는 실행 시점에 한 번만 일어나고(agent-query),
+ * 여기 남는 건 화면에 "지금 왜 Opus 로 돌고 있는지"를 설명할 근거뿐이다.
+ *
+ * 반환값은 '이번이 첫 기록인지'. 같은 모델에 대한 기록이 이미 있으면 `at`(처음 막힌 시각)을
+ * 보존하고 사유만 갱신한다 — 매 실행마다 `at` 을 밀면 언제부터 막혔는지 알 수 없게 된다.
  */
-export function recordUsageLimitFallback(fromModel: string, reason: string): boolean {
+export function recordCodexFallback(fromModel: string, reason: string): boolean {
   const state = readState();
-  if (state.model === FALLBACK_AGENT_MODEL) return false;
+  const first = state.fallback?.from !== fromModel;
   writeState({
     ...state,
-    model: FALLBACK_AGENT_MODEL,
     fallback: {
       from: fromModel,
-      at: new Date().toISOString(),
+      at: first ? new Date().toISOString() : state.fallback!.at,
       reason: reason.slice(0, 300),
     },
   });
-  log.warn(
-    `${fromModel} 한도 소진 감지 → 수집·큐레이션 모델을 ${FALLBACK_AGENT_MODEL} 로 자동 전환 ` +
-      `(${WEEKLY_RESET_LABEL} 에 ${PRIMARY_AGENT_MODEL} 로 자동 복귀). 사유: ${reason.slice(0, 200)}`
-  );
-  return true;
-}
-
-/**
- * 주간 복귀: 기본 모델로 되돌리고 복귀 시각을 남긴다.
- *
- * 사용자가 수동으로 다른 모델을 골라 뒀어도 되돌린다 — "매주 한도 리셋 시각에 다시 기본
- * 모델로"가 이 기능의 요구사항 자체이기 때문이다. 되돌릴 게 없으면 시각만 갱신한다(그래야
- * catch-up 이 같은 주에 재발화하지 않는다).
- */
-export function restoreWeeklyPrimary(trigger: string): boolean {
-  const state = readState();
-  const changed = state.model !== PRIMARY_AGENT_MODEL;
-  writeState({
-    model: PRIMARY_AGENT_MODEL,
-    fallback: null,
-    lastWeeklyResetAt: new Date().toISOString(),
-  });
-  if (changed) {
-    log.info(
-      `주간 복귀[${trigger}]: 수집·큐레이션 모델 ${state.model} → ${PRIMARY_AGENT_MODEL}`
+  if (first) {
+    log.warn(
+      `${fromModel} 사용 불가 감지 → 수집·큐레이션을 ${FALLBACK_AGENT_MODEL} 로 임시 대체 ` +
+        `(다음 실행에서 ${fromModel} 를 다시 확인). 사유: ${reason.slice(0, 200)}`
     );
-  } else {
-    log.info(`주간 복귀[${trigger}]: 이미 ${PRIMARY_AGENT_MODEL} — 복귀 시각만 갱신`);
   }
-  return changed;
+  return first;
 }
 
 /**
- * `now` 기준으로 **가장 최근에 지난** 주간 복귀 시각(WEEKLY_RESET_DAY 요일 21:00)을 구한다.
- * catch-up 판정에만 쓰이므로 순수 함수로 분리해 테스트로 못박는다.
- */
-export function previousWeeklyResetAt(now: Date): Date {
-  const d = new Date(now);
-  d.setHours(WEEKLY_RESET_HOUR, 0, 0, 0);
-  d.setDate(d.getDate() - ((d.getDay() - WEEKLY_RESET_DAY + 7) % 7));
-  if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7);
-  return d;
-}
-
-/**
- * 주간 복귀 catch-up: 서버가 복귀 예정 시각에 꺼져 있었으면 켜진 뒤에 1회 보충한다.
+ * Codex 가 다시 응답했을 때 임시 대체 상태를 해제한다.
  *
- * 기준선(lastWeeklyResetAt)이 없으면 **되돌리지 않고 지금 시각만 심는다.** 설치·업데이트 직후
- * 첫 기동에서 사용자의 수동 선택을 말없이 덮어쓰는 것이 이 기능의 유일한 오작동 시나리오라,
- * 그 한 번을 명시적으로 비운다.
+ * 복귀 조건이 "달력상의 어떤 시각"이 아니라 "실제로 한 번 성공했다"인 것이 이 설계의 핵심이다.
+ * 한도가 언제 리셋되든, 로그인을 언제 다시 하든, 다음 실행이 성공하는 순간 저절로 풀린다.
  */
-export function checkWeeklyResetCatchup(now: Date = new Date()): boolean {
+export function clearCodexFallback(): boolean {
   const state = readState();
-  if (!state.lastWeeklyResetAt) {
-    writeState({ ...state, lastWeeklyResetAt: now.toISOString() });
-    return false;
-  }
-  const last = new Date(state.lastWeeklyResetAt);
-  const due = previousWeeklyResetAt(now);
-  if (Number.isNaN(last.getTime()) || last.getTime() >= due.getTime()) return false;
-  log.info(
-    `주간 복귀 누락 감지 (마지막 ${state.lastWeeklyResetAt}, 예정 ${due.toISOString()}) → catch-up 실행`
-  );
-  restoreWeeklyPrimary("catchup");
+  if (!state.fallback) return false;
+  writeState({ ...state, fallback: null });
+  log.info(`${state.fallback.from} 정상 응답 확인 → 임시 대체 상태 해제`);
   return true;
 }

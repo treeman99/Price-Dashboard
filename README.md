@@ -142,12 +142,14 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 > Codex는 `codex login status`가 `Logged in using ChatGPT`일 때만 실행하며,
 > `OPENAI_API_KEY`/`CODEX_API_KEY`를 전달하거나 API 종량 과금으로 자동 전환하지 않는다.
 >
-> **한도 소진 자동 전환 · 주간 복귀**: Codex 정액제 한도가 소진되면(`You've hit your usage limit`,
-> `Quota exceeded`, `429 Too Many Requests` 등) 수집 모델이 자동으로 `Opus 5`로 바뀌고,
-> 그 실행도 남은 시간 안에서 Opus 5로 즉시 재시도해 그날 결과를 살린다. 전환 사실은 대시보드
-> 모델 버튼에 배지로 남는다. 매주 **일요일 21:00** 에 자동으로 `Codex 5.6 Sol`로 되돌아가며,
-> 그 시각에 맥이 꺼져 있었으면 다음 기동 시 1회 보충(catch-up)한다. 언제든 직접 고르면
-> 수동 선택이 우선한다(다음 일요일 21:00 까지).
+> **실행마다 Codex 확인 → 임시 대체**: Codex를 고른 상태에서 **수집을 실행할 때마다 Codex를 먼저
+> 확인**한다. 로그인이 초기화됐거나(`codex login status`가 ChatGPT 로그인이 아님), CLI가 없거나,
+> 정액제 한도가 소진됐으면(`You've hit your usage limit`, `Quota exceeded`, `429` 등)
+> **그 실행만** 남은 시간 안에서 `Opus 5`로 즉시 재시도해 결과를 살린다.
+> 대시보드에 저장된 **선택은 그대로 유지**되고, 대체 중이라는 사실만 모델 버튼에 배지로 남는다.
+> 복귀에 정해진 시각은 없다 — 다음 실행에서 Codex가 다시 응답하는 순간 배지가 풀리고 그대로
+> Codex로 돌아간다. 프롬프트 오류·네트워크 오류 같은 '진짜 실패'는 대체하지 않고 그대로 실패한다
+> (대체로 넘기면 Codex 경로의 버그가 Opus 실행에 묻힌다).
 >
 > **카카오 알림 안내**: 카카오 "나에게 보내기"(PlayMCP MemoChat)는 OAuth 인증이 필요한 MCP라,
 > 무인으로 도는 launchd 백그라운드 서비스에서는 직접 호출할 수 없다. 카카오 알림이 필요하면
@@ -249,8 +251,8 @@ npx tsx src/cli.ts link --apply --product=15   # 특정 상품만
 | 기동 시 `NAVER_CLIENT_ID ... 없습니다` 오류 | `.env`에 네이버 키 미입력 → 키 입력 후 재시작 |
 | 대시보드에 "프론트가 아직 빌드되지 않았습니다" | `npm run web:build` 실행 후 새로고침 |
 | Opus 선택 시 카드에 비교가/리뷰가 안 보임 | `ANTHROPIC_API_KEY` 미설정 → 네이버 결과만 표시. 키를 넣거나 Codex를 선택 |
-| Codex 수집이 로그인 오류로 실패 | `codex login` 실행 후 `codex login status`가 `Logged in using ChatGPT`인지 확인. API 키 로그인은 의도적으로 거부 |
-| 고르지 않았는데 모델이 `Opus 5`로 바뀌어 있음 | Codex 정액제 한도 소진으로 자동 전환된 상태. 모델 버튼의 "자동 전환" 배지에 사유·시각이 있다. 일요일 21:00 자동 복귀를 기다리거나 직접 다시 고르면 된다 |
+| 모델 버튼에 "→ Opus 5 임시 대체" 배지 | Codex를 지금 못 쓰는 상태(로그인 초기화 / 정액제 한도 소진). 배지 안에 사유·시작 시각이 있다. 선택은 Codex 그대로이고, 다음 수집에서 Codex가 응답하면 저절로 풀린다. 로그인이 원인이면 `codex login` 후 다음 수집을 기다리거나 "지금 갱신"을 누르면 된다 |
+| Codex 수집이 로그인 오류로 실패 | `codex login` 실행 후 `codex login status`가 `Logged in using ChatGPT`인지 확인. API 키 로그인은 의도적으로 거부. 로그인이 풀린 동안에도 수집은 Opus 5로 대체 실행되므로 결과가 비지는 않는다 |
 | 특정 상품 후보 0개(최저가 "-") | 모델 매칭이 엄격하거나 시장 매물 없음 → 상품의 포함/제외/최소가 조정 |
 | `ExperimentalWarning: SQLite ...` | Node 내장 SQLite 경고(무해). 서비스는 `NODE_NO_WARNINGS=1`로 숨김 |
 | 포트 충돌 | `.env`의 `PORT` 변경 후 재시작 |
