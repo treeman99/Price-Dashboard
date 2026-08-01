@@ -118,11 +118,12 @@ function kstAfternoon(kstDate: string): Date {
   return new Date(Date.UTC(y, m - 1, d, 8, 0, 0));
 }
 
-test("resolveSession(us/close) — 월요일 아침은 금요일 마감 세션을 결산한다", async () => {
+test("resolveSession(us/close) — 결산 대상은 항상 '직전 마감 세션'이다", async () => {
   // 2026-07-20(월) 08:00 KST = 뉴욕 07-19(일) 19:00. 일·토는 휴장이라 07-17(금)까지 역스캔.
-  // 금요일 마감 결산이 주말을 건너 월요일 아침으로 이월되는 것이 설계된 동작이다.
+  // 결산 이력이 없으면(lastSettledSession 생략) 그 세션이 곧 대상이다.
   const r = await resolveSession("us", kstMorning("2026-07-20"), "2026-07-20", "close");
   assert.equal(r.holiday, false);
+  assert.equal(r.settled, false);
   assert.equal(r.sessionDate, "2026-07-17");
 });
 
@@ -146,13 +147,44 @@ test("resolveSession(us/both) — 혼합 역할의 거래일은 close 와 동일
   assert.equal(both.sessionDate, close.sessionDate);
 });
 
-// ── 제약: 주말·공휴일에 새 알림이 생기면 안 된다 ──────────────────────
+// ── 결산 게이트: 직전 마감 세션 기준 + 중복 방지 ──────────────────────
+//
+// 2026-08-01 정책 변경. 예전에는 게이트가 `isMarketClosed("us", today_KST)` 하나라
+// 토요일 아침이 휴장으로 접혔고, 금요일 뉴욕 세션의 결산이 **월요일 아침까지 밀렸다**.
+// 그 사이 화면이 목요일 세션에 멈춰 있는 것이 관측돼(2026-07-31 금 세션 누락) 게이트를
+// '직전 마감 세션 기준'으로 바꿨다. 토요일 아침 알림 신설은 사용자가 명시적으로 선택한 것이다.
 
-test("주말은 역할과 무관하게 휴장 — 토요일 아침 결산이 새로 생기지 않는다", async () => {
-  // 금요일 뉴욕장은 토요일 05:00 KST 에 이미 마감됐지만, 결산 게이트를 '직전 마감 세션이
-  // 있는가'로 바꾸면 여기서 **요청된 적 없는 토요일 아침 이메일**이 신설된다.
-  // 게이트를 isMarketClosed("us", today_KST) 로 유지했음을 이 테스트가 못박는다.
-  for (const role of ["close", "preview", "both"] as const) {
+test("토요일 아침은 금요일 뉴욕 세션을 결산한다(월요일까지 밀리지 않는다)", async () => {
+  // 2026-07-18(토) 08:00 KST = 뉴욕 07-17(금) 19:00 — 마감 3시간 후라 세션이 실재한다.
+  const sat = await resolveSession("us", kstMorning("2026-07-18"), "2026-07-18", "close");
+  assert.equal(sat.holiday, false, "토요일 결산이 휴장으로 접혔다");
+  assert.equal(sat.settled, false);
+  assert.equal(sat.sessionDate, "2026-07-17");
+});
+
+test("같은 세션을 두 번 결산하지 않는다 — 토요일에 결산했으면 일·월 아침은 settled", async () => {
+  // 토·일·월 아침은 lastUsSessionDate 가 모두 같은 금요일 세션을 준다. 중복 방지가 없으면
+  // 같은 결산 브리핑이 세 번 생성되고 알림도 세 번 나간다.
+  for (const kstDate of ["2026-07-19", "2026-07-20"]) {
+    const r = await resolveSession("us", kstMorning(kstDate), kstDate, "close", "2026-07-17");
+    assert.equal(r.settled, true, `${kstDate} 이 중복 결산으로 열렸다`);
+    assert.equal(r.holiday, false, `${kstDate} 은 휴장이 아니라 '이미 결산됨'이어야 한다`);
+    assert.equal(r.sessionDate, "2026-07-17");
+  }
+});
+
+test("결산이 실패해 이력이 없으면 다음 슬롯이 같은 세션을 재시도한다", async () => {
+  // 호출부는 source==="llm" 인 스냅샷만 이력으로 넘긴다(수집 실패는 null). 그때 게이트는
+  // 다시 열려야 한다 — 닫히면 lastUsSessionDate 가 전진해 그 세션이 영영 누락된다.
+  const retry = await resolveSession("us", kstMorning("2026-07-20"), "2026-07-20", "close", null);
+  assert.equal(retry.settled, false);
+  assert.equal(retry.sessionDate, "2026-07-17");
+});
+
+test("주말 프리뷰는 여전히 휴장 — 오늘 밤 열릴 뉴욕 세션이 없다", async () => {
+  // 게이트 변경은 close 역할에만 적용된다. preview/both 는 '오늘 밤 세션' 대상이라
+  // 주말에는 대상 자체가 존재하지 않으므로 현행 게이트를 그대로 둔다(하위호환).
+  for (const role of ["preview", "both"] as const) {
     const sat = await resolveSession("us", kstMorning("2026-07-18"), "2026-07-18", role);
     assert.equal(sat.holiday, true, `토요일 ${role} 이 휴장이 아니다`);
     assert.equal(sat.reason, "주말");
@@ -167,26 +199,33 @@ test("휴장 스냅샷의 sessionDate 는 역할과 무관하게 '직전 마감 
   assert.equal(sat.sessionDate, "2026-07-17");
 });
 
-test("미국 공휴일(2026-07-03 독립기념일 대체휴장)은 두 역할 모두 스킵된다", async () => {
+test("미국 공휴일(2026-07-03 독립기념일 대체휴장) — 프리뷰만 스킵, 결산은 직전 세션을 처리한다", async () => {
   assert.equal((await isMarketClosed("us", "2026-07-03")).closed, true);
-  for (const role of ["close", "preview"] as const) {
-    const r = await resolveSession("us", kstMorning("2026-07-03"), "2026-07-03", role);
-    assert.equal(r.holiday, true);
-  }
-  // 다음 거래일(월) 아침이 공휴일 직전 세션(07-02 목)을 이어받는다 — 누락되지 않는다.
-  const mon = await resolveSession("us", kstMorning("2026-07-06"), "2026-07-06", "close");
-  assert.equal(mon.holiday, false);
+  // 오늘 밤 열릴 세션이 없으므로 프리뷰는 휴장.
+  const preview = await resolveSession("us", kstMorning("2026-07-03"), "2026-07-03", "preview");
+  assert.equal(preview.holiday, true);
+  // 반면 07-02(목) 세션은 이미 마감돼 실재한다 → 공휴일 아침에 결산한다(예전보다 하루 빠르다).
+  const close = await resolveSession("us", kstMorning("2026-07-03"), "2026-07-03", "close");
+  assert.equal(close.holiday, false);
+  assert.equal(close.settled, false);
+  assert.equal(close.sessionDate, "2026-07-02");
+  // 그리고 다음 거래일(월) 아침은 그 세션을 다시 결산하지 않는다 — 중복 없음.
+  const mon = await resolveSession("us", kstMorning("2026-07-06"), "2026-07-06", "close", "2026-07-02");
+  assert.equal(mon.settled, true);
   assert.equal(mon.sessionDate, "2026-07-02");
 });
 
 test("불변식 — 모든 뉴욕 세션이 정확히 1회씩 결산된다(추수감사절 주 시뮬레이션)", async () => {
   // 게이트가 통과한 KST 날짜마다 아침 결산 대상을 모아, 중복·누락이 없는지 확인한다.
+  // 결산이 성공하면 이력(settled)이 전진한다 — 운영 루프를 그대로 흉내낸다.
   const collected: string[] = [];
+  let settled: string | null = null;
   for (let d = 20; d <= 30; d++) {
     const kstDate = `2026-11-${String(d).padStart(2, "0")}`;
-    const r = await resolveSession("us", kstMorning(kstDate), kstDate, "close");
-    if (r.holiday) continue; // 이 날은 런이 아예 발화하지 않는다(= 알림 없음)
+    const r = await resolveSession("us", kstMorning(kstDate), kstDate, "close", settled);
+    if (r.holiday || r.settled) continue; // 이 날은 결산 브리핑이 나가지 않는다(= 알림 없음)
     collected.push(r.sessionDate as string);
+    settled = r.sessionDate;
   }
   // 중복 0
   assert.equal(new Set(collected).size, collected.length, `결산이 중복됐다: ${collected.join(",")}`);

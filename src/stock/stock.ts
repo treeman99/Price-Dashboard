@@ -664,8 +664,30 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     ensureSeedTickers();
     log.info(`증시 역할 판정 [${market}] role=${role} ← ${roleReason}`);
 
-    // ── 1. 휴장 체크 (LLM 호출 전에 — 휴장이면 토큰을 한 푼도 쓰지 않는다) ──
-    const closed = await resolveSession(market, now, today, role);
+    // ── 1. 휴장 / 중복 결산 체크 (LLM 호출 전에 — 여기서 접으면 토큰을 한 푼도 쓰지 않는다) ──
+    //
+    // 결산 완료 판정의 근거는 **성공한 결산 스냅샷(source==="llm")뿐**이다. 수집 실패로 남은
+    // 스냅샷을 '완료'로 치면 그 세션의 결산이 영영 재시도되지 않는다(다음 아침에는
+    // lastUsSessionDate 가 이미 전진해 있어 누락이 조용히 확정된다).
+    // prev 는 **같은 역할**의 스냅샷이라 role='close' 일 때 정확히 결산 이력을 가리킨다.
+    const lastSettled = prev?.source === "llm" ? (prev.sessionDate ?? null) : null;
+    const closed = await resolveSession(market, now, today, role, lastSettled);
+
+    if (closed.settled) {
+      // 이미 결산한 세션 — 스냅샷을 만들지 않는다(휴장과 다른 종료다, resolveSession 주석 참고).
+      // 슬롯만 SLOT_HANDLED 로 닫아 catch-up 이 30분마다 되돌아오지 않게 한다.
+      finishStockRun(today, market, true, {
+        settled: true,
+        sessionDate: closed.sessionDate,
+        notifiedBySlot: mergeNotified(loadNotifiedMap(today, market), slot, SLOT_HANDLED),
+      });
+      log.info(
+        `증시 결산 생략 [${market}] ${today} 슬롯 ${slot} — ${closed.sessionDate} 세션은 이미 결산됨 ` +
+          `(재생성·알림 없음, 기존 결산 브리핑 유지)`
+      );
+      return prev ?? getStockSnapshot(market) ?? emptySnapshot(market, today, "아직 수집되지 않았습니다.");
+    }
+
     if (closed.holiday) {
       // ⚠️ 휴장 스냅샷의 date 는 반드시 **오늘**(수집일)이다. sessionDate 를 넣으면
       // catch-up 게이트가 계속 '오늘 것 없음'으로 보고 30분마다 무한 재시도한다.
@@ -854,6 +876,16 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
   }
 }
 
+/** resolveSession 의 종료 상태. holiday 와 settled 는 **서로 다른 종료**다(아래 주석 참고). */
+export interface ResolvedSession {
+  /** 대상 세션 자체가 없다(주말·공휴일) → 휴장 스냅샷을 만든다. */
+  holiday: boolean;
+  /** 대상 세션은 실재하나 이미 결산했다 → 스냅샷·알림 없이 슬롯만 닫는다. */
+  settled: boolean;
+  sessionDate: string | null;
+  reason: string | null;
+}
+
 /**
  * 대상 거래일과 휴장 여부를 정한다.
  *
@@ -861,56 +893,76 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
  * 항상 **09:00 개장 전 프리뷰**다. 대상은 오늘 세션. nextKrSessionDate 가 오늘이 아닌 날을
  * 돌려주면 오늘은 거래일이 아니다 → 휴장.
  *
- * ── 미국장: 발화 게이트와 내용 날짜를 분리한다 ──
- * 미국장 브리핑은 이제 슬롯마다 성격이 다르다(role). 하지만 **휴장 게이트는 역할과 무관하게
- * 공통이다** — 이것이 이 함수의 가장 중요한 설계 결정이라 근거를 남긴다.
+ * ── 미국장: 게이트가 역할마다 다르다 ──
  *
- * 게이트는 `isMarketClosed("us", today_KST)` 하나다. 이건 "뉴욕 날짜 판정"이라기보다
- * **"이 KST 날짜에 미국장 브리핑을 보내는가"라는 정책 게이트**로 읽어야 한다. 그대로 두면
- * 발화하는 날의 집합이 역할 분리 전과 **비트 단위로 동일**하다 → 주말·공휴일에 요청되지 않은
- * 새 알림이 생기는 것이 구조적으로 불가능하다.
+ * · role='close' → **직전 마감 세션 기준**. "뉴욕에서 마감된 세션 중 아직 결산하지 않은 것이
+ *   있는가"로 판정한다. KST 날짜가 주말이어도 금요일 밤 뉴욕 세션은 실재하므로 **토요일
+ *   아침에 결산한다.**
  *
- * ⚠️ '결산 게이트는 직전 마감 세션이 있는가로 판정해야 한다'는 것이 언뜻 자연스러워 보이지만
- *    **채택하지 않았다.** 그 술어는 "뉴욕 D−1 이 거래일인가" 이고, 토요일 08:00 KST 는
- *    D−1=금요일이라 참이 되어 **토요일 아침 이메일이 신설**된다(+미국 공휴일 아침 연 ~9회).
- *    사용자가 요청한 적 없는 알림이므로 금지다.
+ *   ⚠️ 예전 게이트는 역할과 무관하게 `isMarketClosed("us", today_KST)` 하나였다. 그 설계는
+ *      토요일 아침 알림이 신설되는 것을 막았지만, 대가로 **금요일 뉴욕 세션의 결산이 월요일
+ *      아침까지 밀렸다.** 그 사이 결산 탭과 등록 종목 시계열이 목요일 세션에 멈춰 있어
+ *      "어제 31일 장이 열렸는데 화면은 30일"로 보였다(2026-08-01 관측: 지수는 휴장 경로가
+ *      새로 조회해 07-31, 등록 종목은 07-30 — 한 화면 안에서 기준일이 갈렸다).
+ *      사용자가 **토요일 아침 알림을 받는 쪽**을 선택해 게이트를 바꿨다.
  *
- * 현행 게이트로도 결산 누락이 없다는 근거(불변식):
- *   아침 런이 발화하는 조건은 "뉴욕 날짜 D 가 거래일"이고, 그때 lastUsSessionDate 는 D 직전
- *   세션 S 를 준다. 다음 발화일 D' 의 결산 대상은 D(≠S)다. 따라서 **모든 뉴욕 세션이 정확히
- *   1회씩, 다음 뉴욕 거래일 아침에 결산된다 — 중복도 누락도 없다.**
- *   유일한 대가는 **지연**(금요일 마감 → 월요일 아침, 연휴면 최대 3~4일)이고, 이는 새로
- *   생기는 대가가 아니라 이미 현행 동작이다.
+ *   중복 결산 방지는 이제 게이트가 아니라 **lastSettledSession** 이 맡는다. 토·일·월 아침은
+ *   모두 lastUsSessionDate 가 같은 금요일 세션을 주므로, 이 인자가 없으면 같은 세션을 세 번
+ *   결산하고 알림도 세 번 나간다. 이미 결산한 세션이면 `settled: true` 로 접어 호출부가
+ *   스냅샷 생성·알림 없이 슬롯만 닫게 한다.
  *
- * 역할별로 갈리는 것은 게이트가 아니라 **내용 날짜(sessionDate)** 다:
- *   · role='preview' → today (오늘 밤 열릴 뉴욕 세션)
- *   · role='close'   → lastUsSessionDate (이미 마감된 직전 세션)
- *   · role='both'    → lastUsSessionDate (현행 혼합본과 동일 — 하위호환)
+ *   ⚠️ settled 를 휴장으로 접으면 안 된다. 월요일 아침(=뉴욕 일요일 밤)은 결산할 새 세션이
+ *      없을 뿐 휴장이 아닌데, 휴장 스냅샷을 쓰면 both 파일을 덮어 **거래일 아침 화면에
+ *      '휴장(주말)' 배너**가 뜬다. 아무것도 저장하지 않아야 토요일에 만든 결산이 그대로 보인다.
+ *
+ * · role='preview' → 현행 그대로 `isMarketClosed("us", today_KST)`. 프리뷰 대상은 **오늘 밤
+ *   열릴** 세션이라 주말·공휴일에는 대상 자체가 없다. 프리뷰 밴드(14:00~22:30 KST)에서는
+ *   뉴욕 날짜 == KST 날짜라 이 판정이 정확하다(slot-role.ts 안전대 주석).
+ *
+ * · role='both' → 결산+프리뷰 혼합이라 프리뷰 성격을 포함한다. 게이트도 프리뷰와 같이 두어
+ *   **하위호환을 유지한다**(슬롯이 1개인 구성과 수동 갱신이 이 역할로 떨어진다).
  *
  * 휴장 스냅샷의 sessionDate 는 역할과 무관하게 `last` 로 통일한다. preview 휴장에서 today 를
  * 넣으면 "07-25(토) 세션" 이라는 **존재하지 않는 세션**을 화면에 표시하게 된다.
  * 휴장 문구의 역할별 차이는 sessionDate 가 아니라 렌더 계층에서 처리한다.
  *
- * export 하는 이유: 위 불변식과 역할별 sessionDate 는 **테스트 없이는 회귀를 감지할 방법이
+ * export 하는 이유: 아래 불변식과 역할별 sessionDate 는 **테스트 없이는 회귀를 감지할 방법이
  * 전혀 없다.** 예전에는 private 라 단위 테스트가 0건이었다.
+ *
+ * 불변식(중복도 누락도 없음): 결산 대상은 항상 lastUsSessionDate 이고, 결산을 마치면
+ * lastSettledSession 이 그 값으로 올라가 같은 세션이 다시 대상이 되지 않는다. 다음 뉴욕
+ * 세션이 마감되면 lastUsSessionDate 가 전진해 게이트가 다시 열린다.
+ *
+ * @param lastSettledSession 이 시장에서 **결산을 성공적으로 마친** 마지막 뉴욕 세션
+ *   (close 스냅샷의 sessionDate). null 이면 결산 이력이 없다는 뜻이라 중복 판정을 하지 않는다.
  */
 export async function resolveSession(
   market: StockMarket,
   now: Date,
   today: string,
-  role: StockSlotRole
-): Promise<{ holiday: boolean; sessionDate: string | null; reason: string | null }> {
+  role: StockSlotRole,
+  lastSettledSession: string | null = null
+): Promise<ResolvedSession> {
   if (market === "kr") {
     const next = await nextKrSessionDate(now);
-    if (next === today) return { holiday: false, sessionDate: today, reason: null };
+    if (next === today) return { holiday: false, settled: false, sessionDate: today, reason: null };
     const { reason } = await isMarketClosed("kr", today);
-    return { holiday: true, sessionDate: next, reason: reason ?? "휴장" };
+    return { holiday: true, settled: false, sessionDate: next, reason: reason ?? "휴장" };
+  }
+  const last = await lastUsSessionDate(now);
+  if (role === "close") {
+    // `>=` 인 이유: 시계 되돌림·수동 개입으로 결산 이력이 last 보다 미래일 수 있다.
+    // 그 경우에도 '이미 처리됨'으로 접는 쪽이 중복 발송보다 안전하다(ISO 날짜라 사전식=시간순).
+    if (lastSettledSession !== null && lastSettledSession >= last) {
+      return { holiday: false, settled: true, sessionDate: last, reason: "이미 결산 완료" };
+    }
+    return { holiday: false, settled: false, sessionDate: last, reason: null };
   }
   const tonight = await isMarketClosed("us", today);
-  const last = await lastUsSessionDate(now);
-  if (tonight.closed) return { holiday: true, sessionDate: last, reason: tonight.reason ?? "휴장" };
-  if (role === "preview") return { holiday: false, sessionDate: today, reason: null };
-  return { holiday: false, sessionDate: last, reason: null };
+  if (tonight.closed)
+    return { holiday: true, settled: false, sessionDate: last, reason: tonight.reason ?? "휴장" };
+  if (role === "preview") return { holiday: false, settled: false, sessionDate: today, reason: null };
+  return { holiday: false, settled: false, sessionDate: last, reason: null };
 }
 
 /** 현재 시각 라벨 "YYYY-MM-DD HH:mm" (뉴스/유튜브 큐레이터와 동일 포맷). */
