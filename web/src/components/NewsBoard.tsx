@@ -5,6 +5,7 @@ import {
   Newspaper,
   Link as LinkIcon,
   CalendarDays,
+  AlertTriangle,
   X,
   Pencil,
   Plus,
@@ -13,12 +14,13 @@ import {
 } from "lucide-react";
 import type { NewsSnapshot, NewsItem, NewsCategoryDef } from "@shared/types";
 import { safeHref } from "@shared/url";
-import { api } from "@/lib/api";
+import { api, type CollectAttempt } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
+import { SnapshotNotice, snapshotHealth } from "@/components/SnapshotNotice";
 
 function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
   const href = safeHref(item.link);
@@ -164,6 +166,10 @@ export function NewsBoard() {
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 마지막 수집 '시도'의 성패. 스냅샷만으로는 "실패해서 어제 것"과 "아직 오늘 수집 전"을 못 가른다.
+  const [attempt, setAttempt] = useState<CollectAttempt | null>(null);
+  // 다른 탭이 AI 수집을 붙잡고 있어 '지금 갱신'이 시작조차 못 한 경우의 안내.
+  const [busyMsg, setBusyMsg] = useState<string | null>(null);
   const [dialog, setDialog] = useState<CategoryDialogState | null>(null);
 
   async function load() {
@@ -178,11 +184,15 @@ export function NewsBoard() {
       setLoading(false);
     }
   }
-  async function checkStatus() {
+  /** 진행 상태 + 마지막 시도 기록을 갱신하고 '수집 중'인지 돌려준다(실패하면 null). */
+  async function checkStatus(): Promise<boolean | null> {
     try {
-      setCollecting((await api.newsStatus()).collecting);
+      const s = await api.newsStatus();
+      setCollecting(s.collecting);
+      setAttempt(s.lastAttempt ?? null);
+      return s.collecting;
     } catch {
-      /* 상태 폴링 실패는 무시 */
+      return null; // 상태 폴링 실패는 무시(다음 주기에 재시도)
     }
   }
   useEffect(() => {
@@ -191,27 +201,25 @@ export function NewsBoard() {
   }, []);
 
   // 수집 중이면 5초마다 상태 확인 → 완료되면 스냅샷을 자동으로 다시 불러온다.
+  // 실패로 끝났다면 스냅샷은 그대로겠지만, 함께 받아 둔 시도 기록이 안내 배너로 이유를 설명한다.
   useEffect(() => {
     if (!collecting) return;
     const id = setInterval(async () => {
-      let done = false;
-      try {
-        done = !(await api.newsStatus()).collecting;
-      } catch {
-        return; // 일시 오류는 다음 주기에 재시도
-      }
-      if (done) {
-        setCollecting(false);
-        await load(); // 완료 → 새 결과 반영
-      }
+      if ((await checkStatus()) === false) await load(); // 완료 → 새 결과 반영
     }, 5000);
     return () => clearInterval(id);
   }, [collecting]);
 
   async function refresh() {
     setErr(null);
+    setBusyMsg(null);
     try {
-      await api.refreshNews(); // 백그라운드 시작(202) 또는 이미 수집 중(409) → 둘 다 정상
+      const r = await api.refreshNews(); // 백그라운드 시작(202) 또는 시작 불가(409)
+      if (r.busy && !r.collecting) {
+        // 다른 탭이 AI 수집을 붙잡고 있다 → 시작된 게 없으므로 '수집 중'으로 넘어가면 안 된다.
+        setBusyMsg(r.reason);
+        return;
+      }
       setCollecting(true); // '수집 중' 배너 + 폴링 시작 → 완료되면 자동 반영
       api.newsCategories().then(setDefs).catch(() => {}); // 새 카테고리 즉시 반영
     } catch (e) {
@@ -288,12 +296,25 @@ export function NewsBoard() {
         <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
       )}
 
+      {busyMsg && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{busyMsg}</span>
+        </div>
+      )}
+
       {collecting && (
         <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
           뉴스를 수집하는 중입니다… 1~3분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
         </div>
       )}
+
+      {/* 실패해도 어제 스냅샷이 그대로 남아 '오늘 것'처럼 보이므로, 어느 날짜인지 반드시 알린다. */}
+      <SnapshotNotice
+        health={snapshotHealth(snap, attempt, { collecting })}
+        notes={snap?.notes}
+      />
 
       {!defs.length ? (
         <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">

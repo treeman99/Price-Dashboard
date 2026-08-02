@@ -6,8 +6,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config, validateConfig } from "../config.ts";
 import { getStockPoints, upsertStockPoints } from "../db/repo.ts";
-import { getEventsSnapshot, refreshEvents, isEventsCollecting } from "../events/events.ts";
-import { getNewsSnapshot, refreshNews, isNewsCollecting } from "../news/news.ts";
+import {
+  getEventsSnapshot,
+  refreshEvents,
+  isEventsCollecting,
+  getEventsLastAttempt,
+} from "../events/events.ts";
+import {
+  getNewsSnapshot,
+  refreshNews,
+  isNewsCollecting,
+  getNewsLastAttempt,
+} from "../news/news.ts";
 import {
   loadCategories,
   addCategory,
@@ -75,7 +85,7 @@ import { isPulseNotifyEnabled } from "../notify/pulse-imessage.ts";
 import { allRecentPulseAlerts } from "../db/repo.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
 import { getModelSettings, saveAgentModel } from "../util/model-store.ts";
-import { rescheduleAll } from "../scheduler/scheduler.ts";
+import { rescheduleAll, withLlmSlot } from "../scheduler/scheduler.ts";
 import { generateCategoryDescription, shouldAutoDescribe } from "../util/category-describe.ts";
 import { sendIMessage, isIMessageConfigured } from "../notify/imessage.ts";
 import { log } from "../util/log.ts";
@@ -86,6 +96,111 @@ export const api = Router();
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const LAUNCHD_LABEL = "com.daegun.dailyprice";
 const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+
+// ── 수동 '지금 갱신' — 전역 LLM 슬롯 경유 ─────────────────────────────────────
+//
+// 2026-08-02 실측 결함: 수동 갱신 라우트들이 refreshX() 를 **직접** 불러 스케줄러의 전역 LLM
+// 세마포어(withLlmSlot)와 전원 어서션(withWakeLock)을 통째로 우회했다. 그 결과
+//   · 사용자가 누른 갱신과 정시 catch-up 이 겹쳐 **LLM 세션 2개가 동시에** 떴고,
+//   · 큐를 정상적으로 통과한 스케줄 런은 이미 돌고 있는 수동 런의 탭별 running 가드에 막혀
+//     아무 일도 하지 않고 즉시 반환됐는데, 스케줄러는 그 빈손을 '실패'로 읽어 백오프를 걸었다.
+// 그래서 수동 갱신도 스케줄러와 **같은 슬롯**을 타야 한다. 공개 진입점 withLlmSlot 하나만
+// 통과하면 ①전역 동시 1개 직렬화 ②큐 통과 뒤 전원 어서션 ③재진입 교착 회피가 함께 보장되므로,
+// 이 파일이 caffeinate 를 따로 잡을 일은 없다(잡으면 줄만 서 있는 작업이 맥을 깨워 둔다).
+//
+// ★ 막는 것은 **동시 실행뿐**이다. catch-up 연속 실패 백오프는 여전히 타지 않는다 — 그 게이트는
+//   스케줄러 내부(safeRefreshX)에만 있고 이 파일은 refreshX 를 직접 부르므로 구조적으로
+//   우회된다. 사용자가 직접 누른 갱신까지 백오프로 막으면 그게 진짜 먹통이다.
+//
+// ★ 슬롯이 점유돼 있으면 **줄 서지 않고 즉시 409** 를 준다. withLlmSlot 은 무한 대기열이라
+//   그냥 태우면 유튜브 정시 수집(최대 20분) 뒤에 조용히 줄을 서게 되는데, 그동안
+//   `/xxx/status` 의 collecting 은 false 라 화면에는 "아무 일도 안 일어남"으로 보이고,
+//   사용자는 같은 버튼을 반복해 눌러 대기열만 늘린다. 하염없이 기다리게 하느니 "지금은 A
+//   수집 중"이라고 말해 주는 편이 정직하고, 언제 다시 누를지 사용자가 정할 수 있다.
+//   (모든 대상 라우트가 원래 202 fire-and-forget 이라, 이 판별에 드는 시간도 1ms 미만이다.)
+
+/** 수동으로 시작해 지금 슬롯을 쥐고 있는 작업. 경과 시간을 안내하기 위한 것. */
+let manualHolder: { label: string; since: number } | null = null;
+
+/**
+ * 지금 전역 LLM 슬롯을 쥐고 있을 법한 수집의 표시명.
+ *
+ * 슬롯 보유자를 스케줄러가 직접 알려주지는 않으므로(내보내는 것은 withLlmSlot 하나뿐),
+ * 슬롯 대상 작업들의 '수집 중' 플래그로 되짚는다. 펄스는 슬롯을 타지 않으므로 제외한다.
+ */
+function llmBusyLabel(): string | null {
+  if (isNewsCollecting()) return "뉴스";
+  if (isYoutubeCollecting()) return "유튜브";
+  if (isEventsCollecting()) return "팝업/전시";
+  if (isStockCollecting("kr")) return "국내 증시";
+  if (isStockCollecting("us")) return "미국 증시";
+  if (isLottoCycleRunning()) return "로또";
+  return null;
+}
+
+/** "3분 12초" 처럼 사람이 읽는 경과. */
+function formatElapsed(ms: number): string {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  return sec < 60 ? `${sec}초` : `${Math.floor(sec / 60)}분 ${sec % 60}초`;
+}
+
+/** 슬롯 점유로 시작하지 못했을 때의 409 본문. 기술 용어 없이 상황만 전한다. */
+function llmBusyBody(): { error: string; busy: true; collecting: false } {
+  const held = manualHolder;
+  const label = held?.label ?? llmBusyLabel();
+  const elapsed = held ? `(${formatElapsed(Date.now() - held.since)} 경과) ` : "";
+  return {
+    error: `${label ? `${label} ` : "다른 "}수집이 진행 중입니다 ${elapsed}— 끝난 뒤 다시 눌러 주세요.`,
+    busy: true,
+    // 이 탭 자체는 수집 중이 아니다. 화면이 '수집 중' 배너를 띄우고 폴링하지 않도록 명시한다.
+    collecting: false,
+  };
+}
+
+/**
+ * 수동 갱신 1건을 전역 LLM 슬롯 위에서 시작한다.
+ * 반환 false = **아무것도 시작하지 않았다**(슬롯 점유 중) → 호출부가 409 로 안내한다.
+ *
+ * 점유 판별 방법: withLlmSlot 은 "지금 비었나?"를 알려주지 않고 큐잉만 한다. 그래서 일단
+ * 줄을 세운 뒤 **한 매크로태스크 안에 실행에 들어갔는지**로 판별한다 — 큐가 비어 있으면
+ * withLlmSlot 은 이미 settled 된 꼬리를 await 할 뿐이라 마이크로태스크 몇 개 만에 fn 에
+ * 진입하고, setImmediate 는 마이크로태스크 큐를 전부 비운 뒤에야 발화한다. 그때까지도
+ * 진입하지 못했다면 앞에 누군가 있다는 뜻이므로 대기표를 버린다(차례가 와도 즉시 반환).
+ *
+ * ⚠️ 앞 작업이 **바로 그 순간** 슬롯을 놓는 중이면 드물게 '점유 중'으로 볼 수 있다.
+ *    최악값이 "잠시 후 다시" 한 번이라 감수한다. 반대 방향(동시 실행 허용)의 오판은 없다 —
+ *    실제로 슬롯을 얻은 뒤에만 본작업이 시작되기 때문이다.
+ *
+ * ⚠️ 이 함수는 **절대 reject 하지 않는다**(기다리는 대상이 resolve 전용 프라미스뿐이고, 본작업의
+ *    예외는 위 catch 가 삼킨다). Express 4 는 async 핸들러의 rejection 을 잡지 못해 요청이 그대로
+ *    매달리므로, 호출부가 try/catch 없이 await 할 수 있으려면 이 성질이 유지되어야 한다.
+ */
+async function startManualLlmJob(display: string, fn: () => Promise<unknown>): Promise<boolean> {
+  const label = `${display}[수동]`;
+  let phase: "waiting" | "running" | "dropped" = "waiting";
+
+  void withLlmSlot(label, async () => {
+    if (phase === "dropped") return; // 호출부가 이미 409 로 답했다 → 슬롯을 그대로 반납
+    phase = "running";
+    manualHolder = { label: display, since: Date.now() };
+    try {
+      // 전원 어서션(caffeinate)은 withLlmSlot 안에서 이미 잡힌다 — 여기서 또 잡지 않는다.
+      return await fn();
+    } finally {
+      manualHolder = null;
+    }
+  }).catch((e: unknown) => log.warn(`${display} 수동 수집 예외: ${(e as Error).message}`));
+
+  // 마이크로태스크가 전부 빠질 때까지 양보한다(두 번이면 넉넉하다 — 큐 꼬리는 프라미스 두어 겹).
+  await new Promise<void>((r) => setImmediate(r));
+  await new Promise<void>((r) => setImmediate(r));
+  if (phase === "waiting") {
+    phase = "dropped";
+    log.info(`${display} 수동 갱신 거절 — 다른 LLM 수집이 슬롯을 점유 중`);
+    return false;
+  }
+  return true;
+}
 
 api.get("/health", (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
@@ -210,21 +325,31 @@ api.get("/events", (_req, res) => {
  * 지금 갱신 (수동). 수집은 수 분 걸릴 수 있어 **백그라운드로 시작**하고 즉시 202를 반환한다.
  * 프론트는 /events/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /events 를 다시 불러온다.
  * 이미 수집 중이면(수동/정시 무관) 409로 안내. 수동 갱신은 이메일을 보내지 않음(중복 방지).
+ * 다른 탭이 LLM 슬롯을 쥐고 있어도 409 — 파일 상단 '수동 지금 갱신' 주석 참고.
  */
-api.post("/events/refresh", (_req, res) => {
+api.post("/events/refresh", async (_req, res) => {
   if (isEventsCollecting()) {
     return res.status(409).json({ error: "이미 팝업/전시 수집이 진행 중입니다.", collecting: true });
   }
-  void refreshEvents({ trigger: "manual", notify: false }).catch((e) =>
-    log.warn(`팝업/전시 수동 수집 예외: ${(e as Error).message}`)
+  const started = await startManualLlmJob("팝업/전시", () =>
+    refreshEvents({ trigger: "manual", notify: false })
   );
+  if (!started) return res.status(409).json(llmBusyBody());
   res.status(202).json({ started: true, collecting: true });
 });
 
-/** 팝업/전시 수집 진행 상태(프론트 폴링용). */
+/**
+ * 팝업/전시 수집 진행 상태(프론트 폴링용).
+ * lastAttempt 는 '갱신을 눌러도 화면이 그대로'인 상황을 설명하기 위한 것 — 유튜브 상태와 같은
+ * 계약이다. 실패해도 기존(=어제) 스냅샷이 남으므로 updatedAt 만으로는 실패를 알 수 없다.
+ */
 api.get("/events/status", (_req, res) => {
   const snap = getEventsSnapshot();
-  res.json({ collecting: isEventsCollecting(), updatedAt: snap?.updatedAt ?? null });
+  res.json({
+    collecting: isEventsCollecting(),
+    updatedAt: snap?.updatedAt ?? null,
+    lastAttempt: getEventsLastAttempt(),
+  });
 });
 
 // ── 데일리 뉴스 다이제스트 ──
@@ -238,21 +363,31 @@ api.get("/news", (_req, res) => {
  * 지금 갱신 (수동). 수집은 1~3분 걸릴 수 있어 **백그라운드로 시작**하고 즉시 202를 반환한다.
  * 프론트는 /news/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /news 를 다시 불러온다.
  * 이미 수집 중이면(수동/정시 무관) 409로 안내. 수집한 내용은 이메일로도 발송(0건이면 생략).
+ * 다른 탭이 LLM 슬롯을 쥐고 있어도 409 — 파일 상단 '수동 지금 갱신' 주석 참고.
  */
-api.post("/news/refresh", (_req, res) => {
+api.post("/news/refresh", async (_req, res) => {
   if (isNewsCollecting()) {
     return res.status(409).json({ error: "이미 뉴스 수집이 진행 중입니다.", collecting: true });
   }
-  void refreshNews({ trigger: "manual", notify: true }).catch((e) =>
-    log.warn(`뉴스 수동 수집 예외: ${(e as Error).message}`)
+  const started = await startManualLlmJob("뉴스", () =>
+    refreshNews({ trigger: "manual", notify: true })
   );
+  if (!started) return res.status(409).json(llmBusyBody());
   res.status(202).json({ started: true, collecting: true });
 });
 
-/** 뉴스 수집 진행 상태(프론트 폴링용). */
+/**
+ * 뉴스 수집 진행 상태(프론트 폴링용).
+ * lastAttempt 는 '갱신을 눌러도 화면이 그대로'인 상황을 설명하기 위한 것 — 수집이 실패하면
+ * 직전(=어제) 스냅샷을 유지하므로 updatedAt 만으로는 실패를 구분할 수 없다.
+ */
 api.get("/news/status", (_req, res) => {
   const snap = getNewsSnapshot();
-  res.json({ collecting: isNewsCollecting(), updatedAt: snap?.updatedAt ?? null });
+  res.json({
+    collecting: isNewsCollecting(),
+    updatedAt: snap?.updatedAt ?? null,
+    lastAttempt: getNewsLastAttempt(),
+  });
 });
 
 /** 뉴스 카테고리 목록 */
@@ -328,15 +463,17 @@ api.get("/youtube", (_req, res) => {
  * 지금 갱신 (수동). 수집은 수 분~수십 분 걸리므로 **백그라운드로 시작**하고 즉시 202를 반환한다.
  * 프론트는 /youtube/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /youtube 를 다시 불러온다.
  * 이미 수집 중이면 새로 시작하지 않고 409로 안내(중복 수집 방지).
+ * 다른 탭이 LLM 슬롯을 쥐고 있어도 409 — 파일 상단 '수동 지금 갱신' 주석 참고.
  */
-api.post("/youtube/refresh", (_req, res) => {
+api.post("/youtube/refresh", async (_req, res) => {
   if (isYoutubeCollecting()) {
     return res.status(409).json({ error: "이미 유튜브 수집이 진행 중입니다.", collecting: true });
   }
-  // 응답을 막지 않도록 await 하지 않고 시작(내부에서 running 가드/이메일/저장 처리).
-  void refreshYoutube({ trigger: "manual", notify: true }).catch((e) =>
-    log.warn(`유튜브 수동 수집 예외: ${(e as Error).message}`)
+  // 응답을 막지 않도록 완료를 기다리지 않고 시작(내부에서 running 가드/이메일/저장 처리).
+  const started = await startManualLlmJob("유튜브", () =>
+    refreshYoutube({ trigger: "manual", notify: true })
   );
+  if (!started) return res.status(409).json(llmBusyBody());
   res.status(202).json({ started: true, collecting: true });
 });
 
@@ -774,6 +911,10 @@ api.get("/stock/pulse/status", (_req, res) => {
 /**
  * 펄스 지금 실행. 백오프를 무시한다(사용자가 직접 누른 것이므로).
  * 실행이 수 분 걸리므로 202 로 먼저 응답하고 백그라운드에서 돌린다(증시 수동 갱신과 같은 패턴).
+ *
+ * ★ 다른 수동 갱신과 달리 **전역 LLM 슬롯을 타지 않는다.** 스케줄러가 펄스를 슬롯 대상에서
+ *   뺀 것과 같은 이유다(scheduler.ts 세마포어 주석): 매시간 도는 10분짜리라, 앞선 20분 작업에
+ *   막히면 그 슬롯이 통째로 죽는다. 직렬화가 오히려 해롭다.
  */
 api.post("/stock/pulse/run", (req, res) => {
   if (isPulseRunning()) {
@@ -825,7 +966,7 @@ api.get("/stock/:market/status", (req, res) => {
  * 프론트는 /stock/:market/status 를 폴링해 '수집 중'을 표시하고, 완료되면 /stock/:market 을 다시 불러온다.
  * 이미 수집 중이면 새로 시작하지 않고 409로 안내(중복 수집 방지).
  */
-api.post("/stock/:market/refresh", (req, res) => {
+api.post("/stock/:market/refresh", async (req, res) => {
   const market = parseMarket(req.params.market);
   if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
   if (isStockCollecting(market)) {
@@ -835,9 +976,14 @@ api.post("/stock/:market/refresh", (req, res) => {
   // 그 슬롯이 이미 발송됐으면 조용히 스킵, 미발송이면 여기서 보충 발송된다.
   // 오늘 지난 슬롯이 아직 없으면(첫 슬롯 이전) 알림 없이 화면만 갱신한다 — 보내면 곧 오는
   // 첫 정시 슬롯이 같은 브리핑을 한 번 더 보낸다. '지난 슬롯만 후보'라 미래 슬롯 선점도 없다.
-  void refreshStock({ market, trigger: "manual", notify: true }).catch((e) =>
-    log.warn(`증시 수동 수집 예외 [${market}]: ${(e as Error).message}`)
+  //
+  // ⚠️ 슬롯을 얻은 뒤에야 refreshStock 이 시작되므로 '런 시작 시각'은 큐를 통과한 시점이다.
+  //    거기서 슬롯(브리핑 회차)을 정하는 것이 맞다 — 버튼을 누른 시각이 아니라 실제로 데이터를
+  //    모은 시각이 그 브리핑의 기준이기 때문이다.
+  const started = await startManualLlmJob(market === "kr" ? "국내 증시" : "미국 증시", () =>
+    refreshStock({ market, trigger: "manual", notify: true })
   );
+  if (!started) return res.status(409).json(llmBusyBody());
   res.status(202).json({ started: true, collecting: true });
 });
 
@@ -982,13 +1128,14 @@ api.get("/lotto", (_req, res) => {
  * 채점하지 않고, 이미 못박은 번호는 덮어쓰지 않는다) 여러 번 눌러도 기록이 망가지지 않는다.
  *
  * ⚠️ 응답을 기다리지 않는다 — 에이전트 호출이 최대 10분이라 await 하면 요청이 끊긴다.
+ *    다만 **전역 LLM 슬롯은 탄다**(파일 상단 '수동 지금 갱신' 주석). 이 경로는 화면 버튼이
+ *    없어 사람이 직접 부르는 일이 드물지만, 그렇다고 정시 수집과 겹쳐도 되는 건 아니다.
  */
-api.post("/lotto/cycle", (_req, res) => {
+api.post("/lotto/cycle", async (_req, res) => {
   if (isLottoCycleRunning()) {
     return res.status(409).json({ error: "주간 사이클이 이미 진행 중입니다." });
   }
-  void runLottoWeeklyCycle("manual").catch((e) =>
-    log.error(`로또 주간 사이클 실행 오류: ${(e as Error).message}`)
-  );
+  const started = await startManualLlmJob("로또 사이클", () => runLottoWeeklyCycle("manual"));
+  if (!started) return res.status(409).json(llmBusyBody());
   res.json({ ok: true });
 });

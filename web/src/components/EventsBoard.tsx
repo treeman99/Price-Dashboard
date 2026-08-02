@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus, Tag, PartyPopper } from "lucide-react";
+import { RefreshCw, Loader2, MapPin, CalendarDays, Building2, Sparkles, Link as LinkIcon, CalendarPlus, Tag, PartyPopper, AlertTriangle } from "lucide-react";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem, EventTag } from "@shared/types";
 import { googleCalendarUrl } from "@shared/calendar";
 import { splitPopupsByRegion, withLinkedItemsOnly, POPUP_GROUPS } from "@shared/events";
 import { safeHref } from "@shared/url";
-import { api } from "@/lib/api";
+import { api, type CollectAttempt } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScheduleControl } from "@/components/ScheduleControl";
+import { SnapshotNotice, snapshotHealth } from "@/components/SnapshotNotice";
 
 const TAG_STYLE: Record<Exclude<EventTag, null>, { bg: string; label: string }> = {
   신규: { bg: "#03C75A", label: "신규" },
@@ -276,6 +277,10 @@ export function EventsBoard() {
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 마지막 수집 '시도'의 성패. 스냅샷만으로는 "실패해서 어제 것"과 "아직 오늘 수집 전"을 못 가른다.
+  const [attempt, setAttempt] = useState<CollectAttempt | null>(null);
+  // 다른 탭이 AI 수집을 붙잡고 있어 '지금 갱신'이 시작조차 못 한 경우의 안내.
+  const [busyMsg, setBusyMsg] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -287,11 +292,15 @@ export function EventsBoard() {
       setLoading(false);
     }
   }
-  async function checkStatus() {
+  /** 진행 상태 + 마지막 시도 기록을 갱신하고 '수집 중'인지 돌려준다(실패하면 null). */
+  async function checkStatus(): Promise<boolean | null> {
     try {
-      setCollecting((await api.eventsStatus()).collecting);
+      const s = await api.eventsStatus();
+      setCollecting(s.collecting);
+      setAttempt(s.lastAttempt ?? null);
+      return s.collecting;
     } catch {
-      /* 상태 폴링 실패는 무시 */
+      return null; // 상태 폴링 실패는 무시(다음 주기에 재시도)
     }
   }
   useEffect(() => {
@@ -300,27 +309,25 @@ export function EventsBoard() {
   }, []);
 
   // 수집 중이면 5초마다 상태 확인 → 완료되면 스냅샷을 자동으로 다시 불러온다.
+  // 실패로 끝났다면 스냅샷은 그대로겠지만, 함께 받아 둔 시도 기록이 안내 배너로 이유를 설명한다.
   useEffect(() => {
     if (!collecting) return;
     const id = setInterval(async () => {
-      let done = false;
-      try {
-        done = !(await api.eventsStatus()).collecting;
-      } catch {
-        return; // 일시 오류는 다음 주기에 재시도
-      }
-      if (done) {
-        setCollecting(false);
-        await load(); // 완료 → 새 결과 반영
-      }
+      if ((await checkStatus()) === false) await load(); // 완료 → 새 결과 반영
     }, 5000);
     return () => clearInterval(id);
   }, [collecting]);
 
   async function refresh() {
     setErr(null);
+    setBusyMsg(null);
     try {
-      await api.refreshEvents(); // 백그라운드 시작(202) 또는 이미 수집 중(409) → 둘 다 정상
+      const r = await api.refreshEvents(); // 백그라운드 시작(202) 또는 시작 불가(409)
+      if (r.busy && !r.collecting) {
+        // 다른 탭이 AI 수집을 붙잡고 있다 → 시작된 게 없으므로 '수집 중'으로 넘어가면 안 된다.
+        setBusyMsg(r.reason);
+        return;
+      }
       setCollecting(true); // '수집 중' 배너 + 폴링 시작 → 완료되면 자동 반영
     } catch (e) {
       setErr((e as Error).message); // 5xx 등 진짜 실패만 표시
@@ -353,7 +360,8 @@ export function EventsBoard() {
           <span>
             · 갱신 시 이메일 발송
             {updated && ` · 최종 갱신 ${updated}`}
-            {snap?.source === "naver-raw" && " · (검색 원본 — LLM 큐레이션 비활성)"}
+            {/* source 가 llm 이 아닌 상황은 아래 안내 배너가 사용자 말로 설명한다.
+                여기 회색 잔글씨로 'LLM 큐레이션 비활성'이라 적어 두는 건 보이지도, 읽히지도 않았다. */}
           </span>
         </div>
         <Button variant="outline" onClick={refresh} disabled={collecting}>
@@ -366,12 +374,22 @@ export function EventsBoard() {
         <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
       )}
 
+      {busyMsg && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{busyMsg}</span>
+        </div>
+      )}
+
       {collecting && (
         <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
           팝업·전시 정보를 수집하는 중입니다… 수 분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
         </div>
       )}
+
+      {/* 수집이 실패해도 화면은 어제와 똑같이 멀쩡해 보인다 — 어느 날짜 내용인지 반드시 알린다. */}
+      <SnapshotNotice health={snapshotHealth(snap, attempt, { collecting })} notes={snap?.notes} />
 
       {!snap ? (
         <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">

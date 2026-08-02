@@ -29,6 +29,45 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** 마지막 수집 **시도**의 성패. 화면이 그대로인 이유(실패 vs 아직 수집 전)를 가르는 신호다. */
+export interface CollectAttempt {
+  ok: boolean;
+  /** 시도 시각(ISO) */
+  at: string;
+  /** 그 시도가 만든 스냅샷의 출처("llm" 이면 정상) */
+  source: string;
+}
+
+/** 수집 진행 상태 폴링 응답. lastAttempt 는 서버 버전에 따라 없을 수 있다. */
+export interface CollectStatus {
+  collecting: boolean;
+  updatedAt: string | null;
+  lastAttempt?: CollectAttempt | null;
+}
+
+/** '지금 갱신' 결과. busy=true 면 아무것도 시작되지 않았다. */
+export interface RefreshResult {
+  started: boolean;
+  busy: boolean;
+  /** 이 탭이 수집 중인지. false 인데 busy 면 **다른 탭**이 AI 수집을 붙잡고 있다는 뜻. */
+  collecting: boolean;
+  /** 시작하지 못한 사유(사용자에게 그대로 보여줄 문장). 정상 시작이면 null. */
+  reason: string | null;
+}
+
+/** 409 응답 본문에서 사유를 꺼낸다. 본문이 없거나 깨져도 화면이 죽지 않게 기본값을 둔다. */
+async function busyResult(res: Response): Promise<RefreshResult> {
+  const body = (await res.json().catch(() => ({}))) as { error?: string; collecting?: boolean };
+  // collecting 이 명시되지 않은 구버전 응답은 '이 탭이 수집 중'으로 본다(기존 동작 유지).
+  const collecting = body.collecting !== false;
+  return {
+    started: false,
+    busy: true,
+    collecting,
+    reason: collecting ? null : (body.error ?? "지금은 다른 수집이 진행 중입니다."),
+  };
+}
+
 export const api = {
   /** 탭별 자동 수집 시각(스케줄) 조회. */
   schedule: () => fetch("/api/schedule").then((r) => j<ScheduleSettings>(r)),
@@ -63,38 +102,35 @@ export const api = {
   events: () => fetch("/api/events").then((r) => j<EventsSnapshot | null>(r)),
 
   /**
-   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
+   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 시작하지 못하면 409 → { busy: true }.
    * 완료 여부는 eventsStatus() 폴링으로 확인한다.
+   *
+   * 409 는 두 가지다. `collecting` 이 true 면 **이 탭이** 이미 수집 중(=폴링을 이어가면 된다),
+   * false 면 다른 탭이 AI 수집을 붙잡고 있어 시작조차 못 한 것(=사유를 사용자에게 보여야 한다).
    */
-  refreshEvents: async (): Promise<{ started: boolean; busy: boolean }> => {
+  refreshEvents: async (): Promise<RefreshResult> => {
     const res = await fetch("/api/events/refresh", { method: "POST" });
-    if (res.status === 409) return { started: false, busy: true };
+    if (res.status === 409) return busyResult(res);
     await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
-    return { started: true, busy: false };
+    return { started: true, busy: false, collecting: true, reason: null };
   },
 
-  eventsStatus: () =>
-    fetch("/api/events/status").then((r) =>
-      j<{ collecting: boolean; updatedAt: string | null }>(r)
-    ),
+  eventsStatus: () => fetch("/api/events/status").then((r) => j<CollectStatus>(r)),
 
   news: () => fetch("/api/news").then((r) => j<NewsSnapshot | null>(r)),
 
   /**
-   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
-   * 완료 여부는 newsStatus() 폴링으로 확인한다.
+   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 시작하지 못하면 409 → { busy: true }.
+   * 완료 여부는 newsStatus() 폴링으로 확인한다. 409 두 종류의 구분은 refreshEvents 주석 참고.
    */
-  refreshNews: async (): Promise<{ started: boolean; busy: boolean }> => {
+  refreshNews: async (): Promise<RefreshResult> => {
     const res = await fetch("/api/news/refresh", { method: "POST" });
-    if (res.status === 409) return { started: false, busy: true };
+    if (res.status === 409) return busyResult(res);
     await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
-    return { started: true, busy: false };
+    return { started: true, busy: false, collecting: true, reason: null };
   },
 
-  newsStatus: () =>
-    fetch("/api/news/status").then((r) =>
-      j<{ collecting: boolean; updatedAt: string | null }>(r)
-    ),
+  newsStatus: () => fetch("/api/news/status").then((r) => j<CollectStatus>(r)),
 
   newsCategories: () =>
     fetch("/api/news/categories").then((r) => j<NewsCategoryDef[]>(r)),
