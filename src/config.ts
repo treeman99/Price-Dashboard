@@ -83,8 +83,36 @@ export interface AppConfig {
   eventsNewGapDays: number;
   /** 팝업/전시 '신규' 배지 유지 일수(재등장일로부터) */
   eventsNewShowDays: number;
-  /** 에이전트 큐레이션 1회 최대 대기(ms). 초과 시 중단(hang 방지). */
+  /**
+   * 에이전트 큐레이션 1회 최대 대기(ms). 초과 시 중단(hang 방지).
+   *
+   * ⚠️ **탭별 상수로 분리됐다**(newsTimeoutMs / youtubeTimeoutMs / eventsTimeoutMs /
+   * stockBriefTimeoutMs). 탭마다 정상 소요가 3~7분으로 제각각인데 60분 하나를 공유하니
+   * "어느 탭이 얼마나 느려졌는지"를 조정할 수단이 없었다. 이 값은 아직 탭별 상수를 배선하지
+   * 않은 호출부의 **폴백 기본값**으로만 남긴다 — 새 큐레이터를 붙일 때 참고할 안전한 상한이다.
+   */
   agentQueryTimeoutMs: number;
+  /**
+   * 뉴스 큐레이션 1회 최대 대기(ms). 기본 20분.
+   *
+   * 실측 정상 소요는 7분이다. 공용 60분은 8배 과대해서, 잘못된 실행 하나가 한 시간을 통째로
+   * 붙들고 그 사이 다음 정시·catch-up 을 전부 밀어냈다(2026-08-02 사고). 정상의 약 3배는
+   * 카테고리가 늘거나 웹이 느린 날을 흡수하면서도, 죽은 실행을 한 시간씩 끌고 가지 않는다.
+   */
+  newsTimeoutMs: number;
+  /**
+   * 유튜브 큐레이션 1회 최대 대기(ms). 기본 20분.
+   * 실측 정상 소요 3분. 채널 발굴(신규 채널 탐색)이 얹히는 날을 감안해도 20분이면 넉넉하다.
+   */
+  youtubeTimeoutMs: number;
+  /** 팝업/전시 큐레이션 1회 최대 대기(ms). 기본 20분(실측 정상 소요 4분 + 날짜 검증 여유). */
+  eventsTimeoutMs: number;
+  /**
+   * 증시 브리핑 1회 최대 대기(ms). 기본 15분.
+   * 브리핑은 슬롯(08:00 결산 / 17:00 프리뷰)에 묶인 결과물이라 늦게 나온 브리핑은 가치가 급락한다.
+   * 다른 탭보다 짧게 잡아, 살아날 가망 없는 실행을 일찍 끊고 catch-up 에 넘긴다.
+   */
+  stockBriefTimeoutMs: number;
   dbPath: string;
   legacyHistoryJson: string;
   historyRetentionDays: number;
@@ -160,6 +188,14 @@ export const config: AppConfig = {
   // (실측 2026-07-26: 정상 소요가 9~17분에서 30분 초과로 늘어 큐레이션이 연속 5회 잘림)
   // 매번 결과를 통째로 버리고 있었다. 무한 hang 차단이라는 원래 목적은 유지하되 여유를 준다.
   agentQueryTimeoutMs: Math.max(60_000, int(process.env.AGENT_QUERY_TIMEOUT_MS, 3_600_000)),
+  // ── 탭별 큐레이션 타임아웃 ──
+  // 기본값은 전부 **실측 정상 소요 기준**이다(2026-08-02 로그): 뉴스 7분 · 유튜브 3분 ·
+  // 이벤트 4분. 여유 배수를 곱해 20분/20분/20분, 슬롯 민감도가 높은 증시 브리핑만 15분.
+  // 하한 60초는 오타로 0 을 넣어 모든 수집이 즉시 잘리는 사고를 막는다(공용 상수와 같은 패턴).
+  newsTimeoutMs: Math.max(60_000, int(process.env.NEWS_TIMEOUT_MS, 1_200_000)),
+  youtubeTimeoutMs: Math.max(60_000, int(process.env.YOUTUBE_TIMEOUT_MS, 1_200_000)),
+  eventsTimeoutMs: Math.max(60_000, int(process.env.EVENTS_TIMEOUT_MS, 1_200_000)),
+  stockBriefTimeoutMs: Math.max(60_000, int(process.env.STOCK_BRIEF_TIMEOUT_MS, 900_000)),
   dbPath: process.env.DB_PATH?.trim() || path.join(repoRoot, "data", "price.db"),
   legacyHistoryJson:
     process.env.LEGACY_HISTORY_JSON?.trim() ||
