@@ -113,7 +113,8 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
           <Button
             variant="outline"
             size="sm"
-            title={`${u.round}회차 10세트를 줄바꿈 평문으로 복사합니다`}
+            disabled={u.sets.length === 0}
+            title="번호만 줄바꿈으로 복사합니다 (회차·세트 번호는 넣지 않음)"
             onClick={() => {
               void copyToClipboard(upcomingToText(u)).then((ok) =>
                 setCopied({ ok, at: Date.now() })

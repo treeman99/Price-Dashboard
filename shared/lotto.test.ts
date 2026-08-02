@@ -52,7 +52,7 @@ test("무작위 기준선은 회차당 약 -11.00점", () => {
   assert.equal(LOTTO_BASELINE_PER_ROUND, LOTTO_BASELINE_PER_SET * LOTTO_SET_COUNT);
 });
 
-test("복사용 평문: 회차 머리말 + 세트당 한 줄, 번호는 ', ' 구분", () => {
+test("복사용 평문: 세트당 한 줄, 번호는 ', ' 구분", () => {
   const text = upcomingToText({
     round: 1236,
     sets: [
@@ -62,14 +62,32 @@ test("복사용 평문: 회차 머리말 + 세트당 한 줄, 번호는 ', ' 구
     version: 170,
     createdAt: "2026-08-02T01:26:00.645Z",
   });
-  assert.equal(text, "1236회차 예상 번호\n1. 5, 8, 10, 25, 35, 41\n2. 2, 9, 14, 15, 27, 41");
-  // 세대(v)는 붙여넣은 곳에서 잡음이라 넣지 않는다.
-  assert.ok(!text.includes("170"));
-  // 줄 수 = 머리말 1 + 세트 수. 붙여넣기 대상이 표가 아니라 평문이라는 계약.
-  assert.equal(text.split("\n").length, 3);
+  assert.equal(text, "5, 8, 10, 25, 35, 41\n2, 9, 14, 15, 27, 41");
+  // 줄 수 = 세트 수. 붙여넣기 대상이 표나 요약이 아니라 숫자 줄이라는 계약.
+  assert.equal(text.split("\n").length, 2);
 });
 
-test("복사용 평문: 세트가 없어도 머리말만 남고 깨지지 않는다", () => {
+test("복사용 평문: 머리말·세트 번호·세대 어떤 맥락도 섞이지 않는다", () => {
+  // 셋 다 사용자 요청으로 뺀 항목이라 회귀로 되돌아오지 않게 못박는다(2026-08-02).
+  const text = upcomingToText({
+    round: 1236,
+    sets: [
+      [1, 2, 3, 4, 5, 6],
+      [7, 8, 9, 10, 11, 12],
+    ],
+    version: 170,
+    createdAt: "2026-08-02T01:26:00.645Z",
+  });
+  assert.ok(!text.includes("회차"), `머리말 잔존: ${text}`);
+  assert.ok(!text.includes("170"), `세대 잔존: ${text}`);
+  for (const line of text.split("\n")) {
+    assert.ok(!/^\d+\.\s/.test(line), `세트 번호 접두사 잔존: ${line}`);
+    // 모든 줄이 숫자와 구분자로만 이뤄져야 한다 — 어떤 설명도 섞이면 안 된다.
+    assert.ok(/^[0-9]+(, [0-9]+)*$/.test(line), `숫자 외 문자 잔존: ${line}`);
+  }
+});
+
+test("복사용 평문: 세트가 없으면 빈 문자열", () => {
   const text = upcomingToText({ round: 1, sets: [], version: 1, createdAt: "" });
-  assert.equal(text, "1회차 예상 번호");
+  assert.equal(text, "");
 });
