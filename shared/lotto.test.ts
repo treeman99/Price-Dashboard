@@ -8,6 +8,7 @@ import {
   matchProbabilities,
   roundScore,
   setScore,
+  upcomingToText,
   winningNumbers,
 } from "./lotto.ts";
 
@@ -49,4 +50,26 @@ test("무작위 기준선은 회차당 약 -11.00점", () => {
   assert.ok(Math.abs(LOTTO_BASELINE_PER_SET - -1.1003025) < 1e-6, `${LOTTO_BASELINE_PER_SET}`);
   assert.ok(Math.abs(LOTTO_BASELINE_PER_ROUND - -11.003025) < 1e-5, `${LOTTO_BASELINE_PER_ROUND}`);
   assert.equal(LOTTO_BASELINE_PER_ROUND, LOTTO_BASELINE_PER_SET * LOTTO_SET_COUNT);
+});
+
+test("복사용 평문: 회차 머리말 + 세트당 한 줄, 번호는 ', ' 구분", () => {
+  const text = upcomingToText({
+    round: 1236,
+    sets: [
+      [5, 8, 10, 25, 35, 41],
+      [2, 9, 14, 15, 27, 41],
+    ],
+    version: 170,
+    createdAt: "2026-08-02T01:26:00.645Z",
+  });
+  assert.equal(text, "1236회차 예상 번호\n1. 5, 8, 10, 25, 35, 41\n2. 2, 9, 14, 15, 27, 41");
+  // 세대(v)는 붙여넣은 곳에서 잡음이라 넣지 않는다.
+  assert.ok(!text.includes("170"));
+  // 줄 수 = 머리말 1 + 세트 수. 붙여넣기 대상이 표가 아니라 평문이라는 계약.
+  assert.equal(text.split("\n").length, 3);
+});
+
+test("복사용 평문: 세트가 없어도 머리말만 남고 깨지지 않는다", () => {
+  const text = upcomingToText({ round: 1, sets: [], version: 1, createdAt: "" });
+  assert.equal(text, "1회차 예상 번호");
 });

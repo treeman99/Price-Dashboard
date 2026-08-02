@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CalendarClock, Check, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, CalendarClock, Check, Copy, Loader2, RefreshCw } from "lucide-react";
 import type { LottoRecentRound, LottoSnapshot } from "@shared/lotto";
-import { winningNumbers } from "@shared/lotto";
+import { upcomingToText, winningNumbers } from "@shared/lotto";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -44,9 +44,52 @@ function NumberBadge({ n, tone }: { n: number; tone: "pick" | "hit" | "miss" | "
   return <Badge className={cn("min-w-7 justify-center tabular-nums", style[tone])}>{n}</Badge>;
 }
 
+/**
+ * 클립보드 복사.
+ *
+ * `navigator.clipboard` 는 보안 컨텍스트에만 있다. localhost 는 보안 컨텍스트라 평소엔
+ * 문제없지만, 이 대시보드를 `http://<집안 IP>:7777` 로 열면 undefined 가 되어 조용히
+ * 실패한다 — 사용자에게는 "버튼이 고장났다"로 보인다. 그래서 구식 execCommand 폴백을 둔다.
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // 권한 거부 등. 아래 폴백으로 넘어간다.
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** 다음 회차 예상 번호 — 이 화면의 주인공. */
 function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
   const u = snap.upcoming;
+  /** 복사 결과 안내. `at` 으로 매번 새 객체를 만들어 연속 클릭에도 타이머가 초기화된다. */
+  const [copied, setCopied] = useState<{ ok: boolean; at: number } | null>(null);
+
+  // 안내는 잠깐만 띄운다. 훅은 아래 early return 보다 위에 있어야 한다(훅 순서 규칙).
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(null), 2000);
+    return () => clearTimeout(t);
+  }, [copied]);
+
   if (!u) {
     return (
       <Card className="p-6 text-center text-sm text-muted-foreground">
@@ -59,13 +102,32 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
   }
   return (
     <Card className="border-[#7c3aed]/30 p-5 shadow-sm">
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-lg font-bold" style={{ color: VIOLET }}>
           🎱 {u.round}회차 예상 번호
         </h3>
-        <span className="text-xs text-muted-foreground">
-          v{u.version} · {fmtWhen(u.createdAt)} 확정
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">
+            v{u.version} · {fmtWhen(u.createdAt)} 확정
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            title={`${u.round}회차 10세트를 줄바꿈 평문으로 복사합니다`}
+            onClick={() => {
+              void copyToClipboard(upcomingToText(u)).then((ok) =>
+                setCopied({ ok, at: Date.now() })
+              );
+            }}
+          >
+            {copied?.ok ? (
+              <Check className="h-4 w-4 text-[#7c3aed]" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+            {copied ? (copied.ok ? "복사됨" : "복사 실패") : "번호 복사"}
+          </Button>
+        </div>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         {u.sets.map((set, i) => (
