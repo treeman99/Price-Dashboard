@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CalendarClock, Loader2, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, CalendarClock, Check, Loader2, RefreshCw } from "lucide-react";
 import type { LottoRecentRound, LottoSnapshot } from "@shared/lotto";
 import { winningNumbers } from "@shared/lotto";
 import { api } from "@/lib/api";
@@ -146,19 +146,67 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
   );
 }
 
+/**
+ * 스냅샷이 실제로 바뀌었는지 판정할 서명.
+ *
+ * 주 1회만 바뀌므로 사이클 시각·확정 번호·오류만 보면 충분하다. 전체를 stringify 하지 않는
+ * 이유는 recentResults 가 10회차치라 매 클릭마다 직렬화할 값어치가 없어서다.
+ */
+function snapshotSignature(s: LottoSnapshot): string {
+  return [
+    s.state.lastCycleAt ?? "",
+    s.upcoming?.round ?? "",
+    s.upcoming?.createdAt ?? "",
+    s.state.lastError ?? "",
+  ].join("|");
+}
+
+/**
+ * 새로고침 스피너 최소 노출 시간.
+ *
+ * 이 버튼은 `GET /api/lotto` 한 번이 전부인데 서버가 localhost 라 응답이 수십 ms 다. 그래서
+ * 스피너가 눈에 띄지도 않고, 데이터도 주 1회만 바뀌니 화면이 그대로여서 "눌러도 아무 반응이
+ * 없다"로 읽힌다(실사용 문의로 확인). 클릭이 처리됐다는 사실 자체를 보이게 하려고 최소 시간을
+ * 확보한다 — 느리게 만드는 게 아니라 **이미 끝난 일을 보이게** 하는 것이다.
+ */
+const MIN_SPIN_MS = 450;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export function LottoBoard() {
   const [snap, setSnap] = useState<LottoSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  /** 수동 새로고침 결과 안내. `at` 으로 매번 새 객체를 만들어 연속 클릭에도 타이머가 초기화된다. */
+  const [feedback, setFeedback] = useState<{ kind: "updated" | "same"; at: number } | null>(null);
+  /**
+   * 직전 스냅샷 서명. state 가 아니라 ref 인 이유: load 의 의존성에 snap 을 넣으면 useCallback
+   * 이 매 갱신마다 새로 만들어지고, 그걸 보는 useEffect 가 다시 load 를 부르는 무한 루프가 된다.
+   */
+  const prevSigRef = useRef<string | null>(null);
 
-  const load = useCallback(async () => {
+  /** manual=true 는 사용자가 버튼을 누른 경우. 최초 자동 로드에는 안내를 띄우지 않는다. */
+  const load = useCallback(async (manual = false) => {
     setLoading(true);
+    const startedAt = Date.now();
     try {
-      setSnap(await api.lotto());
+      const next = await api.lotto();
+      const nextSig = snapshotSignature(next);
+      if (manual) {
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < MIN_SPIN_MS) await sleep(MIN_SPIN_MS - elapsed);
+        setFeedback({
+          kind: prevSigRef.current !== null && prevSigRef.current === nextSig ? "same" : "updated",
+          at: Date.now(),
+        });
+      }
+      prevSigRef.current = nextSig;
+      setSnap(next);
       setErr(null);
     } catch (e) {
       setSnap(null);
       setErr((e as Error).message);
+      setFeedback(null);
     } finally {
       setLoading(false);
     }
@@ -167,6 +215,13 @@ export function LottoBoard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 안내는 잠깐만 띄운다. 남겨두면 다음에 눌렀을 때 그게 방금 것인지 아까 것인지 알 수 없다.
+  useEffect(() => {
+    if (!feedback) return;
+    const t = setTimeout(() => setFeedback(null), 3000);
+    return () => clearTimeout(t);
+  }, [feedback]);
 
   if (loading && !snap) {
     return (
@@ -181,7 +236,7 @@ export function LottoBoard() {
       <Card className="p-8 text-center text-sm text-muted-foreground">
         <p>로또 데이터를 불러올 수 없습니다.</p>
         {err && <p className="mt-2 text-xs text-muted-foreground/70">({err})</p>}
-        <Button variant="outline" size="sm" className="mt-4" onClick={() => void load()}>
+        <Button variant="outline" size="sm" className="mt-4" onClick={() => void load(true)}>
           다시 시도
         </Button>
       </Card>
@@ -205,14 +260,28 @@ export function LottoBoard() {
             </span>
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
-          {loading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
+        <div className="flex items-center gap-2">
+          {/* 눌렀는데 화면이 그대로인 게 정상이라는 것을 알려준다 — 주 1회 갱신이라 대개 '최신'이다. */}
+          {feedback && (
+            <span
+              className={cn(
+                "flex items-center gap-1 whitespace-nowrap text-xs",
+                feedback.kind === "updated" ? "font-medium text-[#7c3aed]" : "text-muted-foreground"
+              )}
+            >
+              <Check className="h-3.5 w-3.5" />
+              {feedback.kind === "updated" ? "새 내용으로 갱신됨" : "이미 최신입니다 (주 1회 갱신)"}
+            </span>
           )}
-          새로고침
-        </Button>
+          <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading}>
+            {loading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            새로고침
+          </Button>
+        </div>
       </div>
 
       {/* 자동 사이클이 남긴 오류는 조용히 삼키지 않는다 — 번호가 갱신되지 않은 이유가 여기 있다. */}
