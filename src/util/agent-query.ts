@@ -1,7 +1,72 @@
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "./log.ts";
 import { isCodexModel, isCodexUnavailableError, runCodexQueryText } from "./codex-query.ts";
+import {
+  createDeadline,
+  formatDeadlineBudget,
+  suggestTickMs,
+  type Deadline,
+} from "./deadline.ts";
 import { FALLBACK_AGENT_MODEL, clearCodexFallback, recordCodexFallback } from "./model-store.ts";
+
+/**
+ * **대체 모델 실행에 주는 자체 예산.** 원 타임아웃과 완전히 독립이다.
+ *
+ * 왜 독립이어야 하나 (2026-08-02 사고의 두 번째 구멍):
+ * 예전 코드는 `remaining = timeoutMs - (Date.now() - startedAt)` 로 **원 예산의 잔여분**을
+ * 대체 실행에 넘겼다. 그런데 `startedAt` 은 Codex 호출 **전**에 찍히므로, 타임아웃으로 폴백에
+ * 들어온 순간 잔여는 정의상 항상 0 이하다 → 바로 뒤의 `remaining < 60_000` 에 걸려 **무조건**
+ * 건너뛰었다. 즉 폴백은 구조적으로 절대 실행되지 않았다(런타임 증거: data/model.json 의
+ * fallback=null, 폴백 진입 이력 0회). 게다가 원 예산이 소진된 이유가 대개 '절전'이라
+ * 잔여를 물려주는 것 자체가 무의미하다 — 대체 실행은 시계를 새로 재야 한다.
+ *
+ * 무한정은 곤란하므로 20분을 상한으로 못 박는다. 원 예산이 3600초든 240초든 대체 실행에는
+ * 이 값을 그대로 준다.
+ */
+export const FALLBACK_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * 실행기 주입 지점. **테스트 전용**이다.
+ *
+ * 폴백 경로는 이 저장소에서 가장 조용히 썩기 쉬운 코드다 — 정상 운영 중에는 한 번도 안 돌고,
+ * 죽은 채로 몇 달을 지나 정작 필요한 날(로그인 초기화·한도 소진·절전) 하루치를 통째로
+ * 날린다. 실제로 그렇게 됐다. 회귀 테스트가 폴백 '진입'과 '실제 호출'을 검증하려면 하위
+ * 실행기(Codex CLI·Claude SDK)와 상태 저장(model.json 쓰기)을 갈아끼울 수 있어야 한다.
+ */
+export interface AgentQueryDeps {
+  runCodex: (
+    prompt: string,
+    options: Omit<Options, "abortController">,
+    timeoutMs: number,
+    label: string
+  ) => Promise<string>;
+  runClaude: (
+    prompt: string,
+    options: Omit<Options, "abortController">,
+    timeoutMs: number,
+    label: string
+  ) => Promise<string>;
+  recordFallback: (fromModel: string, reason: string) => boolean;
+  clearFallback: () => boolean;
+}
+
+const defaultDeps: AgentQueryDeps = {
+  runCodex: runCodexQueryText,
+  runClaude: runClaudeAgentQueryText,
+  recordFallback: recordCodexFallback,
+  clearFallback: clearCodexFallback,
+};
+
+let deps: AgentQueryDeps = defaultDeps;
+
+/** 테스트에서 실행기를 갈아끼운다. 반환된 함수로 반드시 원복할 것(운영 코드는 호출 금지). */
+export function __setAgentQueryDepsForTest(patch: Partial<AgentQueryDeps>): () => void {
+  const prev = deps;
+  deps = { ...deps, ...patch };
+  return () => {
+    deps = prev;
+  };
+}
 
 /** 로그용 한 줄 미리보기(개행 제거 + 길이 제한). 원문이 길어도 로그가 터지지 않게. */
 export function preview(text: string, max = 400): string {
@@ -48,6 +113,10 @@ export function isFailureSignal(text: string): boolean {
  * `for await` 루프가 영원히 대기하고, 호출부의 `running` 플래그가 영구히 잠겨
  * 이후 모든 수집(수동 '지금 갱신' 포함)이 막힌다. timeoutMs 초과 시 AbortController 로
  * 하위 프로세스를 중단하고 에러를 던져, 호출부가 정상적으로 실패 처리(+running 해제)하게 한다.
+ *
+ * ⚠️ 여기서 말하는 timeoutMs 는 **유효 시간**(맥북이 자는 동안은 흐르지 않는다) 기준이다.
+ * 벽시계 기준이던 시절, 덮개를 닫아 둔 하룻밤 사이 전 탭이 0턴 상태로 동시에 타임아웃했다
+ * (2026-08-02). deadline.ts 참고.
  */
 export async function runAgentQueryText(
   prompt: string,
@@ -56,20 +125,23 @@ export async function runAgentQueryText(
   label = "agent"
 ): Promise<string> {
   if (!isCodexModel(options.model)) {
-    return runClaudeAgentQueryText(prompt, options, timeoutMs, label);
+    return deps.runClaude(prompt, options, timeoutMs, label);
   }
 
-  const startedAt = Date.now();
   let finalText: string;
   try {
-    finalText = await runCodexQueryText(prompt, options, timeoutMs, label);
+    finalText = await deps.runCodex(prompt, options, timeoutMs, label);
   } catch (e) {
-    // 가용성 문제(로그인 초기화·CLI 없음·한도)만 대체로 넘긴다. 나머지는 진짜 실패라 그대로 올린다.
+    // 가용성 문제(로그인 초기화·CLI 없음·한도·시간 초과)만 대체로 넘긴다.
+    // 나머지(프롬프트 오류·파싱 실패 등)는 진짜 실패라 그대로 올린다 — 그것까지 대체로 넘기면
+    // Codex 경로의 버그가 Opus 실행에 묻혀 영원히 드러나지 않는다.
     if (!isCodexUnavailableError(e)) throw e;
-    return runOnFallbackModel(prompt, options, timeoutMs, label, startedAt, e);
+    return runOnFallbackModel(prompt, options, label, e);
   }
   // 여기까지 왔다 = Codex 가 살아서 답했다. 대체 상태 해제는 오직 이 성공에만 걸어 둔다.
-  clearCodexFallback();
+  // (대체 모델이 성공한 것으로는 풀지 않는다. Codex 는 여전히 죽어 있고, 화면의 '임시 대체'
+  //  배지는 그 사실을 설명하는 유일한 근거다.)
+  deps.clearFallback();
   return validateFinalText(finalText, label);
 }
 
@@ -77,37 +149,42 @@ export async function runAgentQueryText(
  * Codex 를 쓸 수 없을 때 **이번 실행만** 대체 모델(Opus 5)로 살린다.
  *
  * 기록만 하고 던지면 그 수집은 통째로 빈 스냅샷이 된다 — 로그인은 아무 때나 풀리고 한도는
- * 정오에도 소진되므로 "다음 수집부터 정상"은 하루치 결과를 버리는 것과 같다. 남은 시간이 너무
- * 적으면(< 1분) 재시도가 또 타임아웃으로 죽을 뿐이라 기록만 남기고 실패시킨다.
+ * 정오에도 소진되므로 "다음 수집부터 정상"은 하루치 결과를 버리는 것과 같다.
+ *
+ * ⚠️ **예산은 원 타임아웃과 무관하게 새로 준다**(FALLBACK_TIMEOUT_MS 주석 참고). 예전의
+ * "원 예산 잔여분을 넘기고 1분 미만이면 건너뜀" 규칙은 폴백을 100% 무력화하던 장본인이다.
  */
 async function runOnFallbackModel(
   prompt: string,
   options: Omit<Options, "abortController">,
-  timeoutMs: number,
   label: string,
-  startedAt: number,
   cause: Error
 ): Promise<string> {
   const from = String(options.model);
-  const first = recordCodexFallback(from, cause.message);
+  const first = deps.recordFallback(from, cause.message);
   const note = first
     ? `${from} 사용 불가 → 이번 실행은 ${FALLBACK_AGENT_MODEL} 로 대체 (다음 실행에서 재확인)`
     : `${from} 사용 불가 지속 → 이번 실행도 ${FALLBACK_AGENT_MODEL} 로 대체`;
 
-  const remaining = timeoutMs - (Date.now() - startedAt);
-  if (remaining < 60_000) {
-    throw new Error(`${note} — 남은 시간이 부족해 이번 실행은 건너뜀. 원인: ${cause.message}`);
-  }
-  log.warn(`${label}: ${note} — 남은 ${Math.round(remaining / 1000)}초로 즉시 재시도`);
-  return runClaudeAgentQueryText(
+  log.warn(
+    `${label}: ${note} — 자체 예산 ${Math.round(FALLBACK_TIMEOUT_MS / 1000)}초로 즉시 재시도. ` +
+      `원인: ${preview(cause.message, 300)}`
+  );
+  return deps.runClaude(
     prompt,
     { ...options, model: FALLBACK_AGENT_MODEL },
-    remaining,
+    FALLBACK_TIMEOUT_MS,
     `${label}(임시 대체)`
   );
 }
 
-/** Claude 모델은 기존 Agent SDK 스트리밍 경로를 그대로 사용한다. */
+/**
+ * Claude 모델은 기존 Agent SDK 스트리밍 경로를 그대로 사용한다.
+ *
+ * ⚠️ 타임아웃은 **슬립 내성 데드라인**이다. 이번 사고는 Codex 전용 문제가 아니었다 —
+ * 로또 탭(Claude/Opus 경로, 600초 예산)도 0턴 상태로 똑같이 죽었다. 벽시계 setTimeout 하나로
+ * 재는 한 제공자와 무관하게 같은 방식으로 무너진다.
+ */
 async function runClaudeAgentQueryText(
   prompt: string,
   options: Omit<Options, "abortController">,
@@ -119,25 +196,32 @@ async function runClaudeAgentQueryText(
 
   let finalText = "";
   let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    ac.abort();
-    log.warn(
-      `${label}: 응답 시간 초과(${Math.round(timeoutMs / 1000)}s) → 중단 (${turns}턴, 도구 ${toolCalls}회 진행 중이었음)`
-    );
-  }, timeoutMs);
+  const deadline = createDeadline(timeoutMs, {
+    label,
+    tickMs: suggestTickMs(timeoutMs),
+    onExpire: () => {
+      timedOut = true;
+      ac.abort();
+      log.warn(
+        `${label}: 응답 시간 초과(${formatDeadlineBudget(timeoutMs, deadline)}) → 중단 ` +
+          `(${turns}턴, 도구 ${toolCalls}회 진행 중이었음)`
+      );
+    },
+  });
 
   // 진행 상황 계측. 타임아웃으로 잘렸을 때 "멈춘 것"인지 "아직 일하는 중"인지 구분할 근거가
   // 없으면 타임아웃 값을 올려야 할지 작업량을 줄여야 할지 판단할 수 없다(실측: 30분 초과가
   // 반복됐는데 어디서 시간을 쓰는지 알 길이 없었다). 몇 분마다 한 줄만 남긴다.
-  const startedAt = Date.now();
+  // 벽시계와 유효 경과를 함께 찍는 이유: 둘의 격차가 곧 절전 시간이라, 로그만 보고
+  // "일을 오래 한 것"과 "맥이 자느라 시계만 흐른 것"을 구분할 수 있다.
   let turns = 0;
   let toolCalls = 0;
   let nonSuccessSubtype: string | null = null;
   const heartbeat = setInterval(
     () => {
-      const min = Math.round((Date.now() - startedAt) / 60000);
-      log.info(`${label}: 진행 중 — ${min}분 경과, ${turns}턴, 도구 ${toolCalls}회`);
+      log.info(
+        `${label}: 진행 중 — ${formatDeadlineBudget(timeoutMs, deadline)}, ${turns}턴, 도구 ${toolCalls}회`
+      );
     },
     5 * 60 * 1000
   );
@@ -163,7 +247,7 @@ async function runClaudeAgentQueryText(
       }
     }
   } catch (e) {
-    if (timedOut) throw new Error(`Agent 응답 시간 초과(${Math.round(timeoutMs / 1000)}s)`);
+    if (timedOut) throw agentTimeoutError(timeoutMs, deadline, turns, toolCalls);
     // 이미 success 결과를 받아둔 뒤에 스트림이 터지는 경우가 실제로 있다(하위 CLI 프로세스가
     // 결과를 내보내고 나서 종료 코드 1로 죽는 사례를 실측). 그대로 rethrow 하면 멀쩡히 받아온
     // 큐레이션 결과를 통째로 버리고 빈 스냅샷으로 저하되는데, 결과가 손에 있는 이상 그건 손해다.
@@ -173,15 +257,17 @@ async function runClaudeAgentQueryText(
       `${label}: 결과 수신 후 스트림 종료 오류(무시하고 결과 사용) — ${(e as Error).message} · 수신 ${finalText.length}자: ${preview(finalText)}`
     );
   } finally {
-    clearTimeout(timer);
+    deadline.dispose();
     clearInterval(heartbeat);
   }
 
   // abort 가 예외 없이 스트림을 끝낸 경우도 타임아웃으로 처리
-  if (timedOut) throw new Error(`Agent 응답 시간 초과(${Math.round(timeoutMs / 1000)}s)`);
+  if (timedOut) throw agentTimeoutError(timeoutMs, deadline, turns, toolCalls);
 
   log.info(
-    `${label}: 완료 — ${Math.round((Date.now() - startedAt) / 1000)}초, ${turns}턴, 도구 ${toolCalls}회, 결과 ${finalText.length}자`
+    `${label}: 완료 — 유효 ${Math.round(deadline.elapsedMs() / 1000)}초` +
+      `(벽시계 ${Math.round(deadline.wallElapsedMs() / 1000)}초), ` +
+      `${turns}턴, 도구 ${toolCalls}회, 결과 ${finalText.length}자`
   );
 
   // 결과 없이 비정상 종료(maxTurns 소진 등)한 경우. "결과가 비어 있습니다"로 뭉뚱그리면 무엇을
@@ -198,6 +284,26 @@ async function runClaudeAgentQueryText(
   // 실패라 며칠간 아무도 모른다. 여기서 실패로 승격시켜 호출부의 저하 경로(빈 스냅샷 + notes)를
   // 타게 한다.
   return validateFinalText(finalText, label);
+}
+
+/**
+ * 타임아웃 오류 메시지. **예산 · 벽시계 경과 · 유효 경과** 3종을 반드시 병기한다.
+ *
+ * 이번 사고에서 남은 것은 "Agent 응답 시간 초과(600s)" 한 줄뿐이었고, 그 문장은 "600초 동안
+ * 일했지만 못 끝냈다"로 읽힌다. 실제로는 맥이 자느라 몇십 초밖에 돌지 못했다. 세 숫자를
+ * 나란히 두면 격차 자체가 절전의 증거가 되어, 다음번엔 로그 한 줄로 원인을 짚을 수 있다.
+ * 진행량(턴·도구)까지 붙이는 이유는 "정지"와 "느림"을 구분하기 위해서다.
+ */
+function agentTimeoutError(
+  timeoutMs: number,
+  deadline: Deadline,
+  turns: number,
+  toolCalls: number
+): Error {
+  return new Error(
+    `Agent 응답 시간 초과(${formatDeadlineBudget(timeoutMs, deadline)}) — ` +
+      `${turns}턴, 도구 ${toolCalls}회 진행 중이었음`
+  );
 }
 
 /** 제공자와 무관하게 마지막 응답에 동일한 실패·JSON 진단 규칙을 적용한다. */

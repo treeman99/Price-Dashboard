@@ -3,6 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { log } from "./log.ts";
+import {
+  createDeadline,
+  formatDeadlineBudget,
+  suggestTickMs,
+  wallCeilingFor,
+  type Deadline,
+} from "./deadline.ts";
 
 const CODEX_BIN = "codex";
 const CODEX_WORK_DIR = path.join(os.tmpdir(), "daily-price-codex-agent");
@@ -10,13 +17,48 @@ const MAX_STDOUT_BYTES = 24 * 1024 * 1024;
 const MAX_STDERR_BYTES = 4 * 1024 * 1024;
 const SAFE_SHELL_PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin";
 
+/**
+ * **무출력 정지 예산**(유효 시간 기준). 총량 타임아웃과 별개다.
+ *
+ * `codex exec --json` 은 정상 작업 중에는 JSONL 이벤트를 꾸준히 뱉는다(추론 시작, 웹검색,
+ * item.completed …). 그래서 "10분 동안 stdout/stderr 에 단 한 바이트도 없다"는 것은
+ * 사실상 프로세스가 죽었거나 응답 대기에 갇혔다는 뜻이다. 총량 예산(최대 60분)만으로는
+ * 이 상태를 한 시간 동안 방치하게 되고, 그동안 호출부의 `running` 플래그도 잠겨 있다.
+ *
+ * ⚠️ **유효 시간 기준**인 것이 핵심이다. 벽시계로 재면 맥북이 자는 동안 출력이 없는 것도
+ * '정지'로 오인해, 슬립 내성을 넣으려고 만든 데드라인이 도로 슬립에 죽는다.
+ */
+const CODEX_IDLE_TIMEOUT_MS = 10 * 60_000;
+
+/** 총량 만료·무출력 정지를 함께 보는 감시 주기(벽시계). 판단 자체는 유효 시간으로 한다. */
+const CODEX_WATCHDOG_MS = 5_000;
+
+/** 로그인 확인은 한 줄 출력하고 끝나는 작업이라 총량 예산을 짧게 잡는다(유효 시간 기준). */
+const CODEX_LOGIN_CHECK_TIMEOUT_MS = 15_000;
+
+/**
+ * **절전 정황이 있을 때만** 로그인 확인을 다시 해 보는 횟수(총 시도 = 1 + 이 값).
+ *
+ * 2026-08-02 사고 후속 실측: 15초짜리 로그인 확인이 10.4분짜리 절전 구간 하나에 그대로 죽었다.
+ * 그 실패는 `CodexUnavailableError` 로 올라가 **Codex 가 멀쩡한데도** 수집 전체가 Opus 로
+ * 폴백하고, model.json 에는 "Codex 사용 불가"라는 틀린 사유가 남았다. 로그인 상태 자체는
+ * 로컬 파일 조회라 1초도 안 걸리는 작업이므로, 절전이 끼어든 실패는 실패로 칠 이유가 없다.
+ *
+ * ⚠️ **절전이 실제로 측정된 경우에만** 재시도한다. 로그인이 진짜로 풀린 경우(비정상 종료 코드,
+ * API 키 로그인)는 즉시 반환되므로 여기 걸리지 않고, 재시도로 시간을 낭비하지도 않는다.
+ */
+const CODEX_LOGIN_CHECK_RETRIES = 2;
+
+/** 재시도 전 대기(벽시계). DarkWake 창 하나를 더 기다려 보는 정도의 짧은 간격. */
+const CODEX_LOGIN_CHECK_RETRY_DELAY_MS = 1_000;
+
 export interface CodexQueryOptions {
   model?: unknown;
   systemPrompt?: unknown;
   tools?: unknown;
 }
 
-interface CapturedProcess {
+export interface CapturedProcess {
   code: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
@@ -120,9 +162,32 @@ export class UsageLimitError extends CodexUnavailableError {
   }
 }
 
+/**
+ * **시간 초과로 죽였다**는 뜻. 총량 예산 만료와 무출력 정지(idle) 둘 다 이 타입이다.
+ *
+ * 가용성 문제(CodexUnavailableError)의 하위 종류로 둔 것이 이번 사고의 핵심 수정이다.
+ * 예전에는 평범한 `new Error("Codex 응답 시간 초과(...)")` 라서 agent-query 의
+ * `isCodexUnavailableError` 가 false → 대체 모델 경로를 타지 못하고 그 탭이 통째로 죽었다
+ * (2026-08-02: 절전으로 전 탭이 동시에 타임아웃, 폴백 진입 이력 0회).
+ *
+ * 타임아웃은 "Codex 가 이번 실행에서 답을 못 줬다" 이므로 **지금 못 쓴다**와 같은 처지다.
+ * 프롬프트 오류 같은 진짜 실패와 달리, 다른 모델로 다시 시도할 가치가 있다.
+ */
+export class CodexTimeoutError extends CodexUnavailableError {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexTimeoutError";
+  }
+}
+
 /** 잡은 예외가 한도 소진인지. */
 export function isUsageLimitError(e: unknown): e is UsageLimitError {
   return e instanceof UsageLimitError;
+}
+
+/** 잡은 예외가 시간 초과(총량 만료·무출력 정지)인지. */
+export function isCodexTimeoutError(e: unknown): e is CodexTimeoutError {
+  return e instanceof CodexTimeoutError;
 }
 
 /** 잡은 예외가 'Codex 를 지금 못 쓴다'(로그인 초기화·CLI 없음·한도 소진)인지. */
@@ -284,12 +349,44 @@ export function parseCodexJsonl(text: string): ParsedCodexOutput {
   return { finalText, usage, webSearches, commands, errors };
 }
 
+export interface RunCapturedOptions {
+  /** 로그·경고에 쓸 이름. */
+  label?: string;
+  /**
+   * 호출부가 진행 로그에도 유효 경과를 쓰려고 **미리 만들어 둔** 데드라인.
+   * 주면 이 함수는 정리(dispose)하지 않는다 — 소유권은 만든 쪽에 있다.
+   * 반드시 `timeoutMs` 와 같은 예산으로 만들어야 메시지의 숫자가 어긋나지 않는다.
+   */
+  deadline?: Deadline;
+  /** 무출력 정지 예산(유효 시간). 0 이면 끈다. */
+  idleTimeoutMs?: number;
+}
+
+/**
+ * Codex CLI 를 돌리고 stdout/stderr 를 모은다.
+ *
+ * 타임아웃 설계(2026-08-02 사고 이후):
+ * 1. **총량**은 벽시계 `setTimeout` 이 아니라 슬립 내성 데드라인으로 잰다. 예전에는 맥북이
+ *    자는 동안 예산이 그대로 흘러, 실제로 50초밖에 못 돈 작업이 "3600초 초과"로 죽었다.
+ * 2. **무출력 정지(idle)** 를 총량과 별개로 본다. 총량만 있으면 죽은 프로세스를 한 시간
+ *    붙잡고 있게 된다(그동안 호출부의 `running` 플래그도 잠긴다).
+ * 두 판단 모두 **유효 시간** 기준이며, 감시는 짧은 주기의 워치독 하나가 겸한다.
+ * 데드라인의 `onExpire` 를 쓰지 않는 이유는, 호출부가 데드라인을 미리 만들어 넘길 수 있어야
+ * (진행 로그에 유효 경과를 쓰려고) 하는데 그 경우 콜백을 나중에 붙일 수 없기 때문이다.
+ */
 function runCaptured(
   args: string[],
   input: string,
-  timeoutMs: number
+  timeoutMs: number,
+  opts: RunCapturedOptions = {}
 ): Promise<CapturedProcess> {
   return new Promise((resolve, reject) => {
+    const label = opts.label ?? "codex";
+    const idleTimeoutMs = opts.idleTimeoutMs ?? CODEX_IDLE_TIMEOUT_MS;
+    const ownsDeadline = !opts.deadline;
+    const deadline =
+      opts.deadline ?? createDeadline(timeoutMs, { label, tickMs: suggestTickMs(timeoutMs) });
+
     const child = spawn(CODEX_BIN, args, {
       cwd: CODEX_WORK_DIR,
       env: codexSubscriptionEnv(),
@@ -299,22 +396,70 @@ function runCaptured(
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
-    let timedOut = false;
+    let stopReason: "timeout" | "idle" | null = null;
     let overflow: "stdout" | "stderr" | null = null;
     let forceKillTimer: NodeJS.Timeout | null = null;
+    /** 마지막으로 출력이 있었던 시점(유효 경과 기준). */
+    let lastOutputAt = deadline.elapsedMs();
 
     const terminate = () => {
       if (forceKillTimer) return;
       child.kill("SIGTERM");
       forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
     };
-
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const stop = (reason: "timeout" | "idle") => {
+      if (stopReason) return;
+      stopReason = reason;
       terminate();
-    }, timeoutMs);
+    };
+
+    // 워치독 주기는 예산보다 촘촘해야 한다. 15초짜리 로그인 확인에 5초 주기를 그대로 쓰면
+    // 만료 판정이 최대 5초 늦는데, 예산의 1/4 로 줄여 짧은 예산에서도 반응이 남는다.
+    const watchdogMs = Math.max(500, Math.min(CODEX_WATCHDOG_MS, Math.floor(timeoutMs / 4)));
+    const watchdog = setInterval(() => {
+      if (deadline.expired()) {
+        stop("timeout");
+        return;
+      }
+      if (idleTimeoutMs > 0 && deadline.elapsedMs() - lastOutputAt >= idleTimeoutMs) {
+        log.warn(
+          `${label}: 무출력 ${Math.round(idleTimeoutMs / 1000)}초(유효) 경과 → 정지로 판단하고 중단 ` +
+            `(${formatDeadlineBudget(timeoutMs, deadline)})`
+        );
+        stop("idle");
+      }
+    }, watchdogMs);
+    watchdog.unref?.();
+
+    let settled = false;
+    const cleanup = () => {
+      clearInterval(watchdog);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      // 소유한 데드라인만 정리한다. dispose 는 경과 값을 얼리므로 아래 메시지 조립보다 먼저
+      // 불러도 숫자가 흔들리지 않는다.
+      if (ownsDeadline) deadline.dispose();
+    };
+    /** 결말은 한 번만. 'exit' 와 'close' 가 둘 다 오는 경로가 있다. */
+    const finish = (settle: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      settle();
+    };
+
+    /** 중단 사유별 오류. cleanup 뒤에 호출되므로 경과 숫자가 얼어 있다. */
+    const stopError = (): Error =>
+      stopReason === "idle"
+        ? new CodexTimeoutError(
+            `Codex 무출력 정지 — ${Math.round(idleTimeoutMs / 1000)}초(유효) 동안 출력 없음 ` +
+              `(${formatDeadlineBudget(timeoutMs, deadline)})`
+          )
+        : // ⚠️ 메시지에 **예산·벽시계·유효 경과 3종**을 병기한다. 이번 사고에서 "3600s 초과"
+          // 한 줄만 남아, 실제로는 50초밖에 못 돌았다는 사실을 전원 관리 로그를 뒤져서야 알았다.
+          new CodexTimeoutError(`Codex 응답 시간 초과(${formatDeadlineBudget(timeoutMs, deadline)})`);
 
     child.stdout.on("data", (chunk: Buffer) => {
+      lastOutputAt = deadline.elapsedMs();
       stdoutBytes += chunk.length;
       if (stdoutBytes > MAX_STDOUT_BYTES) {
         overflow = "stdout";
@@ -324,6 +469,7 @@ function runCaptured(
       stdout.push(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
+      lastOutputAt = deadline.elapsedMs();
       stderrBytes += chunk.length;
       if (stderrBytes > MAX_STDERR_BYTES) {
         overflow = "stderr";
@@ -333,26 +479,40 @@ function runCaptured(
       stderr.push(chunk);
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      reject(error);
+      finish(() => reject(error));
+    });
+    /**
+     * ⚠️ **중단시킨 경우에는 stdio EOF 를 기다리지 않는다.**
+     *
+     * `close` 는 프로세스 종료 **와** stdout/stderr 파이프가 모두 닫힌 뒤에야 온다. `codex exec`
+     * 는 하위 프로세스를 띄우므로, 부모를 SIGKILL 해도 손자가 파이프를 그대로 쥐고 있으면
+     * `close` 가 영영 오지 않는다(실측: 재현 스크립트에서 정지를 2초 만에 감지하고도 300초를
+     * 그대로 매달려 있었다). 그러면 정지를 잡아내고도 호출부의 `running` 플래그가 계속 잠겨,
+     * 무출력 감시를 넣은 의미가 사라진다. 그래서 중단 경로만 `exit` 에서 바로 끝내고 파이프를
+     * 끊는다. 정상 종료는 stdout 을 끝까지 모아야 하므로 그대로 `close` 를 기다린다.
+     */
+    child.on("exit", () => {
+      if (!stopReason) return;
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      finish(() => reject(stopError()));
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (timedOut) {
-        reject(new Error(`Codex 응답 시간 초과(${Math.round(timeoutMs / 1000)}s)`));
-        return;
-      }
-      if (overflow) {
-        reject(new Error(`Codex ${overflow} 출력이 안전 한도를 초과했습니다.`));
-        return;
-      }
-      resolve({
-        code,
-        signal,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
+      finish(() => {
+        if (stopReason) {
+          reject(stopError());
+          return;
+        }
+        if (overflow) {
+          reject(new Error(`Codex ${overflow} 출력이 안전 한도를 초과했습니다.`));
+          return;
+        }
+        resolve({
+          code,
+          signal,
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+        });
       });
     });
     child.stdin.on("error", () => {
@@ -367,6 +527,56 @@ function errorPreview(text: string, max = 700): string {
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
 }
 
+/** runCaptured 의 형태. assertCodexReady 의 테스트 주입점으로만 쓴다. */
+export type RunCapturedFn = (
+  args: string[],
+  input: string,
+  timeoutMs: number,
+  opts?: RunCapturedOptions
+) => Promise<CapturedProcess>;
+
+/**
+ * 이 실패를 **절전 탓으로 봐야 하는지**. 참이면 "Codex 사용 불가"로 단정하지 않고 다시 확인한다.
+ *
+ * 조건 두 개를 모두 요구하는 이유:
+ * - `CodexTimeoutError` — 로그인이 진짜로 풀린 경우는 CLI 가 즉시 답하므로 타임아웃이 아니다.
+ *   타임아웃만이 "확인 자체를 못 했다"는 뜻이다.
+ * - `sleptMs > 0` — 시도하는 동안 시스템이 실제로 잤다는 **측정된** 근거(deadline.ts 참고).
+ *   추측이 아니라 측정이라 재시도가 낭비되지 않는다.
+ */
+export function isSleepTaintedLoginFailure(error: unknown, sleptMs: number): boolean {
+  return isCodexTimeoutError(error) && sleptMs > 0;
+}
+
+/**
+ * 절전 정황을 폴백 사유에 새겨 넣는다.
+ *
+ * agent-query 는 이 메시지를 그대로 `recordFallback(from, cause.message)` 로 넘기고, 그 문자열이
+ * model.json 과 화면의 '임시 대체' 배지 근거가 된다. 절전으로 확인이 막힌 것을 "Codex 사용 불가"로만
+ * 적어 두면, 다음 사람이 멀쩡한 로그인을 붙들고 몇 시간을 헤맨다(이번 사고의 실제 경험).
+ */
+export function annotateSleepTaintedFailure(message: string, sleptMs: number): string {
+  if (sleptMs <= 0) return message;
+  return (
+    `${message} — ⚠️ 확인 중 시스템 절전 ${Math.round(sleptMs / 1000)}초 감지: ` +
+    "Codex 자체 문제가 아니라 절전으로 확인이 막혔을 가능성이 높다(다음 실행에서 재확인)"
+  );
+}
+
+/** 테스트 주입점. 운영 경로는 기본값 그대로 쓴다. */
+export interface CodexReadyDeps {
+  run?: RunCapturedFn;
+  /** 시도 중 절전 시간(ms) 조회. 기본은 데드라인이 실측한 값. */
+  sleptMsOf?: (deadline: Deadline) => number;
+  /** 시도에 쓴 벽시계(ms) 조회. 재시도가 벽시계 상한을 우회하지 못하게 막는 데 쓴다. */
+  wallMsOf?: (deadline: Deadline) => number;
+  retries?: number;
+  retryDelayMs?: number;
+}
+
+const wait = (ms: number): Promise<void> =>
+  ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+
 /**
  * **실행 전 Codex 확인.** 저장된 ChatGPT 정액제 로그인이 살아 있을 때만 통과시킨다.
  * 상태가 API 키 로그인이면 절대 실행하지 않아 Platform 종량 과금으로 빠질 가능성을 차단한다.
@@ -374,22 +584,85 @@ function errorPreview(text: string, max = 700): string {
  * 확인 실패는 CodexUnavailableError 로 올린다 — 일반 Error 로 던지면 로그인이 초기화됐을 때
  * (실측: 예고 없이 풀린다) 그날 수집이 통째로 빈 스냅샷이 된다. 호출부가 이번 실행만 대체
  * 모델로 살리고 다음 실행에서 다시 확인하게 하는 것이 이 타입의 목적이다.
+ *
+ * ⚠️ **절전 오판 방지가 이 함수의 두 번째 임무다.** 15초 예산은 유효 시간 기준이지만, 예산을
+ * 다 쓰지 않아도 확인이 실패할 수 있다(절전 구간에서는 자식 프로세스가 CPU 를 못 받아 답을
+ * 못 낸다). 그때 그대로 "Codex 사용 불가"로 올리면 **멀쩡한 Codex 를 두고 매 실행이 Opus 로**
+ * 빠지고, model.json 에는 틀린 사유가 남는다(실측: 10.4분 절전 하나에 이 경로가 통째로 샜다).
+ * 그래서 데드라인을 여기서 직접 만들어 **시도 중 실제 절전 시간을 측정**하고, 절전이 측정된
+ * 타임아웃만 재시도한다. 재시도까지 실패하면 그때는 폴백하되, 사유에 절전 정황을 새겨 둔다.
  */
-async function assertCodexReady(timeoutMs: number): Promise<void> {
-  let auth: CapturedProcess;
-  try {
-    auth = await runCaptured(["login", "status"], "", Math.min(timeoutMs, 15_000));
-  } catch (e) {
-    // spawn 자체가 실패 = CLI 미설치(ENOENT)나 실행 불가. 확인 단계에서 걸리므로 가용성 문제다.
-    throw new CodexUnavailableError(`Codex CLI 실행 실패 — ${(e as Error).message}`);
-  }
-  const authText = `${auth.stdout}\n${auth.stderr}`;
-  if (auth.code !== 0 || !isChatGptAuthStatus(authText)) {
-    throw new CodexUnavailableError(
-      "Codex ChatGPT 정액제 로그인이 확인되지 않습니다(로그인 초기화 등). 터미널에서 `codex login` 후 " +
-        "`codex login status`가 'Logged in using ChatGPT'인지 확인하세요. " +
-        `현재 상태: ${errorPreview(authText, 160) || `code=${auth.code}`}`
-    );
+export async function assertCodexReady(
+  timeoutMs: number,
+  deps: CodexReadyDeps = {}
+): Promise<void> {
+  const run = deps.run ?? runCaptured;
+  const sleptMsOf = deps.sleptMsOf ?? ((d: Deadline) => d.sleptMs?.() ?? 0);
+  const wallMsOf = deps.wallMsOf ?? ((d: Deadline) => d.wallElapsedMs());
+  const retries = deps.retries ?? CODEX_LOGIN_CHECK_RETRIES;
+  const retryDelayMs = deps.retryDelayMs ?? CODEX_LOGIN_CHECK_RETRY_DELAY_MS;
+  const budgetMs = Math.min(timeoutMs, CODEX_LOGIN_CHECK_TIMEOUT_MS);
+  const label = "codex login status";
+  /**
+   * 재시도를 포함한 확인 단계 전체의 벽시계 상한. 데드라인 1회분의 상한과 같은 값을 쓴다.
+   *
+   * ⚠️ 이게 없으면 재시도가 벽시계 상한을 곱해 버린다(3회 × 1시간 = 3시간). 그러면 데드라인에
+   * 상한을 넣은 의미가 사라진다. 재시도는 **짧은 DarkWake 창에 걸린 실패**를 구제하려는 것이지,
+   * 하룻밤 절전을 버티려는 게 아니다 — 몇 시간을 자 버린 뒤라면 그 슬롯은 이미 지났고,
+   * 폴백을 태우고 슬롯을 놓아주는 편이 낫다.
+   */
+  const wallLimitMs = wallCeilingFor(budgetMs);
+  let wallSpentMs = 0;
+
+  for (let attempt = 0; ; attempt += 1) {
+    // 데드라인을 호출부에서 만들어야 실패 후에도 절전 실측치를 읽을 수 있다(runCaptured 가
+    // 만들면 내부에서 dispose 되고 우리는 3종 경과 문자열만 받는다).
+    const deadline = createDeadline(budgetMs, { label, tickMs: suggestTickMs(budgetMs) });
+    let auth: CapturedProcess;
+    try {
+      auth = await run(["login", "status"], "", budgetMs, {
+        label,
+        deadline,
+        // 한 줄 출력하고 끝나는 작업이라 무출력 감시는 의미가 없다(총량 예산이 곧 상한).
+        idleTimeoutMs: 0,
+      });
+    } catch (e) {
+      const slept = sleptMsOf(deadline);
+      wallSpentMs += wallMsOf(deadline);
+      deadline.dispose();
+      if (isSleepTaintedLoginFailure(e, slept) && attempt < retries && wallSpentMs < wallLimitMs) {
+        log.warn(
+          `${label}: 확인 실패했지만 시도 중 절전 ${Math.round(slept / 1000)}초가 측정됐다 → ` +
+            `Codex 사용 불가로 단정하지 않고 재시도 ${attempt + 1}/${retries} (${(e as Error).message})`
+        );
+        await wait(retryDelayMs);
+        continue;
+      }
+      // 시간 초과는 이미 가용성 오류(CodexTimeoutError)라 3종 경과가 담긴 원문을 살리되,
+      // 절전이 측정됐다면 그 정황을 폴백 사유에 남긴다.
+      // ⚠️ 재포장은 **타임아웃일 때만** 한다. 한도 소진(UsageLimitError) 같은 하위 종류를 여기서
+      // 타임아웃으로 바꿔 버리면 한도 전용 처리(모델 전환·대기)가 통째로 오작동한다.
+      if (isCodexTimeoutError(e) && slept > 0) {
+        throw new CodexTimeoutError(annotateSleepTaintedFailure((e as Error).message, slept));
+      }
+      if (isCodexUnavailableError(e)) throw e;
+      // spawn 자체가 실패 = CLI 미설치(ENOENT)나 실행 불가. 확인 단계에서 걸리므로 가용성 문제다.
+      throw new CodexUnavailableError(
+        annotateSleepTaintedFailure(`Codex CLI 실행 실패 — ${(e as Error).message}`, slept)
+      );
+    }
+    deadline.dispose();
+
+    const authText = `${auth.stdout}\n${auth.stderr}`;
+    if (auth.code !== 0 || !isChatGptAuthStatus(authText)) {
+      // 여기까지 왔다 = CLI 가 **답은 했다**. 절전과 무관한 진짜 로그인 문제이므로 재시도하지 않는다.
+      throw new CodexUnavailableError(
+        "Codex ChatGPT 정액제 로그인이 확인되지 않습니다(로그인 초기화 등). 터미널에서 `codex login` 후 " +
+          "`codex login status`가 'Logged in using ChatGPT'인지 확인하세요. " +
+          `현재 상태: ${errorPreview(authText, 160) || `code=${auth.code}`}`
+      );
+    }
+    return;
   }
 }
 
@@ -412,10 +685,13 @@ export async function runCodexQueryText(
     ? options.tools.filter((x): x is string => typeof x === "string")
     : [];
   const allowWebSearch = toolNames.some((x) => x === "WebSearch" || x === "WebFetch");
-  const startedAt = Date.now();
+
+  // 데드라인을 여기서 만들어 runCaptured 에 넘긴다. 그래야 진행 로그에도 **유효 경과**를 쓸 수
+  // 있다. 예전 진행 로그는 벽시계만 찍어서, 절전 사고 당시 "60분 경과"라고 남겼지만 실제로
+  // 일한 시간은 50초였다 — 그 격차가 로그에 보이지 않아 원인 규명이 늦어졌다.
+  const deadline = createDeadline(timeoutMs, { label, tickMs: suggestTickMs(timeoutMs) });
   const heartbeat = setInterval(() => {
-    const min = Math.round((Date.now() - startedAt) / 60_000);
-    log.info(`${label}: Codex 진행 중 — ${min}분 경과`);
+    log.info(`${label}: Codex 진행 중 — ${formatDeadlineBudget(timeoutMs, deadline)}`);
   }, 5 * 60_000);
 
   try {
@@ -423,7 +699,8 @@ export async function runCodexQueryText(
     const result = await runCaptured(
       buildCodexArgs(model, allowWebSearch),
       buildCodexPrompt(prompt, options),
-      timeoutMs
+      timeoutMs,
+      { label, deadline }
     );
     const parsed = parseCodexJsonl(result.stdout);
     // 한도 판단은 **실패한 실행의 원문**에만 적용한다(정규식 주석 참고). 오류 이벤트 → stderr →
@@ -457,11 +734,13 @@ export async function runCodexQueryText(
         `출력 ${parsed.usage.outputTokens}, 추론 ${parsed.usage.reasoningOutputTokens} 토큰`
       : "토큰 사용량 미제공";
     log.info(
-      `${label}: Codex 완료 — ${Math.round((Date.now() - startedAt) / 1000)}초, ` +
+      `${label}: Codex 완료 — 유효 ${Math.round(deadline.elapsedMs() / 1000)}초` +
+        `(벽시계 ${Math.round(deadline.wallElapsedMs() / 1000)}초), ` +
         `웹검색 ${parsed.webSearches}회, 명령 ${parsed.commands}회, ${usage}, 결과 ${parsed.finalText.length}자`
     );
     return parsed.finalText;
   } finally {
     clearInterval(heartbeat);
+    deadline.dispose();
   }
 }
