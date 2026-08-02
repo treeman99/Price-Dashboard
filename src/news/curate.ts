@@ -129,7 +129,14 @@ export async function curateNews(date: string): Promise<NewsSnapshot> {
           "너는 꼼꼼한 한국어 뉴스 큐레이터다. 최근 24시간 기사만 채택하고(오래되거나 날짜 불명확하면 버림), " +
           "같은 사건은 통합하며, 영문 소스도 한국어로 요약해 마지막에 지정된 JSON 한 개만 출력한다.",
       },
-      config.agentQueryTimeoutMs,
+      // 뉴스 전용 예산(기본 20분). 예전엔 공용 `agentQueryTimeoutMs`(60분)를 썼다.
+      //
+      // 실측(logs/stdout.log 완료 로그 n=16, 시각은 UTC): 중앙 196초 · p90 234초 · 최대 420초
+      // (2026-08-01 08:07Z, 웹검색 31회). 정상 소요의 3배가 20분이라 카테고리를 늘리거나
+      // 웹이 느린 날은 그대로 흡수하면서도, 죽은 실행을 한 시간씩 끌고 가지 않는다.
+      // 60분이 실제로 태운 값이다: 2026-08-02 00:36Z 에 3600초를 소진하고 실패했고,
+      // 그 한 시간이 세마포어를 물고 있어 뒤따르던 유튜브·팝업/전시 슬롯까지 연쇄로 밀렸다.
+      config.newsTimeoutMs,
       "뉴스 큐레이션"
     );
     if (!finalText) return emptySnapshot(today, "뉴스 큐레이션 결과가 비어 있습니다.");

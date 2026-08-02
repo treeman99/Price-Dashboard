@@ -69,15 +69,21 @@ const STOCK_AGENT_TOOLS = ["WebSearch", "WebFetch"];
 /**
  * 모드별 타임아웃.
  *
- * 브리핑은 공용 값(`agentQueryTimeoutMs`, 기본 60분)을 그대로 쓴다 — 조사 주제가 10개 넘고
- * 실측 소요가 30분을 넘긴 적이 있다.
+ * 브리핑은 **브리핑 전용 예산**(`stockBriefTimeoutMs`, 기본 15분)을 쓴다. 예전엔 공용
+ * `agentQueryTimeoutMs`(60분)를 "조사 주제가 10개 넘고 실측이 30분을 넘긴 적이 있다"는 이유로
+ * 그대로 썼는데, 완료 로그를 전수로 세어 보니 그 30분은 근거가 없었다 —
+ * 실측(n=17): 중앙 262초 · p90 322초 · 최대 623초(10.4분). 15분은 최대치의 1.4배다.
+ *
+ * 게다가 브리핑은 슬롯(08:00 결산 / 17:00 프리뷰)에 묶인 결과물이라 늦게 나오면 값이 급락한다.
+ * 60분을 붙들고 있어 봐야 그 사이 슬롯이 지나가고, 수집 세마포어까지 물고 있어 뒤따르는 탭을
+ * 통째로 밀어낸다. 살아날 가망 없는 실행은 15분에 끊고 catch-up 에 넘기는 편이 낫다.
  *
  * ⚠️ 펄스는 **반드시 짧아야 한다.** 매시간 도는데 공용 60분을 물리면 실행 하나가 다음 정시를
  *    넘겨 겹치고, 동시 실행 가드에 막혀 그 시각이 통째로 날아간다. 기본 10분이면 정시 간격
- *    (60분)의 1/6 이라 지연이 누적되지 않는다.
+ *    (60분)의 1/6 이라 지연이 누적되지 않는다(실측 n=87: 중앙 66초 · 최대 358초).
  */
 function timeoutFor(mode: StockAgentMode): number {
-  return mode === "pulse" ? config.stockPulseTimeoutMs : config.agentQueryTimeoutMs;
+  return mode === "pulse" ? config.stockPulseTimeoutMs : config.stockBriefTimeoutMs;
 }
 
 /**

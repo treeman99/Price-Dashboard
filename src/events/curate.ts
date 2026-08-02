@@ -423,7 +423,14 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
         systemPrompt:
           "너는 꼼꼼한 팝업/전시 큐레이터다. 스니펫을 믿지 말고 WebSearch/WebFetch(차단 시 Bash로 insane-engine)로 실제 날짜를 검증하고, 이미 종료된 행사는 제외한 뒤, 실제 개별 행사를 중복 없이 추려 마지막에 지정된 JSON 한 개만 출력한다.",
       },
-      config.agentQueryTimeoutMs,
+      // 팝업/전시 전용 예산(기본 20분). 예전엔 공용 `agentQueryTimeoutMs`(60분)를 썼다.
+      //
+      // 실측(완료 로그 n=7): 중앙 329초 · 최대 422초. 이 탭은 스니펫을 믿지 않고 행사마다
+      // 원문을 열어 날짜를 검증하므로(WebFetch 20회대) 정상 소요가 5~7분으로 뉴스·유튜브보다
+      // 길다. 그래도 20분이면 최대치의 3배다. 60분이 실제로 태운 값이다(로그 시각은 UTC):
+      // 10:00 KST 슬롯의 catch-up 이 01:18Z 에 시작해 3600초를 꽉 채우고 02:18Z 에 타임아웃 →
+      // 원본 폴백(naver-raw). 결국 그날 LLM 결과는 두 번째 catch-up 이 도는 12:44 KST 에야 나왔다.
+      config.eventsTimeoutMs,
       "팝업/전시 큐레이션"
     );
     if (!finalText) return rawSnapshot(corpus, date);
