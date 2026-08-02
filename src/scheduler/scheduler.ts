@@ -55,7 +55,7 @@ function safePruneOldData() {
 }
 
 /** 지금 시각이 주어진 예정 시각(HH:mm)을 지났는지 */
-function pastTime(hhmm: string): boolean {
+export function pastTime(hhmm: string): boolean {
   const { hour, minute } = parseCollectTime(hhmm);
   const now = new Date();
   return now.getHours() > hour || (now.getHours() === hour && now.getMinutes() >= minute);
@@ -471,7 +471,7 @@ async function safeRefreshEvents(trigger: string, notify: boolean) {
  * 두 근거가 모두 있으면 **AND** 로 본다 — 시도는 성공했다는데 디스크에 남은 게 naver-raw 면
  * 그건 성공이 아니다. 두 판정의 'ok' 정의가 나중에 어긋나도 안전한 쪽(재시도)으로 접힌다.
  */
-function eventsCoveredToday(): boolean {
+export function eventsCoveredToday(): boolean {
   const snap = getEventsSnapshot();
   const snapshotOk = snap?.date === today() && snap.source === "llm";
   const attempt = getEventsLastAttempt();
@@ -537,7 +537,7 @@ async function safeRefreshNews(trigger: string, notify: boolean) {
  * 그걸 커버로 인정해 **그날의 뉴스를 통째로 포기**했다(실패 후 재시도가 한 번도 안 돌았다).
  * 이제는 실패가 커버로 안 잡히므로 catch-up 이 다시 돈다 — 무한 재시도는 위쪽 백오프가 막는다.
  */
-function newsCoveredAt(scheduled: Date): boolean {
+export function newsCoveredAt(scheduled: Date): boolean {
   const snap = getNewsSnapshot();
   if (snap?.date !== today()) return false;
   if (snap.source !== "llm") return false;
@@ -549,7 +549,7 @@ function newsCoveredAt(scheduled: Date): boolean {
 }
 
 /** HH:mm → 오늘 그 시각의 Date */
-function scheduledToday(hhmm: string): Date {
+export function scheduledToday(hhmm: string): Date {
   const { hour, minute } = parseCollectTime(hhmm);
   const d = new Date();
   d.setHours(hour, minute, 0, 0);
@@ -619,7 +619,7 @@ async function safeRefreshYoutube(trigger: string, notify: boolean) {
  * 스냅샷(source="empty")이 오늘 날짜로 저장된다 — 날짜만 보는 게이트는 그 하루를 통째로
  * 포기했다. 조용한 구멍이라 여기서 막는다.
  */
-function youtubeCoveredAt(scheduled: Date): boolean {
+export function youtubeCoveredAt(scheduled: Date): boolean {
   const snap = getYoutubeSnapshot();
   if (snap?.date !== today()) return false;
   if (snap.source !== "llm") return false;
