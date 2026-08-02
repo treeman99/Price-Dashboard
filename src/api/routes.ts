@@ -86,6 +86,10 @@ import { allRecentPulseAlerts } from "../db/repo.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
 import { getModelSettings, saveAgentModel } from "../util/model-store.ts";
 import { rescheduleAll, withLlmSlot } from "../scheduler/scheduler.ts";
+// 가동 중단 사후 보고(§11 P1). 화면 상태는 **합성 루트**가 감싼 getDowntimeView() 만 쓴다 —
+// 그쪽이 원장 파손 시에도 throw 하지 않고 빈 뷰를 돌려주기 때문이다. 목록·확인은 저장 계층 직행.
+import { getDowntimeView } from "../uptime/index.ts";
+import { ackDowntimeEvent, listDowntimeEvents } from "../uptime/store.ts";
 import { generateCategoryDescription, shouldAutoDescribe } from "../util/category-describe.ts";
 import { sendIMessage, isIMessageConfigured } from "../notify/imessage.ts";
 import { log } from "../util/log.ts";
@@ -204,6 +208,90 @@ async function startManualLlmJob(display: string, fn: () => Promise<unknown>): P
 
 api.get("/health", (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
+});
+
+// ── 가동 중단 사후 보고 (명세 §11 P1-12) ─────────────────────────────────────
+//
+// 특정 탭이 아니라 **전역**이라 /health 옆에 둔다. 절전·정전은 뉴스·유튜브·팝업·로또를 동시에
+// 죽이는데, 사용자는 "왜 뉴스가 비었지" 하며 뉴스 탭을 연다(§6.5). 그래서 화면에서도 탭이
+// 아니라 헤더/전역 배너에 붙고, 라우트도 그 구조를 그대로 따른다.
+//
+// ★ 이 세 라우트는 **가볍다.** 판정·수집·문구 생성은 전부 P0 쪽(하트비트 틱·기동 부검)에서
+//   이미 끝나 원장 JSON 에 완성된 한국어로 들어 있다. 여기서 하는 일은 그 JSON 을 읽어
+//   내려보내는 것과 ackedAt 한 필드를 적는 것뿐이다. 라우트가 무거워지면 사후 보고 화면
+//   하나 때문에 대시보드 응답이 느려지는데, 그건 이 기능이 진단하려던 것보다 큰 사고다.
+
+/**
+ * 화면이 60초마다 폴링하는 상태. `{ current, unackedCount }`.
+ *
+ * - `current`      = 배너 1건(미확인 `사고` 중 최신). 평상시엔 **null** 이라 화면은 지금과 동일.
+ * - `unackedCount` = 헤더 배지 숫자(미확인 `사고` + `기록만`. `무시` 는 세지 않는다).
+ *
+ * `getDowntimeView()` 는 원장이 깨져도 throw 하지 않고 빈 뷰를 준다 — try/catch 가 없는 것은
+ * 빠뜨린 게 아니라 그쪽 계약이다(`src/uptime/index.ts` 주석 참조).
+ */
+api.get("/downtime", (_req, res) => {
+  res.json(getDowntimeView());
+});
+
+/** 한 번에 내려보낼 수 있는 사건 수 상한. 원장 회전 상한(100건)과 같은 값으로 맞춘다. */
+const DOWNTIME_HISTORY_MAX = 100;
+const DOWNTIME_HISTORY_DEFAULT = 50;
+
+/**
+ * 지난 기록(최신순). 화면의 '지난 기록 보기'가 쓴다.
+ *
+ * ⚠️ `severity: "무시"` 인 사건도 그대로 내려간다. 원장에는 "안 보여준 것"까지 남긴다는 게
+ *    §3.5 의 결정이고("이 기능이 오탐하고 있나"를 나중에 반증하려면 필요하다), 무엇을
+ *    가려서 보여줄지는 **화면 쪽 규칙**이다. 서버가 미리 걸러 버리면 화면에서 다시 못 본다.
+ */
+api.get("/downtime/history", (req, res) => {
+  const raw = Number(req.query.limit);
+  const limit =
+    Number.isFinite(raw) && raw > 0
+      ? Math.min(Math.floor(raw), DOWNTIME_HISTORY_MAX)
+      : DOWNTIME_HISTORY_DEFAULT;
+  try {
+    res.json({ events: listDowntimeEvents(limit) });
+  } catch (e) {
+    // 원장 파일이 깨진 경우. 500 을 주면 화면이 "불러오지 못했습니다"만 띄우고 끝나는데,
+    // 그 사실은 store 가 이미 `.broken` 사본 + 경고 로그로 남겼다. 화면은 빈 목록이면 된다.
+    log.warn(`가동 중단 이력 조회 실패 — 빈 목록으로 응답합니다: ${(e as Error).message}`);
+    res.json({ events: [] });
+  }
+});
+
+/**
+ * [확인했어요] — `ackedAt` 기록 + 미발송 알림 취소.
+ *
+ * 닫기를 서버에 저장하는 이유(§6.5): 기존 두 배너(수집 실패·스냅샷 노후)는 다음 수집이
+ * 성공하면 저절로 사라지지만, 사후 보고는 **과거의 사실**이라 저절로 사라질 조건이 없다.
+ *
+ * 알림 취소는 `ackDowntimeEvent()` 안에서 함께 일어난다 — `queuedUntil` 을 지우고, 이후
+ * `decideDowntimeNotify()` 가 `ackedAt` 을 보고 skip 한다(§7-4). 조용시간에 보류된 문자가
+ * 아침 7시에 뒤늦게 도착해 **이미 확인한 사고**를 다시 알리는 것을 막는 조항이다.
+ *
+ * ★ 일지(`data/downtime.log`) 재작성은 **일부러 하지 않는다.** 내레이터 배선은 합성 루트
+ *   (`src/uptime/index.ts`)의 소유이고, HTTP 핸들러가 200항목짜리 텍스트 파일을 통째로 다시
+ *   쓰는 것은 "라우트에서 무거운 일을 하지 않는다"는 이 블록의 원칙에 어긋난다. 원장이 정본이고
+ *   일지는 다음 재작성 때 따라온다(store.ts `markDowntimeNotified` 주석의 같은 계약).
+ *
+ * ★ 응답에 갱신된 `view` 를 함께 담는다. 화면이 확인 직후 배지 숫자를 고치려고 곧바로
+ *   `GET /api/downtime` 을 한 번 더 부르는 왕복을 없앤다(이 상태는 화면에서 즉시 바뀌어야 한다).
+ */
+api.post("/downtime/:id/ack", (req, res) => {
+  // id 는 `2026-08-02T00:29:10+09:00` 같은 로컬 ISO 다. `:` `+` 가 들어 있지만 경로 구분자(`/`)는
+  // 없어 한 세그먼트에 담기고, Express 가 디코드해 준다(화면은 encodeURIComponent 로 보낸다).
+  const id = String(req.params.id ?? "");
+  if (!id) return res.status(400).json({ error: "사건 id 가 필요합니다." });
+  try {
+    const event = ackDowntimeEvent(id);
+    if (!event) return res.status(404).json({ error: "그런 가동 중단 기록이 없습니다." });
+    res.json({ ok: true, event, view: getDowntimeView() });
+  } catch (e) {
+    log.warn(`가동 중단 확인 처리 실패 (사건 ${id}): ${(e as Error).message}`);
+    res.status(500).json({ error: (e as Error).message });
+  }
 });
 
 api.get("/config", (_req, res) => {

@@ -20,6 +20,7 @@ import type {
   PulseRunResult,
 } from "@shared/types";
 import type { LottoSnapshot } from "@shared/lotto";
+import type { DowntimeEvent, DowntimeView } from "@shared/uptime";
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -505,4 +506,34 @@ export const api = {
   // 조회 하나뿐이다. 갱신은 매주 일요일 10:00 서버 cron 이 하고 화면에는 조작 버튼이 없다.
   // 백엔드가 500 을 내면 그대로 throw 되므로 화면에서 try/catch 로 받아 빈 상태를 그린다.
   lotto: () => fetch("/api/lotto").then((r) => j<LottoSnapshot>(r)),
+
+  // ── 가동 중단 사후 보고 ──
+  //
+  // 맥이 잠들었거나 꺼져 있어서 자동 수집이 통째로 밀린 구간을 나중에 확인하는 창구다.
+  // 문장은 **서버가 완성해서** 내려준다(headline/body/reasonLine) — 화면은 조립하지 않는다.
+  // 절전 사유·부팅 시각 같은 판정 재료는 서버만 알고, 그 재료로 만든 한국어가 일지 파일·문자
+  // 메시지·이 화면 세 곳에 **똑같이** 나가야 하기 때문이다(복제하면 조용히 갈라진다).
+
+  /**
+   * 화면 상태 한 벌. 60초마다 폴링한다.
+   * - `current`      = 지금 띄울 배너 1건. **평상시엔 null** 이라 화면에 아무것도 뜨지 않는다.
+   * - `unackedCount` = 헤더 배지 숫자(확인하지 않은 `사고` + `기록만`).
+   */
+  downtime: () => fetch("/api/downtime").then((r) => j<DowntimeView>(r)),
+
+  /** 지난 기록(최신순). '지난 기록 보기'를 펼칠 때만 부른다. */
+  downtimeHistory: (limit = 50) =>
+    fetch(`/api/downtime/history?limit=${limit}`).then((r) => j<{ events: DowntimeEvent[] }>(r)),
+
+  /**
+   * [확인했어요]. `ackedAt` 이 서버에 남고 미발송 알림이 취소된다.
+   *
+   * id 는 `2026-08-02T00:29:10+09:00` 같은 로컬 ISO 라 `:` `+` 가 들어 있다 —
+   * **반드시 encodeURIComponent** 를 거쳐야 경로 한 세그먼트로 온전히 도착한다.
+   * 응답에 갱신된 `view` 가 함께 오므로 배지 숫자를 고치려고 다시 폴링할 필요가 없다.
+   */
+  ackDowntime: (id: string) =>
+    fetch(`/api/downtime/${encodeURIComponent(id)}/ack`, { method: "POST" }).then((r) =>
+      j<{ ok: boolean; event: DowntimeEvent; view: DowntimeView }>(r)
+    ),
 };

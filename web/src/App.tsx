@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Loader2, PowerOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -11,6 +11,15 @@ import { HoldingsBoard } from "@/components/HoldingsBoard";
 import { LottoBoard } from "@/components/LottoBoard";
 import { ScrollToTop } from "@/components/ScrollToTop";
 import { ModelControl } from "@/components/ModelControl";
+import { localDay } from "@/components/SnapshotNotice";
+import {
+  DowntimeBadge,
+  DowntimeBanner,
+  DowntimeHistoryPanel,
+  readBannerAckedDay,
+  rememberBannerAckedDay,
+} from "@/components/DowntimeBanner";
+import type { DowntimeEvent, DowntimeView } from "@shared/uptime";
 
 interface TabDef {
   id: string;
@@ -36,6 +45,9 @@ const TABS: TabDef[] = [
   { id: "lotto", label: "로또", color: "#7c3aed", content: <LottoBoard /> },
 ];
 
+/** 화면이 서버에 가동 중단 상태를 물어보는 주기. 서버 하트비트(60초)와 같은 해상도로 맞춘다. */
+const DOWNTIME_POLL_MS = 60_000;
+
 export default function App() {
   const [active, setActive] = useState(TABS[0].id);
   const activeTab = TABS.find((t) => t.id === active) ?? TABS[0];
@@ -52,6 +64,101 @@ export default function App() {
       .then((s) => setServiceInstalled(s.installed))
       .catch(() => {});
   }, []);
+
+  // ── 가동 중단 사후 보고 (절전·정전으로 자동 수집이 통째로 밀린 구간) ──────────
+  //
+  // 특정 탭이 아니라 **전역**이다. 맥이 잠들면 뉴스·유튜브·팝업·로또가 동시에 밀리는데,
+  // 사용자는 "왜 뉴스가 비었지" 하며 뉴스 탭을 연다. 그래서 새 탭을 만들지 않고 헤더 배지와
+  // 기존 전역 배너 슬롯에 붙인다.
+  //
+  // ★ 평상시에는 `view.current === null` · `unackedCount === 0` 이라 **아무것도 렌더링되지
+  //   않는다.** 화면은 이 기능이 없던 때와 100% 동일하다. 이 성질이 깨지면 사용자가 배너를
+  //   배경으로 학습해 버려서, 정작 진짜 사고 때 읽지 않는다.
+  const [downtime, setDowntime] = useState<DowntimeView | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<DowntimeEvent[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyErr, setHistoryErr] = useState<string | null>(null);
+  const [ackingId, setAckingId] = useState<string | null>(null);
+  // 마지막으로 [확인했어요] 를 누른 로컬 날짜. 같은 날 두 번째 사건부터는 배너 대신 배지만 올린다.
+  const [ackedDay, setAckedDay] = useState<string | null>(() => readBannerAckedDay());
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .downtime()
+        .then((v) => {
+          if (alive) setDowntime(v);
+        })
+        // 실패는 조용히 삼킨다. 이건 **사후 보고**지 대시보드의 본업이 아니라, 못 불러왔다고
+        // 빨간 오류 줄을 띄우면 정작 보고할 사고가 없을 때도 화면이 시끄러워진다.
+        // (구버전 서버에는 이 라우트가 아예 없어 404 가 난다 — 그때도 조용해야 한다.)
+        .catch(() => {});
+    void load();
+    const t = setInterval(() => void load(), DOWNTIME_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryErr(null);
+    try {
+      setHistory((await api.downtimeHistory(50)).events);
+    } catch (e) {
+      setHistoryErr((e as Error).message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  function toggleHistory() {
+    const next = !historyOpen;
+    setHistoryOpen(next);
+    // 펼칠 때마다 다시 읽는다 — 목록이 길지 않고(최대 50건), 접었다 펴는 동작 자체가
+    // "지금 상태가 궁금하다"는 뜻이라 캐시된 목록을 보여주면 그 의도를 배신한다.
+    if (next) void loadHistory();
+  }
+
+  // 배너로 띄울 사건. 서버는 미확인 `사고` 중 최신 1건만 `current` 로 준다(§3.5 손실 게이트).
+  const bannerEvent = downtime?.current ?? null;
+  // 하루 1회 제한. 배지를 눌러 기록을 펼친 상태에서는 제한을 풀어 준다 — 그건 사용자가
+  // 직접 "지금 보겠다"고 말한 것이라, 그때까지 숨기면 확인할 방법이 사라진다.
+  const bannerVisible = bannerEvent != null && (historyOpen || ackedDay !== localDay());
+
+  /**
+   * [확인했어요] — 서버에 `ackedAt` 을 남기고 아직 안 보낸 알림을 취소한다.
+   *
+   * 서버 응답이 갱신된 `view` 를 함께 주므로 배지 숫자는 왕복 없이 즉시 맞는다.
+   *
+   * "오늘은 이미 봤다" 표식은 **배너로 떠 있던 사건을 확인했을 때만** 적는다. 지난 기록
+   * 목록에서 옛 사건을 정리한 것까지 오늘의 1회로 세면, 정작 오늘 새로 난 사고의 배너가
+   * 뜨지 못한다.
+   */
+  const ackDowntime = useCallback(
+    async (id: string) => {
+      const wasBanner = bannerVisible && id === bannerEvent?.id;
+      setAckingId(id);
+      try {
+        const r = await api.ackDowntime(id);
+        setDowntime(r.view);
+        setHistory((h) => (h ? h.map((e) => (e.id === r.event.id ? r.event : e)) : h));
+        if (wasBanner) {
+          const today = localDay();
+          rememberBannerAckedDay(today);
+          setAckedDay(today);
+        }
+      } catch (e) {
+        setErr((e as Error).message);
+      } finally {
+        setAckingId(null);
+      }
+    },
+    [bannerVisible, bannerEvent]
+  );
 
   async function uninstallService() {
     if (
@@ -83,6 +190,12 @@ export default function App() {
           <div className="flex items-center justify-between gap-6 pt-3">
             <h1 className="shrink-0 text-lg font-bold">📷 Daily Dashboard</h1>
             <div className="flex items-center gap-3">
+              {/* 확인하지 않은 가동 중단 기록. 0건이면 아예 렌더링되지 않는다(평상시 헤더 = 지금 그대로). */}
+              <DowntimeBadge
+                count={downtime?.unackedCount ?? 0}
+                open={historyOpen}
+                onToggle={toggleHistory}
+              />
               {/* 수집·큐레이션 AI 모델 선택은 특정 탭이 아닌 전역 설정 → 헤더에 배치 */}
               <ModelControl />
               {serviceInstalled && (
@@ -135,6 +248,29 @@ export default function App() {
         )}
         {err && (
           <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
+        )}
+        {/*
+          가동 중단 배너 — 기존 전역 배너 두 개(파란 안내 · 빨간 오류) 아래, 탭 내용 바로 위.
+          새 탭을 만들지 않는 이유는 명세 §6.5 그대로다: 절전·정전은 여러 탭을 동시에 죽이는데
+          사용자는 비어 있는 그 탭을 열지, "가동 기록" 탭을 찾아 들어가지 않는다.
+        */}
+        {bannerVisible && bannerEvent && (
+          <DowntimeBanner
+            event={bannerEvent}
+            onAck={() => void ackDowntime(bannerEvent.id)}
+            acking={ackingId === bannerEvent.id}
+            onOpenHistory={historyOpen ? undefined : toggleHistory}
+          />
+        )}
+        {historyOpen && (
+          <DowntimeHistoryPanel
+            events={history}
+            loading={historyLoading}
+            error={historyErr}
+            onAck={(id) => void ackDowntime(id)}
+            ackingId={ackingId}
+            highlightedId={bannerVisible ? bannerEvent?.id : null}
+          />
         )}
         {activeTab.content}
       </main>
