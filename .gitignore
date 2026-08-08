@@ -1,6 +1,10 @@
 # secrets
+# .env* 로 넓게 잡는다 — 2026-08-08 자격증명 교체 중 만든 .env.bak.<타임스탬프> 가
+# 비밀키를 통째로 담은 채 untracked 로 잡혔다. 이름을 하나씩 나열하는 방식은
+# 다음에 누가 .env.old 를 만드는 순간 또 뚫린다.
 .env
-.env.local
+.env.*
+!.env.example
 
 # dependencies
 node_modules/

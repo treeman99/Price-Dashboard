@@ -1,7 +1,7 @@
-import nodemailer from "nodemailer";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { renderLineChartPng } from "./chart.ts";
+import { isMailConfigured, sendMail, type MailAttachment } from "./mailer.ts";
 import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import { listStocks } from "../stock/tickers.ts";
@@ -481,15 +481,15 @@ export async function sendStockIMessage(s: StockSnapshot): Promise<boolean> {
  */
 export async function sendStockEmail(s: StockSnapshot): Promise<boolean> {
   if (!config.notify.email) return false;
-  if (!config.notify.gmailAddress || !config.notify.gmailAppPassword) {
-    log.warn("이메일 자격증명 미설정 → 증시 이메일 건너뜀");
+  if (!isMailConfigured()) {
+    log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 증시 이메일 건너뜀");
     return false;
   }
 
   try {
     // 차트를 먼저 만들고 성공한 종목만 HTML 에 img 를 박는다(깨진 CID 방지).
     // pinned 는 스냅샷이 아니라 원장에만 있어 여기서 조회한다 → 순수 함수는 이 조회를 타지 않는다.
-    const attachments: { filename: string; content: Buffer; cid: string }[] = [];
+    const attachments: MailAttachment[] = [];
     const chartSymbols = new Set<string>();
     if (!s.closed) {
       const pinned = new Set(
@@ -504,7 +504,9 @@ export async function sendStockEmail(s: StockSnapshot): Promise<boolean> {
           attachments.push({
             filename: `chart_${s.market}_${a.symbol}.png`,
             content: renderStockChart(a),
+            // 본문의 <img src="cid:..."> 와 짝을 이룬다 — 이 값이 어긋나면 차트가 깨진다.
             cid: chartCid(s.market, a.symbol),
+            contentType: "image/png",
           });
           chartSymbols.add(a.symbol);
         } catch (e) {
@@ -513,21 +515,11 @@ export async function sendStockEmail(s: StockSnapshot): Promise<boolean> {
       }
     }
 
-    const transport = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true,
-      auth: { user: config.notify.gmailAddress, pass: config.notify.gmailAppPassword },
-    });
-    await transport.sendMail({
-      from: config.notify.gmailAddress,
-      to: config.notify.gmailAddress,
+    return await sendMail({
       subject: subjectOf(s),
       html: buildStockEmailHtml(s, chartSymbols),
       attachments,
     });
-    log.info(`증시 이메일 발송 완료 [${s.market}] (차트 ${attachments.length}개 포함)`);
-    return true;
   } catch (e) {
     log.warn(`증시 이메일 발송 예외 [${s.market}]: ${(e as Error).message}`);
     return false;

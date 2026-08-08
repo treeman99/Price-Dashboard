@@ -1,6 +1,6 @@
-import nodemailer from "nodemailer";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
+import { isMailConfigured, sendMail } from "./mailer.ts";
 import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategory } from "../../shared/types.ts";
@@ -91,28 +91,16 @@ export function buildYoutubeEmailHtml(s: YoutubeSnapshot): string {
 </body></html>`;
 }
 
-/** 유튜브 소식 다이제스트 이메일. NOTIFY_EMAIL + Gmail 자격증명 필요. */
+/** 유튜브 소식 다이제스트 이메일. NOTIFY_EMAIL + Gmail 주소 + Google OAuth 클라이언트 필요. */
 export async function sendYoutubeEmail(s: YoutubeSnapshot): Promise<boolean> {
   if (!config.notify.email) return false;
-  if (!config.notify.gmailAddress || !config.notify.gmailAppPassword) {
-    log.warn("이메일 자격증명 미설정 → 유튜브 이메일 건너뜀");
+  if (!isMailConfigured()) {
+    log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 유튜브 이메일 건너뜀");
     return false;
   }
 
-  const html = buildYoutubeEmailHtml(s);
-
-  const transport = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465,
-    secure: true,
-    auth: { user: config.notify.gmailAddress, pass: config.notify.gmailAppPassword },
-  });
-  await transport.sendMail({
-    from: config.notify.gmailAddress,
-    to: config.notify.gmailAddress,
+  return sendMail({
     subject: `▶ YouTube 소식 - ${s.date}`,
-    html,
+    html: buildYoutubeEmailHtml(s),
   });
-  log.info("유튜브 이메일 발송 완료");
-  return true;
 }

@@ -1,6 +1,6 @@
-import nodemailer from "nodemailer";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
+import { isMailConfigured, sendMail } from "./mailer.ts";
 import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { NewsSnapshot, NewsItem, NewsCategory } from "../../shared/types.ts";
@@ -80,28 +80,16 @@ export function buildNewsEmailHtml(s: NewsSnapshot): string {
 </body></html>`;
 }
 
-/** 데일리 뉴스 다이제스트 이메일. NOTIFY_EMAIL + Gmail 자격증명 필요. */
+/** 데일리 뉴스 다이제스트 이메일. NOTIFY_EMAIL + Gmail 주소 + Google OAuth 클라이언트 필요. */
 export async function sendNewsEmail(s: NewsSnapshot): Promise<boolean> {
   if (!config.notify.email) return false;
-  if (!config.notify.gmailAddress || !config.notify.gmailAppPassword) {
-    log.warn("이메일 자격증명 미설정 → 뉴스 이메일 건너뜀");
+  if (!isMailConfigured()) {
+    log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 뉴스 이메일 건너뜀");
     return false;
   }
 
-  const html = buildNewsEmailHtml(s);
-
-  const transport = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465,
-    secure: true,
-    auth: { user: config.notify.gmailAddress, pass: config.notify.gmailAppPassword },
-  });
-  await transport.sendMail({
-    from: config.notify.gmailAddress,
-    to: config.notify.gmailAddress,
+  return sendMail({
     subject: `📰 Daily News Digest - ${s.date}`,
-    html,
+    html: buildNewsEmailHtml(s),
   });
-  log.info("뉴스 이메일 발송 완료");
-  return true;
 }

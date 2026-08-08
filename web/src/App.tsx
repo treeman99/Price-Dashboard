@@ -12,6 +12,7 @@ import { LottoBoard } from "@/components/LottoBoard";
 import { ScrollToTop } from "@/components/ScrollToTop";
 import { ModelControl } from "@/components/ModelControl";
 import { localDay } from "@/components/SnapshotNotice";
+import { MailAuthBanner } from "@/components/MailAuthBanner";
 import {
   DowntimeBadge,
   DowntimeBanner,
@@ -249,6 +250,17 @@ export default function App() {
         {err && (
           <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
         )}
+        {/*
+          메일 알림(Google) 연결 배너 — 전역 배너 중 **맨 위**다.
+
+          아래 가동 중단 배너보다 앞에 두는 이유: 저건 이미 끝난 일의 사후 보고고(읽고 나면 할
+          일이 없다), 이건 지금 이 순간 알림이 나가지 않고 있으니 **사용자가 눌러야 복구되는**
+          유일한 배너다. 실제로 앱 비밀번호가 폐기됐을 때 3일간 아무 데도 표가 나지 않았고,
+          그 침묵을 깨는 것이 이 자리다.
+
+          평상시(정상 연결)에는 접힌 회색 한 줄만 남고, 상태를 못 읽으면 아무것도 그리지 않는다.
+        */}
+        <MailAuthBanner />
         {/*
           가동 중단 배너 — 기존 전역 배너 두 개(파란 안내 · 빨간 오류) 아래, 탭 내용 바로 위.
           새 탭을 만들지 않는 이유는 명세 §6.5 그대로다: 절전·정전은 여러 탭을 동시에 죽이는데

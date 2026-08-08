@@ -1,5 +1,7 @@
 import { Router } from "express";
+import type { Request } from "express";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -92,6 +94,12 @@ import { getDowntimeView } from "../uptime/index.ts";
 import { ackDowntimeEvent, listDowntimeEvents } from "../uptime/store.ts";
 import { generateCategoryDescription, shouldAutoDescribe } from "../util/category-describe.ts";
 import { sendIMessage, isIMessageConfigured } from "../notify/imessage.ts";
+import {
+  buildAuthUrl,
+  disconnect as disconnectGoogle,
+  exchangeCode,
+  getGoogleAuthStatus,
+} from "../notify/google-auth.ts";
 import { log } from "../util/log.ts";
 import type { ScheduleSettings, StockMarket } from "../../shared/types.ts";
 
@@ -324,6 +332,192 @@ api.post("/notify/imessage/test", async (_req, res) => {
     // stderr(-1743 미승인 등)를 그대로 내려 진단 가능하게.
     res.status(500).json({ error: (e as Error).message });
   }
+});
+
+// ── 메일 발송용 Google 계정 연결 (OAuth2) ────────────────────────────────────
+//
+// 2026-08-05 계정 비밀번호를 바꾸자 Gmail 앱 비밀번호가 **조용히** 폐기돼 메일 알림이 3일간
+// 죽어 있었다. 그 사실을 화면까지 끌어올리고 클릭 두 번으로 되살리기 위한 라우트 4개다 —
+// 상태 조회 · 동의 화면 주소 발급 · 콜백 수신 · 연결 해제.
+//
+// 토큰의 저장·갱신·폐기는 전부 `src/notify/google-auth.ts` 소유다. 이 블록이 하는 일은
+// HTTP 껍데기와 **state(CSRF 대기표) 관리**뿐이다 — 인증 흐름의 상태를 두 곳에서 들고 있으면
+// 어느 쪽이 정본인지 곧 알 수 없게 된다.
+//
+// ⚠️ 이 블록에는 `:param` 라우트가 없어 등록 순서 함정(/stock/search vs /stock/:market)이 없다.
+//    나중에 `/google/:something` 을 추가한다면 반드시 아래 네 개보다 **뒤에** 둘 것.
+
+/** 콜백 경로. 이 문자열은 Google Console 의 '승인된 리디렉션 URI' 와 같아야 한다. */
+const GOOGLE_CALLBACK_PATH = "/api/google/callback";
+
+/**
+ * 동의 후 돌아올 주소.
+ *
+ * 포트는 .env(PORT)로 바뀔 수 있어 **요청의 Host 에서 가져오고**, 스킴·호스트이름은
+ * `http://localhost` 로 못 박는다. Google 은 등록된 리디렉션 URI 와 문자열이 **정확히 같을 때만**
+ * 코드를 내주는데, 같은 서버를 `127.0.0.1` 이나 LAN IP 로 열어 두고 눌렀다는 이유로 주소가
+ * 갈라지면 그 주소들은 Console 에 등록돼 있지도 않아 redirect_uri_mismatch 로 끝난다.
+ * (Host 에 포트가 없으면 이 서버가 실제로 듣고 있는 포트를 쓴다.)
+ */
+function googleRedirectUri(req: Request): string {
+  const port = /:(\d{1,5})$/.exec(String(req.headers.host ?? ""))?.[1] ?? String(config.port);
+  return `http://localhost:${port}${GOOGLE_CALLBACK_PATH}`;
+}
+
+/**
+ * 발급한 state 의 유효 시간. 동의 화면에서 계정을 고르고 권한을 확인하기엔 넉넉하고,
+ * 주소만 받아 두고 방치한 대기표가 오래 남지는 않을 만큼 짧다.
+ */
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+/** 동시에 살아 있을 수 있는 대기표 수. 버튼을 연타해도 메모리가 늘지 않게 하는 상한. */
+const OAUTH_STATE_MAX = 8;
+
+/**
+ * 발급했지만 아직 돌아오지 않은 state → 그때 쓴 redirect_uri.
+ *
+ * **CSRF 방어가 목적이다.** 콜백은 브라우저가 여는 GET 이라 남이 만든 주소를 어디에든 걸어 둘 수
+ * 있고, 대조가 없으면 공격자가 받아 둔 code 로 이 대시보드가 **남의 Google 계정에 연결**된다
+ * (로그인 CSRF — 그 뒤 알림 메일이 전부 그 계정에서 나간다). 대조에 성공한 표는 그 자리에서
+ * 지운다. 1회용이라 같은 code 를 다시 밀어 넣는 재생도 함께 막힌다.
+ *
+ * redirect_uri 를 함께 기억하는 이유: 토큰 교환의 redirect_uri 가 동의 요청 때와 **한 글자라도
+ * 다르면** Google 이 거절한다. 콜백 요청의 Host 로 다시 계산하지 않고 발급 시점 값을 그대로 쓴다.
+ *
+ * 서버가 재시작되면 비는데, 그게 맞다 — 진행 중이던 동의는 무효로 보는 편이 안전하다.
+ */
+const pendingOauthStates = new Map<string, { redirectUri: string; issuedAt: number }>();
+
+/** 대기표 발급. 만료분을 먼저 걷어내고, 그래도 넘치면 가장 오래된 것부터 버린다. */
+function rememberOauthState(state: string, redirectUri: string): void {
+  const now = Date.now();
+  for (const [k, v] of pendingOauthStates) {
+    if (now - v.issuedAt > OAUTH_STATE_TTL_MS) pendingOauthStates.delete(k);
+  }
+  // Map 은 삽입 순서를 지키므로 첫 키가 가장 오래된 대기표다.
+  while (pendingOauthStates.size >= OAUTH_STATE_MAX) {
+    const oldest = pendingOauthStates.keys().next().value;
+    if (oldest === undefined) break;
+    pendingOauthStates.delete(oldest);
+  }
+  pendingOauthStates.set(state, { redirectUri, issuedAt: now });
+}
+
+/** 대조 + 소비(1회용). 모르는 값이거나 만료됐으면 null → 호출부가 state_mismatch 로 되돌린다. */
+function consumeOauthState(state: string): { redirectUri: string } | null {
+  const entry = pendingOauthStates.get(state);
+  if (!entry) return null;
+  pendingOauthStates.delete(state);
+  return Date.now() - entry.issuedAt > OAUTH_STATE_TTL_MS ? null : entry;
+}
+
+/**
+ * 화면(MailAuthBanner)이 문장으로 풀어 주거나, 최소한 사람이 검색할 수 있는 OAuth 오류 코드들.
+ * 여기 없는 값은 코드가 아니라 임의 문자열일 수 있으므로 주소창으로 흘려보내지 않는다.
+ */
+const OAUTH_ERROR_CODES = [
+  "access_denied",
+  "invalid_client",
+  "invalid_grant",
+  "invalid_request",
+  "invalid_scope",
+  "unauthorized_client",
+];
+
+/**
+ * 리디렉션에 실을 사유 코드.
+ *
+ * ⚠️ 예외 메시지를 그대로 주소창에 싣지 않는다. google-auth 가 비밀값을 메시지에 담지는 않지만,
+ *    주소창·브라우저 이력·스크린샷으로 새어 나가는 자리라 **화이트리스트에 있는 코드만** 내보낸다.
+ *    자세한 사연은 상태의 lastError(화면의 '자세한 오류')로 이미 회수된다.
+ */
+function oauthErrorReason(e: unknown): string {
+  const msg = (e as Error)?.message ?? "";
+  return OAUTH_ERROR_CODES.find((c) => msg.includes(c)) ?? "exchange_failed";
+}
+
+/**
+ * 지금 메일을 보낼 수 있는 상태인가. 화면이 60초마다 폴링한다(MailAuthBanner).
+ * 토큰 파일이 깨져도 getGoogleAuthStatus 는 throw 하지 않고 '미연결'을 돌려준다(그쪽 계약).
+ */
+api.get("/google/status", (_req, res) => {
+  res.json(getGoogleAuthStatus());
+});
+
+/**
+ * 동의 화면 주소 발급. 화면은 받은 url 로 그대로 이동한다.
+ * .env 에 클라이언트가 없으면 400 — 화면이 body.error 를 그대로 보여 준다.
+ */
+api.get("/google/auth-url", (req, res) => {
+  const redirectUri = googleRedirectUri(req);
+  // 128비트 난수. Google 이 그대로 되돌려 주므로 추측·충돌로는 대조를 통과할 수 없다.
+  const state = crypto.randomBytes(16).toString("hex");
+  try {
+    // 주소를 실제로 내려보낼 수 있을 때만 대기표를 남긴다(미설정이면 여기서 throw).
+    const url = buildAuthUrl(redirectUri, state);
+    rememberOauthState(state, redirectUri);
+    res.json({ url });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * 동의 후 Google 이 브라우저를 돌려보내는 자리.
+ *
+ * **사람의 브라우저**가 여는 주소라 JSON 이 아니라 대시보드로 302 한다
+ * (`/?google=ok` · `/?google=error&reason=…`). 화면이 그 표식을 읽어 결과를 알리고 주소에서
+ * 지운다(MailAuthBanner). 여기서 JSON 을 주면 사용자는 대시보드가 아니라 날것의 본문을 본다.
+ */
+api.get("/google/callback", async (req, res) => {
+  const back = (reason?: string) =>
+    res.redirect(reason ? `/?google=error&reason=${encodeURIComponent(reason)}` : "/?google=ok");
+
+  // state 대조가 가장 먼저다. Google 이 거절한 경우(error=access_denied)에도 state 는 함께
+  // 오므로, 어느 경로로 들어오든 대기표는 한 번만 쓰이고 사라진다.
+  const pending = consumeOauthState(typeof req.query.state === "string" ? req.query.state : "");
+  if (!pending) {
+    log.warn("Google 콜백 state 불일치 — 이 요청은 버립니다.");
+    return back("state_mismatch");
+  }
+
+  const denied = typeof req.query.error === "string" ? req.query.error : "";
+  if (denied) {
+    const reason = OAUTH_ERROR_CODES.includes(denied) ? denied : "auth_failed";
+    log.warn(`Google 계정 연결이 완료되지 않았습니다 — ${reason}`);
+    return back(reason);
+  }
+
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  if (!code) {
+    log.warn("Google 콜백에 code 가 없습니다 — 연결하지 못했습니다.");
+    return back("missing_code");
+  }
+
+  try {
+    await exchangeCode(code, pending.redirectUri);
+    back();
+  } catch (e) {
+    // ⚠️ code·client_secret·토큰은 어디에도 찍지 않는다. 예외 메시지에 실리는 것은 Google 이
+    //    준 error/error_description 뿐이다(google-auth.ts describe()).
+    log.warn(`Google 계정 연결 실패: ${(e as Error).message}`);
+    back(oauthErrorReason(e));
+  }
+});
+
+/**
+ * 연결 해제(로컬 토큰 폐기).
+ *
+ * **POST 전용이다.** 이 대시보드는 localhost 전용이지만 라우트는 열려 있어, GET 이면 남이 걸어
+ * 둔 `<img>` 한 장이나 브라우저의 선반입만으로도 메일 알림이 끊긴다 — 부수효과가 있는 동작을
+ * GET 에 두지 않는다. GET 으로 오면 이 경로에 등록된 핸들러가 없어 404 다.
+ */
+api.post("/google/disconnect", (_req, res) => {
+  disconnectGoogle();
+  // 진행 중이던 동의 대기표도 함께 버린다. 해제 직후 뒤늦게 돌아온 콜백이 연결을 되살리면
+  // 사용자가 방금 누른 '해제' 가 조용히 뒤집힌다.
+  pendingOauthStates.clear();
+  res.json({ ok: true });
 });
 
 // ── 탭별 자동 수집 시각 (스케줄) ──
