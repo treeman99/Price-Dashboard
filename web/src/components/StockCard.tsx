@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronUp, ChevronDown, Minus, Trash2, Pin, Loader2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronUp,
+  ChevronDown,
+  Minus,
+  Trash2,
+  Pin,
+  Loader2,
+  Plus,
+  CheckCircle2,
+} from "lucide-react";
 import type { StockAnalysis, StockWatchItem, StockTicker, StockPoint } from "@shared/types";
 import { formatPrice, changeTone } from "@shared/stock";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,6 +66,8 @@ export function StockCard({
   onChanged,
   disabled,
   marketNote,
+  onAdd,
+  registered,
 }: {
   analysis: StockAnalysis | StockWatchItem;
   /**
@@ -71,9 +84,35 @@ export function StockCard({
   onChanged?: () => void;
   /** 수집 중이면 편집을 막는다(기존 보드 관례). */
   disabled?: boolean;
+  /**
+   * '등록 종목에 추가' 버튼의 **opt-in 스위치**. 넘긴 섹션에서만 버튼이 뜬다.
+   *
+   * ⚠️ 이 카드는 세 섹션이 공유한다(등록 종목 · 오늘의 관심 종목 · 해외 참고). 기본으로 켜면
+   * 이미 원장에 있는 등록 종목에도 뜨고, 이 장에 상장되지 않은 '해외 참고' 종목에는
+   * **누를 때마다 반드시 404 로 실패하는 버튼**이 달린다: 서버는
+   * `candidates.find((c) => c.market === market)` 로 이 시장 후보만 남기고, 없으면
+   * "종목을 찾지 못했습니다" 404 를 준다(src/api/routes.ts:1307-1308).
+   * 즉 엉뚱한 시장으로 등록되지는 않고, 사용자를 실패로 유인하기만 한다. 그래서 켜는 쪽이
+   * 명시적으로 넘기게 한다 — 지금 넘기는 곳은 '오늘의 관심 종목' 섹션 하나뿐이다.
+   *
+   * 실패는 reject 로 알린다: 카드가 그 메시지를 버튼 밑에 띄운다(조용히 실패하지 않는다).
+   */
+  onAdd?: () => Promise<void>;
+  /** 이미 원장에 있는 종목이면 true — 버튼 대신 '등록됨' 표시. 판정은 isSymbolRegistered. */
+  registered?: boolean;
 }) {
   const [history, setHistory] = useState<StockPoint[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
+  // 추가 실패 메시지는 카드 안에 남긴다 — 누른 버튼 바로 옆이라야 어느 종목이 실패했는지 안다.
+  const [addErr, setAddErr] = useState<string | null>(null);
+
+  // 원장에 들어온 순간(다른 경로의 load() 로 registered 가 true) 이전 실패 메시지는 더 이상 참이
+  // 아니다. 렌더에서 이미 가려지지만, 상태로 남겨두면 나중에 그 종목을 삭제해 registered 가
+  // 다시 false 가 될 때 몇 분 전 실패가 되살아난다. 결과가 '등록됨'으로 확정됐으니 여기서 비운다.
+  useEffect(() => {
+    if (registered) setAddErr(null);
+  }, [registered]);
 
   // 등록 종목은 카드가 열릴 때 차트 데이터를 따로 불러온다.
   // 실패하거나 비면 스냅샷에 실려온 history 로 폴백 — 차트가 통째로 비는 것보다 낫다.
@@ -104,6 +143,19 @@ export function StockCard({
   const last = points.length ? points[points.length - 1] : null;
   const close = analysis.close ?? last?.close ?? null;
   const changePct = analysis.changePct ?? last?.changePct ?? null;
+
+  async function handleAdd() {
+    if (!onAdd) return;
+    setAdding(true);
+    setAddErr(null);
+    try {
+      await onAdd();
+    } catch (e) {
+      setAddErr((e as Error).message);
+    } finally {
+      setAdding(false);
+    }
+  }
 
   async function togglePin() {
     if (!ticker) return;
@@ -227,6 +279,43 @@ export function StockCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* 등록 종목에 추가 — onAdd 를 넘긴 섹션('오늘의 관심 종목')에서만 뜬다. */}
+        {onAdd && (
+          <div className="space-y-1.5">
+            {registered ? (
+              <div className="flex items-center justify-center gap-1.5 rounded-md bg-muted/50 py-1.5 text-xs text-muted-foreground">
+                <CheckCircle2 className="h-3.5 w-3.5" /> 등록됨
+              </div>
+            ) : (
+              /* ⚠️ 실패 메시지는 반드시 이 가지 안에 둔다. 밖에 두면 '등록됨' 배지와 '추가 실패'가
+                 한 카드에 같이 떠서(추가 실패로 addErr 이 남은 뒤 다른 경로의 load() 가 원장을
+                 새로 읽어 registered 가 true 가 되는 경우) 등록이 된 건지 알 수 없게 된다.
+                 실패를 숨기는 게 아니다 — 아직 등록되지 않은 동안에는 그대로 보인다. */
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleAdd}
+                  disabled={adding || disabled}
+                >
+                  {adding ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4" />
+                  )}
+                  등록 종목에 추가
+                </Button>
+                {addErr && (
+                  <p className="text-xs text-up" role="alert">
+                    추가 실패: {addErr}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {/* 시세 요약 */}
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>

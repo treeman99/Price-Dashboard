@@ -1,4 +1,10 @@
-import type { StockMarket, StockSlotRole, StockSnapshot, StockWatchItem } from "./types.ts";
+import type {
+  StockMarket,
+  StockSlotRole,
+  StockSnapshot,
+  StockTicker,
+  StockWatchItem,
+} from "./types.ts";
 
 /**
  * 스냅샷의 **유효 역할**. role 이 없으면 'both'(현행 혼합본)로 접는다.
@@ -67,6 +73,33 @@ export function normalizeSymbol(raw: string, market: StockMarket): string {
     return digits ? digits.padStart(6, "0") : "";
   }
   return s.toUpperCase();
+}
+
+/**
+ * 이 심볼이 이미 **등록 종목(원장)** 에 있는지.
+ *
+ * '오늘의 관심 종목' 카드의 추가 버튼을 켜고 끄는 축이다. 판정은 반드시 정규화된 심볼로 한다:
+ * 원장은 저장 시 normalizeSymbol 을 거쳐 "005930" 만 갖지만, 스냅샷 watchlist 의 심볼은
+ * LLM 이 쓴 표기라 "5930"·"A005930"·"aapl" 처럼 흔들린다. 원문끼리 비교하면 같은 종목에
+ * 추가 버튼이 다시 떠서, 눌러봐야 서버가 중복으로 거절하거나 원장이 두 행으로 갈라진다.
+ *
+ * market 을 함께 확인하는 이유: 등록은 (market, symbol) 자연키다. 목록을 시장별로 받아오는
+ * 현행 호출부에선 잉여 조건이지만, 계약이 시장을 확인하면 호출부가 흔들려도 다른 시장의
+ * 동명 티커를 '등록됨'으로 오판하지 않는다.
+ *
+ * 정규화 결과가 빈 문자열이면 **항상 false** 다. ""==="" 로 맞물리게 두면 식별 불가 항목이
+ * 서로 '등록됨'이 되어 사용자가 추가할 방법 자체를 잃는다(normalizeSymbol 주석의 같은 이유).
+ */
+export function isSymbolRegistered(
+  symbol: string,
+  market: StockMarket,
+  tickers: ReadonlyArray<Pick<StockTicker, "symbol" | "market">>
+): boolean {
+  const target = normalizeSymbol(symbol, market);
+  if (!target) return false;
+  return tickers.some(
+    (t) => t.market === market && normalizeSymbol(t.symbol, market) === target
+  );
 }
 
 /**

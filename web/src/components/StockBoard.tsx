@@ -28,6 +28,7 @@ import {
   roleLabel,
   watchMarket,
   foreignSectionTitle,
+  isSymbolRegistered,
 } from "@shared/stock";
 import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
@@ -340,6 +341,17 @@ export function StockBoard() {
     }
   }
 
+  /**
+   * '오늘의 관심 종목' → 등록 종목. 카드가 실패를 표시할 수 있게 **에러를 삼키지 않는다**.
+   *
+   * AddTickerDialog 와 같은 확정 패턴: 화면에 보이는 그 종목의 심볼을 query 로 넘긴다.
+   * 종목명("엔비디아")을 넘기면 서버가 자동완성으로 다시 추측해 엉뚱한 종목이 들어올 수 있다.
+   */
+  async function addWatchToTickers(symbol: string) {
+    await api.addTicker(market, { query: symbol });
+    await load(); // 원장을 다시 읽어 '⭐ 등록 종목' 섹션과 '등록됨' 표시에 즉시 반영
+  }
+
   // 서브탭 선택에 따라 실제로 그릴 스냅샷을 고른다. 선택한 역할 브리핑이 아직 없으면 null
   // (예: 배포 직후 아침 결산만 돌고 프리뷰가 아직 안 돈 상태).
   const snap: StockSnapshot | null =
@@ -574,7 +586,14 @@ export function StockBoard() {
               </p>
               <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
                 {domestic.map((w, i) => (
-                  <StockCard key={`${w.symbol}-${i}`} analysis={w} />
+                  <StockCard
+                    key={`${w.symbol}-${i}`}
+                    analysis={w}
+                    // 원장 판정은 정규화된 심볼로 한다 — watchlist 심볼 표기는 흔들린다.
+                    registered={isSymbolRegistered(w.symbol, market, tickers)}
+                    onAdd={() => addWatchToTickers(w.symbol)}
+                    disabled={collecting}
+                  />
                 ))}
               </div>
             </section>

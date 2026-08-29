@@ -11,6 +11,7 @@ import {
   foreignSectionTitle,
   seoulToday,
   isPreviewUpcoming,
+  isSymbolRegistered,
 } from "./stock.ts";
 import type { StockMarket, StockSnapshot, StockWatchItem } from "./types.ts";
 
@@ -255,4 +256,59 @@ test("seoulToday 는 브라우저 타임존과 무관하게 서울 날짜를 준
   assert.equal(seoulToday(new Date("2026-07-20T16:00:00Z")), "2026-07-21");
   assert.equal(seoulToday(new Date("2026-07-20T14:00:00Z")), "2026-07-20");
   assert.match(seoulToday(), /^\d{4}-\d{2}-\d{2}$/);
+});
+
+// ── 등록 종목 중복 판정 ──────────────────────────────────────────────
+//
+// '오늘의 관심 종목' 카드의 '등록 종목에 추가' 버튼은 이미 원장에 있는 종목이면 뜨면 안 된다.
+// 판정 축은 **정규화된 심볼**이다: 스냅샷의 watchlist 심볼은 LLM 이 쓴 표기라 "5930"·"A005930"
+// 처럼 흔들릴 수 있고, 원장은 normalizeSymbol 을 거친 "005930" 만 갖는다. 원문 비교로 판정하면
+// 같은 종목에 '추가' 버튼이 다시 떠서 서버가 중복 추가를 거절하거나 행이 갈라진다.
+
+test("등록 판정: 표기가 흔들려도 정규화하면 같은 종목이다(KR)", () => {
+  const ledger = [
+    { symbol: "005930", market: "kr" as StockMarket },
+    { symbol: "000660", market: "kr" as StockMarket },
+  ];
+  assert.equal(isSymbolRegistered("005930", "kr", ledger), true);
+  assert.equal(isSymbolRegistered("5930", "kr", ledger), true); // zero-pad 누락
+  assert.equal(isSymbolRegistered("A005930", "kr", ledger), true); // 증권사 표기 접두사
+  assert.equal(isSymbolRegistered(" 000660 ", "kr", ledger), true);
+});
+
+test("등록 판정: 원장에 없는 종목은 false — 추가 버튼이 떠야 한다", () => {
+  const ledger = [{ symbol: "005930", market: "kr" as StockMarket }];
+  assert.equal(isSymbolRegistered("035420", "kr", ledger), false);
+  assert.equal(isSymbolRegistered("005930", "kr", []), false);
+});
+
+test("등록 판정: US 는 대소문자·공백을 무시하고 점은 티커의 일부다", () => {
+  const ledger = [
+    { symbol: "AAPL", market: "us" as StockMarket },
+    { symbol: "BRK.B", market: "us" as StockMarket },
+  ];
+  assert.equal(isSymbolRegistered("aapl", "us", ledger), true);
+  // 공백은 **원장에 있는 심볼**로 검증해야 의미가 있다. 원장에 없는 심볼(NVDA)로 재면
+  // trim 을 지워도 결과가 false 그대로라 공백 처리를 전혀 검증하지 못한다.
+  assert.equal(isSymbolRegistered(" aapl ", "us", ledger), true);
+  assert.equal(isSymbolRegistered(" BRK.B ", "us", ledger), true);
+  assert.equal(isSymbolRegistered(" NVDA ", "us", ledger), false); // 원장에 없으면 공백과 무관하게 false
+  assert.equal(isSymbolRegistered("brk.b", "us", ledger), true);
+  assert.equal(isSymbolRegistered("BRKB", "us", ledger), false); // 점을 지운 표기는 다른 티커다
+});
+
+test("등록 판정: 시장이 다른 원장 행은 매칭하지 않는다(엉뚱한 시장의 등록 종목 방지)", () => {
+  // 원장 목록은 시장별로 받아오지만, 계약 자체가 시장을 확인해야 호출부가 흔들려도 안전하다.
+  const ledger = [{ symbol: "AAPL", market: "us" as StockMarket }];
+  assert.equal(isSymbolRegistered("AAPL", "kr", ledger), false);
+  assert.equal(isSymbolRegistered("AAPL", "us", ledger), true);
+});
+
+test("등록 판정: 식별 불가 심볼은 false — 빈 정규화값끼리 맞물려 '등록됨'으로 보이면 안 된다", () => {
+  // normalizeSymbol 은 KR 에서 숫자가 없으면 "" 를 준다. 원장에 깨진 행이 있어도
+  // ""==="" 로 맞물려 버튼이 사라지면 사용자는 추가할 방법을 잃는다.
+  const ledger = [{ symbol: "삼성전자", market: "kr" as StockMarket }];
+  assert.equal(isSymbolRegistered("삼성전자", "kr", ledger), false);
+  assert.equal(isSymbolRegistered("", "kr", ledger), false);
+  assert.equal(isSymbolRegistered("", "us", [{ symbol: "", market: "us" as StockMarket }]), false);
 });
