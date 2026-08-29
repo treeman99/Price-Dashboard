@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AddHoldingDialog } from "@/components/AddHoldingDialog";
+import { EditHoldingDialog } from "@/components/EditHoldingDialog";
 import { ScheduleControl } from "@/components/ScheduleControl";
 
 const MARKETS: StockMarket[] = ["kr", "us"];
@@ -24,10 +25,11 @@ function toneClass(pct: number | null): string {
 
 function HoldingRow({
   h,
-  onDeleted,
+  onChanged,
 }: {
   h: StockHoldingSummary;
-  onDeleted: () => void;
+  /** 삭제·수정 후 목록 재조회. 평단·수량이 바뀌면 손익도 서버가 다시 계산해야 한다. */
+  onChanged: () => void;
 }) {
   const [deleting, setDeleting] = useState(false);
 
@@ -42,7 +44,7 @@ function HoldingRow({
     setDeleting(true);
     try {
       await api.deleteHolding(h.id, h.symbol);
-      onDeleted();
+      onChanged();
     } catch (e) {
       alert((e as Error).message);
     } finally {
@@ -67,6 +69,7 @@ function HoldingRow({
           <span className={cn("text-lg font-bold", toneClass(h.pnlPct))}>
             {formatPnlPct(h.pnlPct)}
           </span>
+          <EditHoldingDialog h={h} onSaved={onChanged} />
           <Button
             size="sm"
             variant="ghost"
@@ -309,7 +312,7 @@ export function HoldingsBoard() {
             </h3>
             <div className="space-y-2">
               {rows.map((h) => (
-                <HoldingRow key={h.id} h={h} onDeleted={load} />
+                <HoldingRow key={h.id} h={h} onChanged={load} />
               ))}
             </div>
           </section>
