@@ -34,6 +34,13 @@ import {
   shouldRunCycle,
 } from "../lotto/cycle.ts";
 import { getLottoState, getUpcoming } from "../lotto/store.ts";
+import {
+  getSkillsLastAttempt,
+  isSkillsCollecting,
+  refreshSkills,
+  skillsCoveredThisWeek,
+} from "../skills/skills.ts";
+import { SKILLS_CYCLE_CRON, SKILLS_CYCLE_LABEL } from "../../shared/skills.ts";
 import type { StockMarket } from "../../shared/types.ts";
 
 function today(): string {
@@ -396,6 +403,9 @@ function decideCatchup(input: {
 const eventsBackoff = createBackoff("팝업/전시", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
 const newsBackoff = createBackoff("뉴스", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
 const youtubeBackoff = createBackoff("유튜브", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
+// 스킬 랭킹은 주 1회지만 백오프 상수는 일간 탭과 공유한다. 주 단위로 늘려 잡으면 월요일 아침의
+// 일시적 실패(네트워크 끊김 등)가 그 주 전체를 날린다 — 30분→4시간 간격이면 하루 안에 회복된다.
+const skillsBackoff = createBackoff("스킬 랭킹", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
 
 /** 시도 기록(ISO 문자열)이 오늘 것인지. 어제 성공은 오늘의 커버가 아니다. */
 function attemptIsToday(at: string | undefined): boolean {
@@ -839,6 +849,64 @@ async function safeCatchUpLottoCycle() {
   }
 }
 
+// ── 스킬 랭킹 주간 회차 ──
+//
+// 로또와 같은 **주 1회** 작업이다. 기존 ScheduleSettings(일 단위 HH:mm 배열)에 끼워 넣지 않는
+// 이유가 여기 있다 — 그 구조는 "매일 이 시각들에"를 표현하므로 주간 작업을 넣으면 매일 돌게
+// 되고, 그러면 주간 스냅샷이 하루 간격으로 쌓여 "주간 증가"라는 말 자체가 성립하지 않는다.
+// cron 식과 경계 계산은 shared/skills.ts 의 같은 상수를 본다(어긋나면 보충이 매 틱 돌거나
+// 영영 안 돈다).
+
+async function safeRunSkills(trigger: string, notify: boolean) {
+  // ⚠️ 큐 대기 **전에** 찍는다. 이 시각 이후의 기록만 이번 런의 성패로 인정한다.
+  const runStartedAt = Date.now();
+  // 결말 기본값이 "skipped-queue" 인 이유: 아래 콜백에 **진입조차 못 한** 경우가 정확히 그
+  // 상황(큐 대기 상한 초과)이기 때문이다. 진입하면 첫 줄에서 곧바로 다른 값으로 덮인다.
+  let outcome: TabRunOutcome = "skipped-queue";
+  try {
+    await runLlmJob(`스킬 랭킹[${trigger}]`, async () => {
+      // ★ 슬롯을 얻은 직후, 호출 직전에 본다. 이 줄과 refreshSkills 사이에 await 가 없어
+      //   판정과 호출이 원자적이다 — 그 틈에 수동 갱신이 끼어들 수 없다.
+      if (isSkillsCollecting()) {
+        log.warn(`스킬 수집이 이미 진행 중(수동 갱신 등) → ${trigger} 건너뜀`);
+        outcome = "skipped-duplicate";
+        return;
+      }
+      outcome = "attempted";
+      await refreshSkills({ trigger, notify });
+    });
+  } catch (e) {
+    log.error(`스킬 랭킹 오류 [${trigger}]: ${(e as Error).message}`);
+  } finally {
+    // 성패 판정은 skills.ts 의 시도 기록이 근거다(계약: getSkillsLastAttempt).
+    noteTabOutcome(`스킬 랭킹[${trigger}]`, skillsBackoff, outcome, () =>
+      attemptSucceededSince(getSkillsLastAttempt(), runStartedAt)
+    );
+  }
+}
+
+/**
+ * 놓친 주간 회차 보충. 월요일 09:00 에 맥이 자고 있었으면 cron 이 통째로 사라진다.
+ *
+ * ★★ **보충할 것이 없으면 LLM 슬롯을 잡지 않는다.** (safeCatchUpLottoCycle 이 같은 이유로
+ * 같은 모양을 하고 있다.) 주간 작업이라 판정이 참인 순간은 일주일에 한 번뿐이고, 나머지
+ * 주 6일 × 하루 48틱은 전부 "슬롯을 얻어 → 할 일 없음 확인 → 즉시 반납"이 된다. 실행 시간은
+ * 0초라 해롭지 않아 보이지만 **줄을 서는 시간은 0초가 아니다** — 앞에 20분짜리 수집이 있으면
+ * 스윕의 이 단계가 20분을 통째로 기다리고, 그동안 30분 틱이 스킵된다. 그래서 세 판정
+ * (진행 중 / 백오프 / 이번 주 커버됨)을 전부 큐 **앞**에서 끝낸다.
+ */
+async function safeCatchUpSkills() {
+  try {
+    if (isSkillsCollecting()) return;
+    if (skillsBackoff.blocked()) return; // 연속 실패 백오프 중
+    if (skillsCoveredThisWeek()) return;
+    log.info(`이번 주 스킬 랭킹 갱신 누락 감지 → catch-up 실행 (기준 ${SKILLS_CYCLE_LABEL})`);
+    await safeRunSkills("catchup", true);
+  } catch (e) {
+    log.error(`스킬 랭킹 보충 점검 오류: ${(e as Error).message}`);
+  }
+}
+
 /** HH:mm → 매일 실행 cron 식. */
 function cronExpr(hhmm: string): string {
   const { hour, minute } = parseCollectTime(hhmm);
@@ -930,6 +998,14 @@ function registerCrons() {
     })
   );
   log.info(`스케줄러: 로또 주간 사이클 매주 ${LOTTO_CYCLE_LABEL}`);
+
+  // 스킬 랭킹 주간 회차(주 1회). 수집 → 주간 스냅샷 저장 → 차분·랭킹 → 요약 → 알림까지 한 번에.
+  tasks.push(
+    cron.schedule(SKILLS_CYCLE_CRON, () => void safeRunSkills("schedule", true), {
+      name: "dp-skills-cycle",
+    })
+  );
+  log.info(`스케줄러: 스킬 랭킹 주간 회차 매주 ${SKILLS_CYCLE_LABEL}`);
 }
 
 /**
@@ -978,6 +1054,9 @@ const CATCHUP_STEPS: { label: string; run: () => Promise<void> }[] = [
   // 로또: 놓친 일요일 사이클(맥이 자고 있었던 경우)과 예약된 재시도를 확인한다.
   // 다음 회차 추천 번호가 아직 없는 상태(배포 직후)도 여기서 채워진다.
   { label: "로또", run: safeCatchUpLottoCycle },
+  // 스킬 랭킹: 놓친 월요일 회차(맥이 자고 있었던 경우)를 확인한다. 로또와 같은 이유로
+  // 판정을 큐 앞에서 끝내므로, 보충할 것이 없는 대부분의 틱에서는 즉시 반환한다.
+  { label: "스킬 랭킹", run: safeCatchUpSkills },
 ];
 
 /**
