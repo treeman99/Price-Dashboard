@@ -39,6 +39,12 @@ const POLL_MS = 5000;
 /** 천 단위 구분. star·forks 처럼 자릿수가 큰 값에만 쓴다. */
 const num = (n: number) => n.toLocaleString("ko-KR");
 
+/**
+ * "+1,204" / "-3". 부호를 값에서 뽑는다 — 메일(notify/skills-email.ts 의 signed)과 같은 규약이다.
+ * star 는 줄어들기도 하므로("+" 를 고정으로 붙이면 -3 이 "+-3" 으로 나온다) 부호를 지어내지 않는다.
+ */
+const signed = (n: number) => `${n >= 0 ? "+" : "-"}${num(Math.abs(n))}`;
+
 /** ISO → "9월 1일 09:00". 연도는 뺀다(주간 갱신이라 같은 해가 아닐 일이 거의 없다). */
 function fmtWhen(iso: string): string | null {
   const d = new Date(iso);
@@ -195,7 +201,7 @@ function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }
               kind === "growth" ? "text-emerald-600" : "text-muted-foreground"
             )}
           >
-            +{num(entry.starsGained)}
+            {signed(entry.starsGained)}
           </div>
         )}
       </div>
