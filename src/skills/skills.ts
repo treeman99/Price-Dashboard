@@ -6,8 +6,10 @@ import { localDate } from "../util/date.ts";
 import { collectSkillRepos } from "./github.ts";
 import {
   buildRankings,
+  loadScans,
   loadStarsAt,
   previousSnapshotDate,
+  saveScan,
   saveWeeklySnapshot,
 } from "./store.ts";
 import {
@@ -18,6 +20,7 @@ import {
   summarizeSkillRepos,
 } from "./curate.ts";
 import { pruneDeadLinks, type PruneResult } from "./verify.ts";
+import { attachAccess, scanRepos, type RepoScan } from "./scan.ts";
 import { sendSkillsEmail, sendSkillsIMessage } from "../notify/skills-email.ts";
 import { SKILLS_CYCLE_HOUR, SKILLS_CYCLE_WEEKDAY } from "../../shared/skills.ts";
 import type { SkillRepo, SkillsSnapshot } from "../../shared/skills.ts";
@@ -403,7 +406,13 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
 
   const ranking = buildRankings({ ...rankingInput, repos: live });
 
-  // 3) 요약. 노출되는 두 랭킹의 합집합 중 **원문이 바뀐 것만** LLM 을 태운다.
+  // 3) 네트워크 접근 스캔. 노출 후보(두 랭킹 TOP 50 의 합집합)의 SKILL.md 를 실제로 읽어
+  //    "로컬 전용인가 / 외부로 나가는가"를 판정한다. 링크 사망 검증을 **통과한 뒤**라서
+  //    죽은 저장소를 두드리지 않는다. 실패해도 회차를 죽이지 않는다(태그만 안 붙는다).
+  const shownRepos = dedupeById([...ranking.byStars, ...ranking.byGrowth].map((e) => e.repo));
+  const scans = await scanAccess(shownRepos);
+
+  // 4) 요약. 노출되는 두 랭킹의 합집합 중 **원문이 바뀐 것만** LLM 을 태운다.
   const shown = [...ranking.byStars, ...ranking.byGrowth];
   const shownIds = [...new Set(shown.map((e) => e.repo.id))];
   const cached = loadSummaryCache(shownIds);
@@ -420,11 +429,69 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
     updatedAt: new Date().toISOString(),
     source: "github",
     trackedCount,
-    byStars: attachSummaries(ranking.byStars, summaries),
-    byGrowth: attachSummaries(ranking.byGrowth, summaries),
+    byStars: attachAccess(attachSummaries(ranking.byStars, summaries), scans),
+    byGrowth: attachAccess(attachSummaries(ranking.byGrowth, summaries), scans),
     window: ranking.window,
     notes: buildNotes(warnings, prune),
   };
+}
+
+/** id 로 중복 제거(두 랭킹에 같은 저장소가 동시에 오르는 것이 정상이다). */
+function dedupeById(repos: SkillRepo[]): SkillRepo[] {
+  const byId = new Map<number, SkillRepo>();
+  for (const r of repos) byId.set(r.id, r);
+  return [...byId.values()];
+}
+
+/**
+ * 노출 후보의 네트워크 접근을 판정한다. **예외를 던지지 않는다.**
+ *
+ * ★ 캐시 키는 `pushed_at` 이다. 파일 목록을 얻는 git/trees 호출이 스캔의 유일한 core 쿼터
+ *   소비 지점이고 그 쿼터는 무인증 60회/시간뿐이라, 마지막 푸시가 그대로인 저장소를 걸러내는
+ *   것이 매주 도는 유일한 방법이다(첫 회차만 50회 남짓, 그 뒤로는 그 주에 푸시된 것만).
+ *
+ * ★ fail-open: 스캔이 통째로 터져도 빈 맵을 돌려준다. 그러면 access 가 없는 스냅샷이 되고,
+ *   화면은 칩을 그리지 않는다 — 태그 하나 때문에 그 주 랭킹을 잃을 이유가 없다.
+ */
+async function scanAccess(repos: SkillRepo[]): Promise<Map<number, RepoScan>> {
+  if (repos.length === 0) return new Map();
+  try {
+    const cache = loadScans(repos.map((r) => r.id));
+    const hits = new Set<number>();
+    const summary = await scanRepos(repos, (repo) => {
+      const hit = cache.get(repo.id);
+      // pushed_at 이 다르면 파일이 바뀌었을 수 있다 → 다시 본다.
+      if (!hit || (hit.pushedAt ?? "") !== (repo.pushedAt ?? "")) return null;
+      hits.add(repo.id);
+      return {
+        repoId: repo.id,
+        fullName: repo.fullName,
+        branch: null, // 캐시에는 브랜치를 남기지 않는다(판정에 쓰이지 않는다)
+        access: hit.access,
+        units: hit.units,
+      };
+    });
+
+    // 새로 조회한 것만 저장한다(캐시 적중분을 다시 쓰면 scanned_at 이 매주 갱신돼
+    // "언제 실제로 읽었나"를 잃는다). kind="unknown" 은 saveScan 이 스스로 거른다.
+    const now = new Date().toISOString();
+    for (const repo of repos) {
+      if (hits.has(repo.id)) continue;
+      const s = summary.scans.get(repo.id);
+      if (!s) continue;
+      saveScan({
+        repoId: repo.id,
+        pushedAt: repo.pushedAt || null,
+        scannedAt: now,
+        access: s.access,
+        units: s.units,
+      });
+    }
+    return summary.scans;
+  } catch (e) {
+    log.warn(`스킬 네트워크 스캔 실패 → 접근 태그 없이 진행: ${(e as Error).message}`);
+    return new Map();
+  }
 }
 
 /**

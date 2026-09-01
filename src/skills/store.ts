@@ -2,7 +2,14 @@ import { createHash } from "node:crypto";
 import { db } from "../db/index.ts";
 import { log } from "../util/log.ts";
 import { SKILLS_RANK_SIZE } from "../../shared/skills.ts";
-import type { SkillRankEntry, SkillRepo, SkillWindow } from "../../shared/skills.ts";
+import type {
+  SkillAccess,
+  SkillAccessKind,
+  SkillRankEntry,
+  SkillRepo,
+  SkillUnit,
+  SkillWindow,
+} from "../../shared/skills.ts";
 
 /**
  * 스킬 랭킹의 저장소 + 주간 차분.
@@ -318,4 +325,109 @@ export function buildRankings(input: RankingInput): RankingResult {
     byGrowth,
     window: { fromDate: prevDate, toDate: date, days: daysBetween(prevDate, date) },
   };
+}
+
+// ── 네트워크 접근 스캔 캐시 ──────────────────────────────
+
+/** 캐시된 스캔 1건. RepoScan 과 같은 모양이되 '언제·어느 푸시 기준으로' 찍었는지를 더 갖는다. */
+export interface ScanRecord {
+  repoId: number;
+  /** 스캔 당시의 저장소 pushed_at. 이 값이 지금과 같으면 파일도 같다 = 다시 안 본다. */
+  pushedAt: string | null;
+  scannedAt: string;
+  access: SkillAccess;
+  units: SkillUnit[];
+}
+
+/**
+ * 스캔 캐시 조회. ids 가 비면 빈 맵(쿼리도 하지 않는다).
+ *
+ * ★ 이 캐시가 없으면 스킬 탭은 무인증 60회/시간 안에서 매주 돌 수 없다. 파일 목록을 얻는
+ *   `git/trees` 호출이 스캔의 **유일한 core 쿼터 소비 지점**이고 노출 후보가 100건 안팎이라,
+ *   pushed_at 이 같은 저장소를 걸러내는 것이 유일한 통과 경로다(schema.sql 주석 참고).
+ */
+export function loadScans(ids: number[]): Map<number, ScanRecord> {
+  const map = new Map<number, ScanRecord>();
+  if (ids.length === 0) return map;
+  const holes = ids.map(() => "?").join(",");
+  const rows = db()
+    .prepare(
+      `SELECT repo_id, pushed_at, scanned_at, kind, total, checked, network, signals, units
+         FROM skill_scans WHERE repo_id IN (${holes})`
+    )
+    .all(...ids) as Array<{
+    repo_id: number;
+    pushed_at: string | null;
+    scanned_at: string | null;
+    kind: string | null;
+    total: number | null;
+    checked: number | null;
+    network: number | null;
+    signals: string | null;
+    units: string | null;
+  }>;
+  for (const r of rows) {
+    if (!r.kind) continue;
+    map.set(Number(r.repo_id), {
+      repoId: Number(r.repo_id),
+      pushedAt: r.pushed_at,
+      scannedAt: r.scanned_at ?? "",
+      access: {
+        kind: r.kind as SkillAccessKind,
+        total: Number(r.total ?? 0),
+        checked: Number(r.checked ?? 0),
+        network: Number(r.network ?? 0),
+        signals: parseJsonArray<string>(r.signals),
+      },
+      units: parseJsonArray<SkillUnit>(r.units),
+    });
+  }
+  return map;
+}
+
+/** JSON 컬럼 파싱. 깨진 값 하나가 회차를 죽이지 않게 빈 배열로 접는다. */
+function parseJsonArray<T>(raw: string | null): T[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 스캔 1건 저장(덮어쓰기).
+ *
+ * ⚠️ **kind="unknown" 은 저장하지 않는다.** '모른다'는 관측이 아니라 실패다. 그걸 캐시하면
+ *    네트워크가 잠깐 흔들린 그 주의 실패가 pushed_at 이 바뀔 때까지 굳어 버린다 — 다음 주에
+ *    다시 두드려 보는 편이 언제나 낫다(트리 호출 1회면 된다).
+ */
+export function saveScan(rec: ScanRecord): void {
+  if (rec.access.kind === "unknown") return;
+  db()
+    .prepare(`
+      INSERT INTO skill_scans (repo_id, pushed_at, scanned_at, kind, total, checked, network, signals, units)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(repo_id) DO UPDATE SET
+        pushed_at = excluded.pushed_at,
+        scanned_at = excluded.scanned_at,
+        kind = excluded.kind,
+        total = excluded.total,
+        checked = excluded.checked,
+        network = excluded.network,
+        signals = excluded.signals,
+        units = excluded.units
+    `)
+    .run(
+      rec.repoId,
+      rec.pushedAt,
+      rec.scannedAt,
+      rec.access.kind,
+      rec.access.total,
+      rec.access.checked,
+      rec.access.network,
+      JSON.stringify(rec.access.signals ?? []),
+      JSON.stringify(rec.units ?? [])
+    );
 }

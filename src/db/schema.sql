@@ -323,3 +323,25 @@ CREATE TABLE IF NOT EXISTS skill_summaries (
   source_hash TEXT,                  -- 요약의 입력이 된 원문 해시(sha256 hex)
   updated_at  TEXT NOT NULL
 );
+
+-- 네트워크 접근 스캔 캐시 (SkillRepo.access / .units 의 원본).
+--
+-- ★ pushed_at 이 이 표의 존재 이유다. 파일 목록을 얻는 `git/trees` 호출은 스캔 전체에서
+--   **유일하게 core 쿼터를 소비하는 지점**이고, 그 쿼터는 무인증 60회/시간뿐이다(이 집은
+--   GITHUB_TOKEN 없이 돈다). 노출 후보가 매주 100건 안팎이라 캐시 없이는 첫 주부터 창을
+--   넘긴다. 저장소의 마지막 푸시가 지난주와 같으면 파일도 같으므로 다시 조회하지 않는다.
+--   (첫 회차만 50회 남짓 쓰고, 그 뒤로는 그 주에 실제로 푸시된 저장소만 조회한다.)
+--
+-- ⚠️ kind="unknown" 은 **저장하지 않는다.** '모른다'를 캐시하면 그 주의 일시적 실패가
+--    다음 주까지 굳어 버린다 — 실패는 다음 회차에 다시 시도해야 한다(호출부 saveRepoScan).
+CREATE TABLE IF NOT EXISTS skill_scans (
+  repo_id    INTEGER PRIMARY KEY,
+  pushed_at  TEXT,                  -- 스캔 당시의 저장소 마지막 푸시(ISO). 캐시 무효화 키
+  scanned_at TEXT,                  -- 우리가 스캔한 시각(ISO)
+  kind       TEXT,                  -- SkillAccessKind
+  total      INT,                   -- 트리 기준 SKILL.md 총 개수
+  checked    INT,                   -- 실제로 읽어 검사한 개수 (< total 이면 표본이다)
+  network    INT,                   -- 그중 네트워크 신호가 나온 개수
+  signals    TEXT,                  -- JSON 배열: 발견된 신호 종류
+  units      TEXT                   -- JSON 배열: SkillUnit[] (펼쳐보기 목록)
+);
