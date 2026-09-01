@@ -20,6 +20,7 @@ import type {
   PulseRunResult,
 } from "@shared/types";
 import type { LottoSnapshot } from "@shared/lotto";
+import type { SkillsSnapshot } from "@shared/skills";
 import type { DowntimeEvent, DowntimeView } from "@shared/uptime";
 
 async function j<T>(res: Response): Promise<T> {
@@ -506,6 +507,30 @@ export const api = {
   // 조회 하나뿐이다. 갱신은 매주 일요일 10:00 서버 cron 이 하고 화면에는 조작 버튼이 없다.
   // 백엔드가 500 을 내면 그대로 throw 되므로 화면에서 try/catch 로 받아 빈 상태를 그린다.
   lotto: () => fetch("/api/lotto").then((r) => j<LottoSnapshot>(r)),
+
+  // ── 스킬 랭킹 ──
+  //
+  // 조회·상태·갱신 3종. 갱신은 주간 cron(월요일 09:00)이 하고, 버튼은 검증용이다.
+  //
+  // ★ 조회는 **null 을 돌려주지 않는다.** 수집 전에도 서버가 source:"empty" 인 빈 스냅샷을
+  //   200 으로 주기 때문이다 — 화면은 그 source 로 '아직 수집 전'과 '실패'를 가른다.
+
+  /** 최신 스냅샷(star 총합 + 주간 증가 랭킹). 수집 전이면 source:"empty" 인 빈 스냅샷. */
+  skills: () => fetch("/api/skills").then((r) => j<SkillsSnapshot>(r)),
+
+  /** 수집 진행 상태 폴링. 갱신 버튼을 누른 뒤 완료를 확인하는 창구. */
+  skillsStatus: () => fetch("/api/skills/status").then((r) => j<CollectStatus>(r)),
+
+  /**
+   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 시작하지 못하면 409 → { busy: true }.
+   * 완료 여부는 skillsStatus() 폴링으로 확인한다. 409 두 종류의 구분은 refreshEvents 주석 참고.
+   */
+  refreshSkills: async (): Promise<RefreshResult> => {
+    const res = await fetch("/api/skills/refresh", { method: "POST" });
+    if (res.status === 409) return busyResult(res);
+    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
+    return { started: true, busy: false, collecting: true, reason: null };
+  },
 
   // ── 가동 중단 사후 보고 ──
   //
