@@ -83,6 +83,12 @@ import {
   isCycleRunning as isLottoCycleRunning,
   runWeeklyCycle as runLottoWeeklyCycle,
 } from "../lotto/cycle.ts";
+import {
+  getSkillsSnapshot,
+  isSkillsCollecting,
+  getSkillsLastAttempt,
+  refreshSkills,
+} from "../skills/skills.ts";
 import { isPulseNotifyEnabled } from "../notify/pulse-imessage.ts";
 import { allRecentPulseAlerts } from "../db/repo.ts";
 import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
@@ -100,8 +106,10 @@ import {
   exchangeCode,
   getGoogleAuthStatus,
 } from "../notify/google-auth.ts";
+import { localDate } from "../util/date.ts";
 import { log } from "../util/log.ts";
 import type { ScheduleSettings, StockMarket } from "../../shared/types.ts";
+import type { SkillsSnapshot } from "../../shared/skills.ts";
 
 export const api = Router();
 
@@ -147,6 +155,7 @@ function llmBusyLabel(): string | null {
   if (isStockCollecting("kr")) return "국내 증시";
   if (isStockCollecting("us")) return "미국 증시";
   if (isLottoCycleRunning()) return "로또";
+  if (isSkillsCollecting()) return "스킬 랭킹";
   return null;
 }
 
@@ -1420,4 +1429,71 @@ api.post("/lotto/cycle", async (_req, res) => {
   const started = await startManualLlmJob("로또 사이클", () => runLottoWeeklyCycle("manual"));
   if (!started) return res.status(409).json(llmBusyBody());
   res.json({ ok: true });
+});
+
+// ── 스킬 랭킹 ──
+//
+// 조회·상태·수동갱신 3종 세트는 뉴스/유튜브와 같은 규약이다. 다른 점이 하나 있다 —
+// **아직 수집 전에도 404 를 주지 않는다.** 주간 cron(월요일 09:00)이 한 번도 돌지 않은
+// 배포 직후에는 스냅샷이 아예 없는데, 그때 404 를 내려보내면 프론트는 '아직 수집 전'과
+// '서버 고장'을 구분할 수 없다(둘 다 요청 실패로 보인다). source:"empty" 인 빈 스냅샷을
+// 200 으로 주면 화면이 "월요일 09:00 에 첫 수집" 같은 안내를 그릴 수 있다.
+
+/** 아직 한 번도 수집하지 않았을 때 내려보내는 빈 스냅샷. 화면이 상태를 읽을 수 있는 형태다. */
+function emptySkillsSnapshot(): SkillsSnapshot {
+  return {
+    date: localDate(),
+    updatedAt: new Date().toISOString(),
+    source: "empty",
+    trackedCount: 0,
+    byStars: [],
+    byGrowth: [],
+    // 첫 회차에는 비교 대상이 없어 증가 랭킹과 구간이 비어 있다(shared/skills.ts 머리말).
+    window: null,
+    notes: "아직 수집되지 않았습니다.",
+  };
+}
+
+/** 최신 스냅샷 — star 총합 랭킹 + 주간 증가 랭킹. 수집 전이면 빈 스냅샷을 200 으로 준다. */
+api.get("/skills", (_req, res) => {
+  try {
+    res.json(getSkillsSnapshot() ?? emptySkillsSnapshot());
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * 스킬 수집 진행 상태(프론트 폴링용). 뉴스·유튜브와 같은 CollectStatus 계약.
+ * lastAttempt 가 필요한 이유도 같다 — 수집이 실패하면 직전 스냅샷을 그대로 유지하므로
+ * updatedAt 만으로는 '이번 갱신이 실패했다'와 '원래 이번 주 값이 그대로다'를 못 가른다.
+ */
+api.get("/skills/status", (_req, res) => {
+  const snap = getSkillsSnapshot();
+  res.json({
+    collecting: isSkillsCollecting(),
+    updatedAt: snap?.updatedAt ?? null,
+    lastAttempt: getSkillsLastAttempt(),
+  });
+});
+
+/**
+ * 지금 갱신 (수동). GitHub 저장소 수백 건 조회 + LLM 요약이라 수 분 걸리므로 **완료를
+ * 기다리지 않고** 백그라운드로 시작하고 즉시 202를 반환한다. 프론트는 /skills/status 를
+ * 폴링해 '수집 중'을 표시하고, 끝나면 /skills 를 다시 불러온다.
+ * 이미 수집 중이면 409, 다른 탭이 LLM 슬롯을 쥐고 있어도 409 —
+ * 파일 상단 '수동 지금 갱신' 주석 참고.
+ *
+ * ★ notify 는 false 다. 이 문은 사람이 결과를 눈으로 확인하려고 누르는 것이라, 누를 때마다
+ *   메일·iMessage 가 나가면 안 된다. 정기 알림은 스케줄러(주간 cron) 경로가 담당한다.
+ */
+api.post("/skills/refresh", async (_req, res) => {
+  if (isSkillsCollecting()) {
+    return res.status(409).json({ error: "이미 스킬 수집이 진행 중입니다.", collecting: true });
+  }
+  const started = await startManualLlmJob("스킬 랭킹", () =>
+    refreshSkills({ trigger: "manual", notify: false })
+  );
+  if (!started) return res.status(409).json(llmBusyBody());
+  res.status(202).json({ ok: true, started: true, collecting: true });
 });
