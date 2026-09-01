@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   AlertTriangle,
   Archive,
   CalendarClock,
+  ChevronDown,
   Clock,
   GitFork,
   Loader2,
@@ -10,13 +11,21 @@ import {
   Star,
   TrendingUp,
 } from "lucide-react";
-import type { SkillRankEntry, SkillRankKind, SkillWindow, SkillsSnapshot } from "@shared/skills";
+import type {
+  SkillAccess,
+  SkillRankEntry,
+  SkillRankKind,
+  SkillUnit,
+  SkillWindow,
+  SkillsSnapshot,
+} from "@shared/skills";
 import { SKILLS_CYCLE_LABEL, SKILLS_RANK_SIZE } from "@shared/skills";
 import { safeHref } from "@shared/url";
 import { api, type CollectAttempt } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -76,6 +85,148 @@ function relTime(iso: string): string | null {
 /** 한 줄에 노출할 topic 칩 개수. 넘치면 "+n" 으로 접는다(줄바꿈으로 목록이 무너지지 않게). */
 const TOPIC_LIMIT = 4;
 
+/**
+ * 네트워크 접근 칩의 표기 규칙(라벨·색·툴팁 본문)을 한자리에 모은다.
+ *
+ * ★ `local` 과 `local-sampled` 를 **같은 모양으로 그리지 않는다.** 계약(shared/skills.ts)이
+ *   두 kind 를 나눈 이유가 "864개 중 40개만 보고 로컬이라 단정하지 않기" 이므로, 화면이
+ *   그걸 뭉개면 나눈 의미가 사라진다. 추정 쪽은 문구에 '추정 · 표본'을 남기고 테두리를
+ *   점선으로 둬서 색을 보지 않고도 확정과 구분되게 한다.
+ * ★ `no-skill`·`unknown` 은 회색(중립)이다. "모른다"는 경고가 아니므로 위험 색을 쓰지 않는다.
+ */
+function accessChip(a: SkillAccess): { label: string; cls: string; detail: string } {
+  // "20개 중 20개 검사" — 표본이면 이 문장만으로도 전수가 아니었음이 드러난다.
+  const scanned = `${num(a.total)}개 중 ${num(a.checked)}개 검사`;
+  const found =
+    a.signals.length > 0 ? `발견된 신호: ${a.signals.join(", ")}` : "발견된 네트워크 신호 없음";
+
+  switch (a.kind) {
+    case "local":
+      return {
+        label: `🔒 로컬 ${num(a.total)}/${num(a.total)}`,
+        cls: "border-emerald-300 bg-emerald-50 text-emerald-700",
+        detail: `${found} · ${scanned} (전수)`,
+      };
+    case "local-sampled":
+      return {
+        label: `🔒 로컬 추정 · 표본 ${num(a.checked)}/${num(a.total)}`,
+        cls: "border-dashed border-emerald-400/70 bg-emerald-50/50 text-emerald-600",
+        detail: `${found} · ${scanned}. 표본이라 나머지는 확인하지 못했습니다 — '로컬'로 단정하지 않습니다.`,
+      };
+    case "external":
+      return {
+        label: `🌐 외부 접근 ${num(a.network)}/${num(a.checked)}`,
+        cls: "border-orange-300 bg-orange-50 text-orange-700",
+        detail: `${found} · ${scanned} · 검사한 전부에서 신호가 나왔습니다.`,
+      };
+    case "partial":
+      return {
+        label: `🌐 일부 외부 ${num(a.network)}/${num(a.checked)}`,
+        cls: "border-amber-300 bg-amber-50 text-amber-700",
+        detail: `${found} · ${scanned} · 그중 ${num(a.network)}개에서 신호가 나왔습니다.`,
+      };
+    case "no-skill":
+      return {
+        label: "⚪ 스킬 없음",
+        cls: "border-slate-200 bg-slate-50 text-slate-500",
+        detail: "SKILL.md 가 없는 저장소입니다(목록·도구 저장소일 수 있습니다).",
+      };
+    default:
+      return {
+        label: "⚪ 판정 불가",
+        cls: "border-slate-200 bg-slate-50 text-slate-500",
+        detail: "파일을 읽지 못해 판정하지 못했습니다. 외부 접근이 없다는 뜻은 아닙니다.",
+      };
+  }
+}
+
+/**
+ * 집계 칩 1개. 툴팁에 신호 종류와 검사 범위를 적는다.
+ *
+ * 툴팁은 hover/focus 로만 뜨므로 같은 문장을 sr-only 로도 실어 스크린리더가 놓치지 않게 한다
+ * (칩을 tabIndex 로 만들면 50줄 × 1개씩 탭 스톱이 늘어난다).
+ */
+function AccessChip({ access }: { access: SkillAccess }) {
+  const c = accessChip(access);
+  return (
+    <span
+      className={cn(
+        "group/tt relative inline-flex items-center rounded-full border px-2 py-0.5",
+        "text-[10px] font-semibold",
+        c.cls
+      )}
+    >
+      {c.label}
+      <span className="sr-only"> — {c.detail}</span>
+      {/*
+        기본 Tip 은 nowrap + 가운데 정렬이라 신호가 여러 개면 가로로 길어져 좁은 폭에서
+        잘린다. 왼쪽 정렬 + 줄바꿈으로 바꿔 375px 에서도 칸 안에 들어오게 한다.
+        `w-max` 가 없으면 absolute 박스가 칩 너비(≈90px)에 맞춰 접혀 세로로 길쭉해진다.
+      */}
+      <Tip className="left-0 w-max max-w-[13rem] translate-x-0 whitespace-normal text-left leading-snug">
+        {c.detail}
+      </Tip>
+    </span>
+  );
+}
+
+/**
+ * 펼침 목록 — 표본에 든 개별 스킬을 한 줄씩.
+ *
+ * ★ `units` 는 표본이라 `access.total` 보다 짧을 수 있다. 남은 개수를 그냥 "N개 더" 로만
+ *   적으면 나머지가 로컬인 줄 오해하므로, 검사하지 못했다는 사실을 함께 적는다.
+ */
+function UnitsList({ units, access, id }: { units: SkillUnit[]; access?: SkillAccess; id: string }) {
+  const rest = access ? access.total - units.length : 0;
+  return (
+    <div
+      id={id}
+      className="mt-1.5 max-h-56 overflow-y-auto rounded-md border bg-muted/30 px-2 py-1.5"
+    >
+      <ul>
+        {units.map((u) => {
+          const href = safeHref(u.url);
+          const net = u.signals.length > 0;
+          return (
+            <li
+              key={u.path}
+              className="flex flex-wrap items-baseline gap-x-2 text-[11px] leading-relaxed"
+            >
+              <span aria-hidden className="shrink-0">
+                {net ? "🌐" : "🔒"}
+              </span>
+              <span className="sr-only">{net ? "외부 접근" : "로컬"}</span>
+              {href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="break-all font-medium hover:underline"
+                  style={{ color: BLUE }}
+                >
+                  {u.name}
+                </a>
+              ) : (
+                <span className="break-all font-medium">{u.name}</span>
+              )}
+              {net && (
+                <span className="min-w-0 break-words text-muted-foreground">
+                  {u.signals.join(", ")}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {access && rest > 0 && (
+        <p className="mt-1 border-t pt-1 text-[10px] text-muted-foreground/80">
+          … {num(rest)}개 더 (표본 {num(access.checked)}개만 검사해 나머지는 확인하지 못했습니다)
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** 순위 변동 표시. prevRank 가 null 이면 신규 진입(NEW). */
 function RankDelta({ rank, prevRank }: { rank: number; prevRank: number | null }) {
   if (prevRank === null) {
@@ -106,6 +257,11 @@ function RankDelta({ rank, prevRank }: { rank: number; prevRank: number | null }
 function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }) {
   const r = entry.repo;
   const href = safeHref(r.url);
+  // 펼침 상태는 줄마다 독립이다(RankRow 인스턴스가 곧 한 줄이므로 지역 상태로 충분).
+  const [openUnits, setOpenUnits] = useState(false);
+  const unitsId = useId();
+  // 표본에 든 개별 스킬. 수집 전 스냅샷에는 없다 — 없으면 펼치기 자체를 내지 않는다.
+  const units = r.units ?? [];
   // 요약(LLM 한국어)이 우선이고, 없으면 GitHub 원문 설명으로 폴백한다.
   // 요약 실패가 줄을 비우면 안 된다 — 그때도 사용자는 이 저장소가 뭔지 알아야 한다.
   const desc = r.summary ?? r.description ?? "설명 없음";
@@ -171,8 +327,32 @@ function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }
           )}
         </div>
 
-        {r.topics.length > 0 && (
+        {/*
+          태그 줄 — 네트워크 접근 칩을 topics 앞에 둔다(이 줄에서 가장 먼저 읽혀야 할 값이다).
+          ★ access 가 없으면 칩을 **아예 그리지 않는다.** 이 기능 배포 전 스냅샷을 보는
+            사용자에게 "미확인" 자리표시자를 띄우면 없는 판정을 있는 것처럼 읽히게 된다.
+        */}
+        {(r.access || r.topics.length > 0) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {r.access && <AccessChip access={r.access} />}
+            {units.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setOpenUnits((v) => !v)}
+                aria-expanded={openUnits}
+                aria-controls={openUnits ? unitsId : undefined}
+                className={cn(
+                  "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px]",
+                  "font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                <ChevronDown
+                  aria-hidden
+                  className={cn("h-3 w-3 transition-transform", openUnits && "rotate-180")}
+                />
+                {openUnits ? "접기" : "펼치기"}
+              </button>
+            )}
             {r.topics.slice(0, TOPIC_LIMIT).map((t) => (
               <span
                 key={t}
@@ -185,6 +365,10 @@ function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }
               <span className="text-[10px] text-muted-foreground/70">+{extraTopics}</span>
             )}
           </div>
+        )}
+
+        {openUnits && units.length > 0 && (
+          <UnitsList units={units} access={r.access} id={unitsId} />
         )}
       </div>
 
