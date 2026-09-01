@@ -280,6 +280,20 @@ export function SkillsBoard() {
 
   return (
     <div>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold" style={{ color: BLUE }}>
+            🧩 스킬 랭킹
+          </h2>
+          <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <CalendarClock className="h-3.5 w-3.5" />
+            매주 {SKILLS_CYCLE_LABEL} 자동 갱신 — GitHub 스킬 저장소 star 를 주간 스냅샷으로
+            쌓아 직접 차분합니다.
+            {updated && <span className="text-muted-foreground/70">(최근 {updated})</span>}
+          </p>
+        </div>
+      </div>
+
       {/* 세그먼트 컨트롤 — shadcn Tabs 컴포넌트가 없어 Button 2개로 구성한다(증시 탭과 같은 방식). */}
       <div className="mb-4 flex items-center gap-1">
         <Button
@@ -298,20 +312,6 @@ export function SkillsBoard() {
         >
           🔥 이번 주 급상승
         </Button>
-      </div>
-
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-bold" style={{ color: BLUE }}>
-            🧩 스킬 랭킹
-          </h2>
-          <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <CalendarClock className="h-3.5 w-3.5" />
-            매주 {SKILLS_CYCLE_LABEL} 자동 갱신 — GitHub 스킬 저장소 star 를 주간 스냅샷으로
-            쌓아 직접 차분합니다.
-            {updated && <span className="text-muted-foreground/70">(최근 {updated})</span>}
-          </p>
-        </div>
       </div>
 
       {err && (
