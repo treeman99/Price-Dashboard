@@ -857,7 +857,23 @@ async function safeCatchUpLottoCycle() {
 // cron 식과 경계 계산은 shared/skills.ts 의 같은 상수를 본다(어긋나면 보충이 매 틱 돌거나
 // 영영 안 돈다).
 
+/**
+ * 스케줄러 레벨의 중복 가드.
+ *
+ * `isSkillsCollecting()`(모듈 안쪽 플래그)만으로는 부족하다 — 09:00 정시 런이 앞선 20분짜리
+ * 수집 뒤에 **줄을 서 있는** 동안에는 아직 collecting 이 false 라, 09:30 스윕이 "아직 이번 주
+ * 커버 안 됨"을 보고 두 번째 런을 같은 큐에 밀어 넣는다. 그러면 첫 런이 끝난 직후 두 번째가
+ * 슬롯에 들어와 collecting=false 를 확인하고 **같은 수집을 통째로 다시** 돈다.
+ * 이 불리언은 '큐에 들어간 시점'부터 잠기므로 그 창을 닫는다(뉴스의 newsRunning 과 같은 역할).
+ */
+let skillsRunning = false;
+
 async function safeRunSkills(trigger: string, notify: boolean) {
+  if (skillsRunning) {
+    log.warn(`스킬 랭킹 실행 대기/진행 중 → ${trigger} 건너뜀`);
+    return;
+  }
+  skillsRunning = true;
   // ⚠️ 큐 대기 **전에** 찍는다. 이 시각 이후의 기록만 이번 런의 성패로 인정한다.
   const runStartedAt = Date.now();
   // 결말 기본값이 "skipped-queue" 인 이유: 아래 콜백에 **진입조차 못 한** 경우가 정확히 그
@@ -878,6 +894,7 @@ async function safeRunSkills(trigger: string, notify: boolean) {
   } catch (e) {
     log.error(`스킬 랭킹 오류 [${trigger}]: ${(e as Error).message}`);
   } finally {
+    skillsRunning = false;
     // 성패 판정은 skills.ts 의 시도 기록이 근거다(계약: getSkillsLastAttempt).
     noteTabOutcome(`스킬 랭킹[${trigger}]`, skillsBackoff, outcome, () =>
       attemptSucceededSince(getSkillsLastAttempt(), runStartedAt)
@@ -897,7 +914,7 @@ async function safeRunSkills(trigger: string, notify: boolean) {
  */
 async function safeCatchUpSkills() {
   try {
-    if (isSkillsCollecting()) return;
+    if (skillsRunning || isSkillsCollecting()) return;
     if (skillsBackoff.blocked()) return; // 연속 실패 백오프 중
     if (skillsCoveredThisWeek()) return;
     log.info(`이번 주 스킬 랭킹 갱신 누락 감지 → catch-up 실행 (기준 ${SKILLS_CYCLE_LABEL})`);
