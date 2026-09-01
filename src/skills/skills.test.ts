@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { SkillRankEntry, SkillRepo, SkillsSnapshot } from "../../shared/skills.ts";
+import type { PruneResult } from "./verify.ts";
 
 /**
  * **스냅샷 보호** 회귀 테스트.
@@ -25,6 +26,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "skills-snap-"));
 process.env.DB_PATH = path.join(tmpDir, "price.db");
 
 const {
+  buildNotes,
   decideSkillsSnapshot,
   deriveSkillsAttempt,
   isSkillsSuccess,
@@ -175,6 +177,40 @@ test("성공한 회차는 저장하고 알림 대상이 된다", () => {
   assert.equal(d.attempt.error, null);
   assert.equal(d.attempt.tracked, 400);
   assert.equal(d.snapshot.date, "2026-09-14");
+});
+
+// ── notes 는 '이상 상황 전용' ──
+//
+// notes 가 차 있으면 SkillsBoard 가 앰버 경고 배너를 띄운다. 그래서 정상 회차에 한 글자라도
+// 넣으면 배너가 상시 점등되고, App.tsx 가동 중단 배너 주석이 경고한 대로 사용자가 배너를
+// 배경으로 학습해 정작 진짜 사고 때 읽지 않는다. 그 회귀를 여기서 막는다.
+
+/** 링크 검증이 아무것도 걸러내지 않은 정상 결과 */
+function pruneClean(over: Partial<PruneResult> = {}): PruneResult {
+  return { repos: [], removed: [], checked: 40, unknown: 0, redirected: 0, rounds: 1, ...over };
+}
+
+test("정상 회차의 notes 는 undefined 다(경고 배너가 상시 점등되면 안 된다)", () => {
+  assert.equal(buildNotes([], pruneClean()), undefined);
+  assert.equal(buildNotes([], null), undefined, "링크 검증이 통째로 꺼져도 마찬가지다");
+});
+
+test("링크 사망 제외는 notes 에 남는다(조용히 사라지면 원인을 못 찾는다)", () => {
+  const notes = buildNotes([], pruneClean({ removed: [repo(9, 10), repo(10, 20)] }));
+  assert.match(notes ?? "", /링크 사망 확인 2건 제외/);
+  assert.match(notes ?? "", /owner\/repo-9/);
+});
+
+test("판정 불가와 수집 경고도 notes 에 남는다", () => {
+  assert.match(buildNotes([], pruneClean({ unknown: 3 })) ?? "", /링크 판정 불가 3건/);
+  assert.match(buildNotes(["topic:agent-skills 3페이지 실패"], null) ?? "", /후보가 줄었을 수 있습니다/);
+});
+
+test("추적 저장소 수·첫 회차 안내는 notes 에 넣지 않는다(화면에 이미 있다)", () => {
+  // 둘 다 상시 정보다 — trackedCount 는 각주로, 첫 회차는 window === null 빈 상태로 이미 나온다.
+  const notes = buildNotes([], pruneClean({ unknown: 1 })) ?? "";
+  assert.doesNotMatch(notes, /추적합니다/);
+  assert.doesNotMatch(notes, /첫 회차/);
 });
 
 // ── 주간 경계 ──

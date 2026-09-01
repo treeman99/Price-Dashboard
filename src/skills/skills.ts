@@ -19,11 +19,7 @@ import {
 } from "./curate.ts";
 import { pruneDeadLinks, type PruneResult } from "./verify.ts";
 import { sendSkillsEmail, sendSkillsIMessage } from "../notify/skills-email.ts";
-import {
-  SKILLS_CYCLE_HOUR,
-  SKILLS_CYCLE_WEEKDAY,
-  SKILLS_TRACK_POOL,
-} from "../../shared/skills.ts";
+import { SKILLS_CYCLE_HOUR, SKILLS_CYCLE_WEEKDAY } from "../../shared/skills.ts";
 import type { SkillRepo, SkillsSnapshot } from "../../shared/skills.ts";
 
 /**
@@ -427,21 +423,31 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
     byStars: attachSummaries(ranking.byStars, summaries),
     byGrowth: attachSummaries(ranking.byGrowth, summaries),
     window: ranking.window,
-    notes: buildNotes(trackedCount, ranking.window === null, warnings, prune),
+    notes: buildNotes(warnings, prune),
   };
 }
 
-/** 화면 각주에 쓸 상태 문구. 첫 회차 안내와 부분 실패 경고를 사람이 읽을 형태로 합친다. */
-function buildNotes(
-  tracked: number,
-  firstCycle: boolean,
-  warnings: string[],
-  prune: PruneResult | null
-): string {
+/**
+ * 화면·메일에 띄울 **이상 상황 안내**. 정상 회차에는 undefined 를 돌려준다.
+ *
+ * notes 는 SkillsBoard 에서 앰버 경고 배너로 그대로 렌더링된다. 그래서 여기에 상시 정보를
+ * 한 줄이라도 넣으면 배너가 평상시에도 켜져 있게 되는데, 이 저장소는 그 위험을 App.tsx 의
+ * 가동 중단 배너 주석에 이미 못 박아 뒀다 —
+ *
+ *   "★ 평상시에는 아무것도 렌더링되지 않는다. 화면은 이 기능이 없던 때와 100% 동일하다.
+ *     이 성질이 깨지면 사용자가 배너를 배경으로 학습해 버려서, 정작 진짜 사고 때 읽지 않는다."
+ *
+ * 스킬 탭도 같은 규칙을 따른다. 그래서 notes 에는 **이상 상황만** 남긴다.
+ *
+ * 여기서 뺀 두 문장은 정보가 사라진 것이 아니다:
+ *   - 추적 저장소 수 → `SkillsSnapshot.trackedCount` 를 화면이 각주로 이미 렌더링한다.
+ *   - 첫 회차 안내   → 화면에 `window === null` 전용 빈 상태 문구가 이미 있다(경고색 없이).
+ * 둘 다 notes 로 또 내보내면 같은 말이 두 번 나오고, 그중 하나가 경고색으로 뜬다.
+ *
+ * (스냅샷 보호 안내는 여기가 아니라 staleNote() 가 별도로 덮어쓴다 — 그쪽은 진짜 이상 상황이다.)
+ */
+export function buildNotes(warnings: string[], prune: PruneResult | null): string | undefined {
   const parts: string[] = [];
-  parts.push(
-    `GitHub 검색으로 ${tracked.toLocaleString()}개 저장소를 추적합니다(추적 풀 ${SKILLS_TRACK_POOL}).`
-  );
   // 제외 건수를 남긴다 — 조용히 사라지면 "왜 그 저장소가 없지?"를 나중에 답할 수 없다.
   if (prune && prune.removed.length > 0) {
     parts.push(
@@ -456,14 +462,9 @@ function buildNotes(
       `링크 판정 불가 ${prune.unknown}건은 목록에 그대로 뒀습니다(네트워크 사정으로 목록을 지우지 않습니다).`
     );
   }
-  if (firstCycle) {
-    parts.push(
-      "첫 회차라 비교할 지난 스냅샷이 없어 증가 랭킹은 다음 회차부터 채워집니다 " +
-        "(GitHub 이 과거 star 수를 제공하지 않아 주간 스냅샷 차분으로만 구할 수 있습니다)."
-    );
-  }
   if (warnings.length) {
     parts.push(`일부 검색이 실패해 후보가 줄었을 수 있습니다: ${warnings.join(" / ")}`);
   }
-  return parts.join(" ");
+  // 이상 없음 = undefined. 화면 배너가 저절로 꺼진다.
+  return parts.length ? parts.join(" ") : undefined;
 }
