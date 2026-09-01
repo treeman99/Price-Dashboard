@@ -113,6 +113,27 @@ export interface AppConfig {
    * 다른 탭보다 짧게 잡아, 살아날 가망 없는 실행을 일찍 끊고 catch-up 에 넘긴다.
    */
   stockBriefTimeoutMs: number;
+  /**
+   * 스킬 요약 **배치 1회** 최대 대기(ms). 기본 5분.
+   *
+   * 이 큐레이션은 웹을 돌지 않는다 — 이미 손에 든 description 을 한국어 2~3줄로 옮기는
+   * 단일 완성 호출이라 정상 소요가 분 단위 아래다. 뉴스(20분)를 그대로 물려주면 배치 하나가
+   * 죽었을 때 나머지 배치까지 통째로 밀린다.
+   */
+  skillsSummaryTimeoutMs: number;
+  /**
+   * 스킬 요약 **전체** 예산(ms). 기본 20분.
+   *
+   * 배치 상한만 있으면 배치 수가 늘어나는 만큼 총 소요가 선형으로 늘어난다(첫 회차는 요약
+   * 대상이 100건 = 9배치라 최악 45분이 된다). 총량에 상한을 걸어, 남는 항목은 summary=null 로
+   * 두고 화면이 원문으로 폴백하게 한다 — 요약이 덜 끝나도 목록은 비지 않는다.
+   */
+  skillsSummaryBudgetMs: number;
+  /**
+   * GitHub Personal Access Token(선택). 있으면 검색 레이트리밋이 10회/분 → 30회/분이 된다.
+   * **없어도 정상 동작한다** — 스킬 랭킹 수집은 무인증 경로를 기준으로 페이싱한다.
+   */
+  githubToken: string;
   dbPath: string;
   legacyHistoryJson: string;
   historyRetentionDays: number;
@@ -211,6 +232,10 @@ export const config: AppConfig = {
   youtubeTimeoutMs: Math.max(60_000, int(process.env.YOUTUBE_TIMEOUT_MS, 1_200_000)),
   eventsTimeoutMs: Math.max(60_000, int(process.env.EVENTS_TIMEOUT_MS, 1_200_000)),
   stockBriefTimeoutMs: Math.max(60_000, int(process.env.STOCK_BRIEF_TIMEOUT_MS, 900_000)),
+  // 스킬 요약은 웹 도구 없는 단일 완성 호출이라 배치 5분 / 전체 20분으로 짧게 잡는다.
+  skillsSummaryTimeoutMs: Math.max(30_000, int(process.env.SKILLS_SUMMARY_TIMEOUT_MS, 300_000)),
+  skillsSummaryBudgetMs: Math.max(60_000, int(process.env.SKILLS_SUMMARY_BUDGET_MS, 1_200_000)),
+  githubToken: process.env.GITHUB_TOKEN?.trim() || "",
   dbPath: process.env.DB_PATH?.trim() || path.join(repoRoot, "data", "price.db"),
   legacyHistoryJson:
     process.env.LEGACY_HISTORY_JSON?.trim() ||
