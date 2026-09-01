@@ -17,13 +17,14 @@ import {
   pickSummaryTargets,
   summarizeSkillRepos,
 } from "./curate.ts";
+import { pruneDeadLinks, type PruneResult } from "./verify.ts";
 import { sendSkillsEmail, sendSkillsIMessage } from "../notify/skills-email.ts";
 import {
   SKILLS_CYCLE_HOUR,
   SKILLS_CYCLE_WEEKDAY,
   SKILLS_TRACK_POOL,
 } from "../../shared/skills.ts";
-import type { SkillsSnapshot } from "../../shared/skills.ts";
+import type { SkillRepo, SkillsSnapshot } from "../../shared/skills.ts";
 
 /**
  * 스킬 랭킹 주간 회차 오케스트레이션.
@@ -376,13 +377,35 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
   // 2) 차분. 직전 스냅샷이 없으면 첫 회차 — 증가 랭킹은 빈 배열, window 는 null 이다.
   const prevDate = previousSnapshotDate(date);
   const prevPrevDate = prevDate ? previousSnapshotDate(prevDate) : null;
-  const ranking = buildRankings({
+  const rankingInput = {
     date,
-    repos,
     prevDate,
     prevStars: loadStarsAt(prevDate),
     prevPrevStars: prevPrevDate ? loadStarsAt(prevPrevDate) : null,
-  });
+  };
+
+  // 2-1) 링크 생사 검증. **순위를 매기기 전**에 죽은 저장소를 풀에서 뺀다 — 순위 뒤에 빼면
+  //      1~50위에 구멍이 생기고 그 자리를 채웠어야 할 다음 후보가 올라오지 못한다.
+  //      검증 대상은 노출 후보(두 랭킹 TOP 50 의 합집합)뿐이고, 죽은 것을 빼면 새로 올라온
+  //      후보만 추가로 두드린다(verify.ts 의 라운드 루프).
+  //
+  //      ⚠️ 검증 단계의 예외가 회차를 죽이면 안 된다. 링크 확인은 목록을 다듬는 부가 장치이지
+  //         수집 결과를 폐기할 권한이 있는 장치가 아니다 — 터지면 검증 없이 그대로 간다.
+  let live = repos;
+  let prune: PruneResult | null = null;
+  try {
+    prune = await pruneDeadLinks(repos, (pool) => {
+      const r = buildRankings({ ...rankingInput, repos: pool });
+      const byId = new Map<number, SkillRepo>();
+      for (const e of [...r.byStars, ...r.byGrowth]) byId.set(e.repo.id, e.repo);
+      return [...byId.values()];
+    });
+    live = prune.repos;
+  } catch (e) {
+    log.warn(`스킬 링크 검증 실패 → 검증 없이 진행: ${(e as Error).message}`);
+  }
+
+  const ranking = buildRankings({ ...rankingInput, repos: live });
 
   // 3) 요약. 노출되는 두 랭킹의 합집합 중 **원문이 바뀐 것만** LLM 을 태운다.
   const shown = [...ranking.byStars, ...ranking.byGrowth];
@@ -404,16 +427,35 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
     byStars: attachSummaries(ranking.byStars, summaries),
     byGrowth: attachSummaries(ranking.byGrowth, summaries),
     window: ranking.window,
-    notes: buildNotes(trackedCount, ranking.window === null, warnings),
+    notes: buildNotes(trackedCount, ranking.window === null, warnings, prune),
   };
 }
 
 /** 화면 각주에 쓸 상태 문구. 첫 회차 안내와 부분 실패 경고를 사람이 읽을 형태로 합친다. */
-function buildNotes(tracked: number, firstCycle: boolean, warnings: string[]): string {
+function buildNotes(
+  tracked: number,
+  firstCycle: boolean,
+  warnings: string[],
+  prune: PruneResult | null
+): string {
   const parts: string[] = [];
   parts.push(
     `GitHub 검색으로 ${tracked.toLocaleString()}개 저장소를 추적합니다(추적 풀 ${SKILLS_TRACK_POOL}).`
   );
+  // 제외 건수를 남긴다 — 조용히 사라지면 "왜 그 저장소가 없지?"를 나중에 답할 수 없다.
+  if (prune && prune.removed.length > 0) {
+    parts.push(
+      `링크 사망 확인 ${prune.removed.length}건 제외(${prune.removed
+        .slice(0, 5)
+        .map((r) => r.fullName)
+        .join(", ")}${prune.removed.length > 5 ? " 외" : ""}).`
+    );
+  }
+  if (prune && prune.unknown > 0) {
+    parts.push(
+      `링크 판정 불가 ${prune.unknown}건은 목록에 그대로 뒀습니다(네트워크 사정으로 목록을 지우지 않습니다).`
+    );
+  }
   if (firstCycle) {
     parts.push(
       "첫 회차라 비교할 지난 스냅샷이 없어 증가 랭킹은 다음 회차부터 채워집니다 " +
