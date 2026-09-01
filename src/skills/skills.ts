@@ -1,0 +1,427 @@
+import fs from "node:fs";
+import path from "node:path";
+import { config } from "../config.ts";
+import { log } from "../util/log.ts";
+import { localDate } from "../util/date.ts";
+import { collectSkillRepos } from "./github.ts";
+import {
+  buildRankings,
+  loadStarsAt,
+  previousSnapshotDate,
+  saveWeeklySnapshot,
+} from "./store.ts";
+import {
+  attachSummaries,
+  loadSummaryCache,
+  mergeSummaries,
+  pickSummaryTargets,
+  summarizeSkillRepos,
+} from "./curate.ts";
+import { sendSkillsEmail, sendSkillsIMessage } from "../notify/skills-email.ts";
+import {
+  SKILLS_CYCLE_HOUR,
+  SKILLS_CYCLE_WEEKDAY,
+  SKILLS_TRACK_POOL,
+} from "../../shared/skills.ts";
+import type { SkillsSnapshot } from "../../shared/skills.ts";
+
+/**
+ * 스킬 랭킹 주간 회차 오케스트레이션.
+ *
+ * 구조는 `src/news/news.ts` 를 그대로 본떴다(스냅샷 캐시 + 시도 기록 + 스냅샷 보호 + 동시 실행
+ * 가드). 다른 점은 **주 1회**라는 것과, 화면에 나가는 숫자가 LLM 이 아니라 GitHub API 실측값과
+ * 우리 DB 차분에서 나온다는 것뿐이다.
+ *
+ * 회차 1회의 순서:
+ *   1. GitHub 검색으로 추적 풀(최대 SKILLS_TRACK_POOL)을 모은다
+ *   2. 그 주 스냅샷을 DB 에 저장한다 (skill_repo_points — 증가 랭킹의 유일한 근거)
+ *   3. 직전 스냅샷과 차분해 두 랭킹을 만든다 (첫 회차면 증가 랭킹은 빈 배열)
+ *   4. 원문이 바뀐 항목만 LLM 으로 한국어 요약한다 (숫자는 절대 생성시키지 않는다)
+ *   5. 스냅샷 보호 판정 후 캐시에 쓰고, 보호되지 않은 회차만 알림을 보낸다
+ */
+
+/** 최신 스냅샷 1개만 캐시한다(이력은 DB 의 skill_repo_points 가 갖는다). */
+const SNAPSHOT_PATH = path.join(path.dirname(config.dbPath), "skills-latest.json");
+
+/**
+ * 마지막 수집 **시도**의 성패 기록(스냅샷과 별도 파일).
+ *
+ * 스냅샷에서 유도하지 않는 이유는 news.ts 와 같다 — 아래 스냅샷 보호가 발동하면 디스크에는
+ * '직전 성공본'(지난주 것)이 그대로 남고, 그 상태에서 성패를 스냅샷으로만 유도하면
+ * "마지막 시도 = 성공"으로 읽혀 스케줄러 백오프가 풀린다. 시도 기록은 스냅샷과 수명이 다르다.
+ *
+ * 메모리가 아니라 디스크인 이유도 같다 — launchd 상시 구동이라 재시작마다 리셋되면
+ * 재시작 직후 catch-up 이 '기록 없음'에서 출발해 실패 이력을 잃는다.
+ */
+const ATTEMPT_PATH = path.join(path.dirname(config.dbPath), "skills-attempt.json");
+
+let memo: SkillsSnapshot | null = null;
+let attemptMemo: SkillsAttemptRecord | null = null;
+let running = false;
+
+/** 디스크에 남기는 시도 기록. 노출 계약(ok/at/source)보다 넓다 — 사후 추적용 필드 포함. */
+interface SkillsAttemptRecord {
+  ok: boolean;
+  /** 시도 시작 시각(ISO) */
+  at: string;
+  /** 그 시도가 만든 스냅샷의 source */
+  source: string;
+  trigger?: string;
+  /** 그 시도가 추적한 저장소 수 */
+  tracked?: number;
+  error?: string | null;
+}
+
+function loadFromDisk(): SkillsSnapshot | null {
+  try {
+    if (fs.existsSync(SNAPSHOT_PATH)) {
+      return JSON.parse(fs.readFileSync(SNAPSHOT_PATH, "utf8")) as SkillsSnapshot;
+    }
+  } catch (e) {
+    log.warn(`스킬 스냅샷 로드 실패: ${(e as Error).message}`);
+  }
+  return null;
+}
+
+/**
+ * 스냅샷 저장. 임시 파일에 쓰고 rename 으로 바꾼다(원자적 교체).
+ * 보호가 걸린 회차에도 notes 를 갱신하느라 파일을 다시 쓰므로, 중간에 프로세스가 죽어 부분
+ * 기록이 남으면 **유일하게 남은 성공본**을 잃는다. news.ts 와 같은 이유·같은 방식이다.
+ */
+function saveToDisk(s: SkillsSnapshot): void {
+  try {
+    fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
+    const tmp = `${SNAPSHOT_PATH}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(s, null, 2));
+    fs.renameSync(tmp, SNAPSHOT_PATH);
+  } catch (e) {
+    log.warn(`스킬 스냅샷 저장 실패: ${(e as Error).message}`);
+  }
+}
+
+function loadAttemptFromDisk(): SkillsAttemptRecord | null {
+  try {
+    if (fs.existsSync(ATTEMPT_PATH)) {
+      return JSON.parse(fs.readFileSync(ATTEMPT_PATH, "utf8")) as SkillsAttemptRecord;
+    }
+  } catch (e) {
+    log.warn(`스킬 시도 기록 로드 실패: ${(e as Error).message}`);
+  }
+  return null;
+}
+
+/** 시도 기록 저장. 실패해도 수집 자체를 죽이지 않는다(기록은 부가정보). */
+function recordAttempt(r: SkillsAttemptRecord): void {
+  attemptMemo = r;
+  try {
+    fs.mkdirSync(path.dirname(ATTEMPT_PATH), { recursive: true });
+    fs.writeFileSync(ATTEMPT_PATH, JSON.stringify(r, null, 2));
+  } catch (e) {
+    log.warn(`스킬 시도 기록 저장 실패: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * 이 스냅샷이 '성공한 회차'인지.
+ *
+ * source 만 보지 않고 **건수까지** 보는 이유는 뉴스에서 실제로 데인 그대로다 — 0건 스냅샷이
+ * source 만 정상으로 남으면 그것이 '이번 주는 커버됨'으로 읽혀 catch-up 이 영구 봉인된다.
+ * 스킬 랭킹은 topic 4종에서 800건을 훑으므로 0건은 정의상 실패다.
+ */
+export function isSkillsSuccess(s: SkillsSnapshot | null | undefined): boolean {
+  if (!s) return false;
+  return s.source === "github" && s.byStars.length > 0;
+}
+
+/** 현재 캐시된 스냅샷 (메모리 우선, 없으면 디스크). API 라우트의 진입점이다. */
+export function getSkillsSnapshot(): SkillsSnapshot | null {
+  if (!memo) memo = loadFromDisk();
+  return memo;
+}
+
+/** 현재 스킬 수집이 진행 중인지 (API 가 '수집 중' 안내에 사용). 수동·정시 수집 모두 반영. */
+export function isSkillsCollecting(): boolean {
+  return running;
+}
+
+/**
+ * 스냅샷에서 시도 결과를 유도한다(시도 기록 파일이 아직 없을 때의 대체 경로).
+ * 보호가 발동한 회차는 스냅샷만으로 성패를 알 수 없으므로 어디까지나 fallback 이다.
+ */
+export function deriveSkillsAttempt(
+  s: SkillsSnapshot | null
+): { ok: boolean; at: string; source: string } | null {
+  if (!s) return null;
+  return { ok: isSkillsSuccess(s), at: s.updatedAt, source: s.source };
+}
+
+/** 마지막 스킬 수집 시도의 성패. 스케줄러의 catch-up/백오프 판정용. */
+export function getSkillsLastAttempt(): { ok: boolean; at: string; source: string } | null {
+  if (!attemptMemo) attemptMemo = loadAttemptFromDisk();
+  if (attemptMemo) {
+    const { ok, at, source } = attemptMemo;
+    return { ok, at, source };
+  }
+  return deriveSkillsAttempt(getSkillsSnapshot());
+}
+
+// ── 주간 경계 (스케줄러 catch-up 판정) ────────────────────────────────────────
+//
+// 로또 사이클(src/lotto/cycle.ts)의 lastCycleBoundary 와 같은 계산이다. cron 식과 경계 계산이
+// **같은 상수**(shared/skills.ts)를 보게 묶어 둔다 — 어긋나면 "cron 은 09:00 에 도는데 경계는
+// 10:00 로 계산"되어 매 틱마다 보충이 돌거나 영영 안 돈다.
+
+/** 직전 회차 시각(로컬 월요일 09:00) 경계. '놓친 실행'을 판정하는 기준선이다. */
+export function lastSkillsCycleBoundary(now: Date = new Date()): Date {
+  const d = new Date(now);
+  d.setHours(SKILLS_CYCLE_HOUR, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() - SKILLS_CYCLE_WEEKDAY + 7) % 7));
+  // 오늘이 그 요일이지만 아직 시각 전이면 한 주 전이 직전 경계다.
+  if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7);
+  return d;
+}
+
+/** 다음 자동 실행 예정 시각. 화면이 "다음 갱신"으로 보여준다. */
+export function nextSkillsCycleAt(now: Date = new Date()): Date {
+  const d = lastSkillsCycleBoundary(now);
+  d.setDate(d.getDate() + 7);
+  return d;
+}
+
+/**
+ * 이번 주 회차가 **성공적으로** 커버돼 있는지.
+ *
+ * ⚠️ 날짜만 비교하지 않는다. 실패 스냅샷(source="error")이 이번 주 날짜를 달고 있으면 날짜만
+ *    보는 게이트는 그걸 커버로 오인해 그 주 재시도를 통째로 봉인한다(뉴스 탭 실측 사고).
+ *    보호가 걸린 회차는 updatedAt 이 지난주 것이라 여기서 자연히 '미커버'로 잡히고,
+ *    무한 재시도는 스케줄러의 백오프가 막는다.
+ */
+export function skillsCoveredThisWeek(now: Date = new Date()): boolean {
+  const snap = getSkillsSnapshot();
+  if (!isSkillsSuccess(snap)) return false;
+  const at = new Date(snap!.updatedAt).getTime();
+  return Number.isFinite(at) && at >= lastSkillsCycleBoundary(now).getTime();
+}
+
+// ── 스냅샷 보호 ──────────────────────────────────────────────────────────────
+
+/** refreshSkills 한 회차의 처리 방침(순수 판정 — 디스크/알림 부작용 없음). */
+export interface SkillsSnapshotDecision {
+  /** "save" = 이번 결과를 저장 / "keep" = 직전 스냅샷 유지(실패 결과의 덮어쓰기 차단) */
+  action: "save" | "keep";
+  /** 실제로 화면·API 에 노출할 스냅샷 */
+  snapshot: SkillsSnapshot;
+  /** 이번 회차 결과가 알림 대상인지 — opts.notify 와 AND 로 묶인다 */
+  notify: boolean;
+  /** 이번 시도의 성패 기록 */
+  attempt: SkillsAttemptRecord;
+}
+
+/**
+ * 스냅샷 보호 판정 — 뉴스(decideNewsSnapshot)와 같은 규칙이다.
+ *
+ * 1. 이번 결과가 실패성(byStars 0건 또는 source!=="github")이고 **직전이 성공**이면 유지한다.
+ *    지난주 랭킹이 보이는 것이 빈 화면보다 낫다. 대신 notes 에 상황을 적어 날짜를 오해하지
+ *    않게 한다(스키마는 그대로 두고 계약에 이미 있는 notes 만 쓴다).
+ * 2. 직전이 없거나 직전도 실패성이면 이번 결과를 그대로 저장한다(첫 실행의 빈 화면은 정상).
+ * 3. 보호가 걸린 회차는 **알림을 보내지 않는다** — 지난주 랭킹이 이번 주 메일로 또 오면 안 된다.
+ *
+ * 성패를 attempt 로 함께 돌려주어 스케줄러가 getSkillsLastAttempt() 로 백오프를 걸 수 있게
+ * 한다(자기봉인과 무한 재시도를 동시에 막는 조합이다).
+ */
+export function decideSkillsSnapshot(
+  prev: SkillsSnapshot | null,
+  fresh: SkillsSnapshot,
+  attemptedAt: string,
+  trigger = "manual"
+): SkillsSnapshotDecision {
+  const ok = isSkillsSuccess(fresh);
+  const attempt: SkillsAttemptRecord = {
+    ok,
+    at: attemptedAt,
+    source: fresh.source,
+    trigger,
+    tracked: fresh.trackedCount,
+    error: ok ? null : (fresh.notes ?? "원인 미상"),
+  };
+
+  if (!ok && isSkillsSuccess(prev)) {
+    const kept = prev as SkillsSnapshot;
+    return {
+      action: "keep",
+      // date/updatedAt 은 건드리지 않는다 — 스케줄러 catch-up 이 이 값으로 '언제 자료인지'를 본다.
+      // notes 는 매번 통째로 다시 쓴다(누적 append 금지 — 실패가 반복돼도 길이가 늘지 않는다).
+      snapshot: { ...kept, notes: staleNote(kept, fresh, attemptedAt) },
+      notify: false,
+      attempt,
+    };
+  }
+
+  return { action: "save", snapshot: fresh, notify: ok, attempt };
+}
+
+/** 보호 발동 시 스냅샷에 남길 안내문(화면·API·JSON 을 직접 열어본 사람 모두를 위한 것). */
+function staleNote(kept: SkillsSnapshot, fresh: SkillsSnapshot, attemptedAt: string): string {
+  return (
+    `⚠️ ${fresh.date} 수집 실패(${fresh.byStars.length}건, source=${fresh.source}) → ` +
+    `${kept.date} 스냅샷을 유지합니다. 마지막 시도 ${attemptedAt}. ` +
+    `원인: ${fresh.notes ?? "원인 미상"}`
+  );
+}
+
+function emptySnapshot(date: string, source: "empty" | "error", note: string): SkillsSnapshot {
+  return {
+    date,
+    updatedAt: new Date().toISOString(),
+    source,
+    trackedCount: 0,
+    byStars: [],
+    byGrowth: [],
+    window: null,
+    notes: note,
+  };
+}
+
+// ── 회차 실행 ────────────────────────────────────────────────────────────────
+
+/**
+ * 스킬 랭킹 1회차: GitHub 수집 → 주간 스냅샷 저장 → 차분·랭킹 → 요약 → 캐시 → (옵션)알림.
+ *
+ * 실패한 회차는 직전 스냅샷을 덮어쓰지 않는다(decideSkillsSnapshot).
+ */
+export async function refreshSkills(
+  opts: { trigger: string; notify?: boolean } = { trigger: "manual" }
+): Promise<SkillsSnapshot> {
+  if (running) {
+    log.warn(`스킬 수집 진행 중 → ${opts.trigger} 중복 방지`);
+    return getSkillsSnapshot() ?? emptySnapshot(localDate(), "empty", "아직 수집되지 않았습니다.");
+  }
+  running = true;
+  const startedAt = new Date().toISOString();
+  const t0 = Date.now();
+  try {
+    const date = localDate();
+    const prev = getSkillsSnapshot();
+    const fresh = await buildSnapshot(date);
+    const decision = decideSkillsSnapshot(prev, fresh, startedAt, opts.trigger);
+
+    // action="keep" 이면 decision.snapshot 은 '직전 성공본 + 안내 notes'다(이번 실패 결과가
+    // 아니다). 그래서 여기서 저장해도 랭킹 데이터는 덮이지 않고 notes 만 바뀐다. 메모리만
+    // 갱신하면 재시작 후 "왜 지난주 날짜가 떠 있지?"를 설명할 안내가 사라지므로 디스크까지 쓴다.
+    memo = decision.snapshot;
+    saveToDisk(decision.snapshot);
+    recordAttempt(decision.attempt);
+
+    if (decision.action === "keep") {
+      log.warn(
+        `스킬 수집 실패 → 기존 스냅샷 유지 [${opts.trigger}] ` +
+          `(유지: ${decision.snapshot.date}, 원인: ${decision.attempt.error}) · 알림 발송 생략`
+      );
+      return decision.snapshot;
+    }
+
+    if (opts.notify && decision.notify) {
+      await sendSkillsEmail(decision.snapshot).catch((e) =>
+        log.warn(`스킬 이메일 발송 예외: ${(e as Error).message}`)
+      );
+      await sendSkillsIMessage(decision.snapshot); // 자체 게이트·자체 catch(throw 안 함)
+    } else if (opts.notify) {
+      log.info("스킬 랭킹 0건 → 알림 발송 생략");
+    }
+
+    log.info(
+      `스킬 랭킹 회차 완료 [${opts.trigger}] ${date} — 추적 ${decision.snapshot.trackedCount}건, ` +
+        `총합 ${decision.snapshot.byStars.length}위 / 증가 ${decision.snapshot.byGrowth.length}위` +
+        (decision.snapshot.window
+          ? ` (최근 ${decision.snapshot.window.days}일 비교)`
+          : " (첫 회차 — 증가 랭킹 없음)") +
+        ` (${Math.round((Date.now() - t0) / 1000)}초)`
+    );
+    return decision.snapshot;
+  } catch (e) {
+    // 여기까지 예외가 올라오는 경우(DB 오류 등)도 '실패한 시도'로 남긴다.
+    recordAttempt({
+      ok: false,
+      at: startedAt,
+      source: "error",
+      trigger: opts.trigger,
+      tracked: 0,
+      error: (e as Error).message,
+    });
+    throw e;
+  } finally {
+    running = false;
+  }
+}
+
+/**
+ * 이번 회차 스냅샷 1건을 만든다. **예외를 던지지 않는다** — 실패는 source="error" 스냅샷으로
+ * 돌려주고, 그걸 받은 refreshSkills 가 보호 판정을 거쳐 지난주 랭킹을 지킨다.
+ */
+async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
+  let collected;
+  try {
+    collected = await collectSkillRepos();
+  } catch (e) {
+    log.error(`스킬 저장소 수집 실패: ${(e as Error).message}`);
+    return emptySnapshot(date, "error", `GitHub 수집 실패: ${(e as Error).message}`);
+  }
+
+  const { repos, warnings } = collected;
+
+  // 1) 주간 스냅샷 저장. **랭킹보다 먼저** 한다 — 뒤의 LLM 요약이 실패하더라도 그 주의 관측값은
+  //    남아야 다음 주 차분이 성립한다. 요약 때문에 star 이력에 구멍이 나면 복구할 방법이 없다.
+  const trackedCount = saveWeeklySnapshot(date, repos);
+
+  // 2) 차분. 직전 스냅샷이 없으면 첫 회차 — 증가 랭킹은 빈 배열, window 는 null 이다.
+  const prevDate = previousSnapshotDate(date);
+  const prevPrevDate = prevDate ? previousSnapshotDate(prevDate) : null;
+  const ranking = buildRankings({
+    date,
+    repos,
+    prevDate,
+    prevStars: loadStarsAt(prevDate),
+    prevPrevStars: prevPrevDate ? loadStarsAt(prevPrevDate) : null,
+  });
+
+  // 3) 요약. 노출되는 두 랭킹의 합집합 중 **원문이 바뀐 것만** LLM 을 태운다.
+  const shown = [...ranking.byStars, ...ranking.byGrowth];
+  const shownIds = [...new Set(shown.map((e) => e.repo.id))];
+  const cached = loadSummaryCache(shownIds);
+  const targets = pickSummaryTargets(ranking.byStars, ranking.byGrowth, cached);
+  const fresh = await summarizeSkillRepos(targets);
+  const summaries = mergeSummaries(
+    shown.map((e) => e.repo),
+    cached,
+    fresh
+  );
+
+  return {
+    date,
+    updatedAt: new Date().toISOString(),
+    source: "github",
+    trackedCount,
+    byStars: attachSummaries(ranking.byStars, summaries),
+    byGrowth: attachSummaries(ranking.byGrowth, summaries),
+    window: ranking.window,
+    notes: buildNotes(trackedCount, ranking.window === null, warnings),
+  };
+}
+
+/** 화면 각주에 쓸 상태 문구. 첫 회차 안내와 부분 실패 경고를 사람이 읽을 형태로 합친다. */
+function buildNotes(tracked: number, firstCycle: boolean, warnings: string[]): string {
+  const parts: string[] = [];
+  parts.push(
+    `GitHub 검색으로 ${tracked.toLocaleString()}개 저장소를 추적합니다(추적 풀 ${SKILLS_TRACK_POOL}).`
+  );
+  if (firstCycle) {
+    parts.push(
+      "첫 회차라 비교할 지난 스냅샷이 없어 증가 랭킹은 다음 회차부터 채워집니다 " +
+        "(GitHub 이 과거 star 수를 제공하지 않아 주간 스냅샷 차분으로만 구할 수 있습니다)."
+    );
+  }
+  if (warnings.length) {
+    parts.push(`일부 검색이 실패해 후보가 줄었을 수 있습니다: ${warnings.join(" / ")}`);
+  }
+  return parts.join(" ");
+}
