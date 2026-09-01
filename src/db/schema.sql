@@ -268,3 +268,58 @@ CREATE TABLE IF NOT EXISTS lotto_upcoming (
 -- run 컬럼이 없는 옛 표가 남아 있는 DB 에서는 이 CREATE INDEX 가 "no such column: run" 으로
 -- 터지고 그 순간 서버 부팅 자체가 죽는다(실측 2026-07-29). 표를 다시 만든 직후,
 -- 즉 컬럼 존재가 보장된 시점에 migrate() 안에서 만든다.
+
+-- ── 스킬 랭킹 (GitHub agent-skills 저장소 주간 추적) ──
+--
+-- 이 세 표가 존재하는 이유는 하나다: **GitHub 이 과거 star 수를 주지 않는다.**
+-- 2026-09-01 실측 — REST `/repos/{o}/{r}/stargazers` + `Accept: …star+json` 은 인증해도 404,
+-- GraphQL `stargazers(last:100){starredAt}` 은 stargazerCount 만 주고 totalCount:0 · edges 빈 배열.
+-- 그래서 "이번 주에 얼마나 늘었나"는 우리가 매주 남긴 스냅샷을 **직접 차분**해야만 나온다
+-- (근거 전문은 shared/skills.ts 머리말).
+--
+-- ⚠️ 조인 키는 full_name 이 아니라 GitHub 저장소 고유 **id**(정수)다. 이름이 바뀌어도
+--    증가분이 끊기면 안 된다 — 이름으로 조인하면 리네임된 저장소가 매주 '신규'로 둔갑한다.
+
+-- 저장소 신원(주간마다 최신값으로 덮어쓴다). 값이 변하는 지표는 여기 두지 않는다.
+CREATE TABLE IF NOT EXISTS skill_repos (
+  id          INTEGER PRIMARY KEY,   -- GitHub repository id (불변)
+  full_name   TEXT NOT NULL,         -- "anthropics/skills" (리네임되면 갱신된다)
+  owner       TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  url         TEXT NOT NULL,
+  description TEXT,                  -- 설명을 안 적은 저장소가 실제로 있다 → NULL 허용
+  language    TEXT,
+  license     TEXT,                  -- SPDX id ("MIT"). 미표기 저장소가 있다 → NULL 허용
+  topics      TEXT,                  -- JSON 배열 문자열
+  created_at  TEXT,                  -- 저장소 생성 시각(ISO)
+  first_seen  TEXT NOT NULL          -- 우리가 처음 관측한 시각(ISO). upsert 시 유지된다
+);
+
+-- 주간 스냅샷 1행 = (저장소, 그 주 관측값). **이 표가 증가 랭킹의 유일한 근거다.**
+-- PK 가 (repo_id, date) 라 같은 날 두 번 돌려도 값만 덮이고 행이 늘지 않는다(멱등).
+CREATE TABLE IF NOT EXISTS skill_repo_points (
+  repo_id     INTEGER NOT NULL,
+  date        TEXT NOT NULL,         -- YYYY-MM-DD (로컬). 주간 스냅샷 날짜
+  stars       INTEGER NOT NULL,
+  forks       INTEGER,
+  watchers    INTEGER,
+  open_issues INTEGER,
+  pushed_at   TEXT,
+  archived    INTEGER,               -- 0/1
+  PRIMARY KEY (repo_id, date)
+);
+
+-- 차분은 "직전 date 를 찾아 조인"이라 date 단독 조회가 뜨거운 경로다.
+CREATE INDEX IF NOT EXISTS idx_skill_points_date ON skill_repo_points(date);
+
+-- LLM 한국어 요약 캐시.
+--
+-- ★ source_hash 가 이 표의 존재 이유다. 매주 상위 100건을 무조건 재요약하면 원문이 한 글자도
+--   안 바뀐 저장소까지 LLM 을 다시 태운다 — 순수 낭비다. 요약의 입력(저장소 이름 + 원문
+--   description)을 해싱해 두고, 해시가 같으면 건너뛴다.
+CREATE TABLE IF NOT EXISTS skill_summaries (
+  repo_id     INTEGER PRIMARY KEY,
+  summary     TEXT NOT NULL,
+  source_hash TEXT,                  -- 요약의 입력이 된 원문 해시(sha256 hex)
+  updated_at  TEXT NOT NULL
+);
