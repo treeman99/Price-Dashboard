@@ -29,9 +29,87 @@ import type {
  * 상위 50 저장소의 SKILL.md 합계가 10,607건, 최대 보유 저장소 하나가 6,632건이다. 전수는
  * 불가능하다. 그래서 저장소당 SKILLS_SCAN_CAP(40) 까지만 읽고, **표본이었다는 사실을
  * kind 로 드러낸다**(`local-sampled`). 아래 비대칭 규칙이 이 파일의 전부다.
+ *
+ * ── ⚠️ 신호 정의를 바꾸면 캐시를 비워야 한다 ──────────────────────────────────
+ * 스캔 캐시(skill_scans)의 키는 저장소의 `pushed_at` 이다. 즉 **저장소가 안 바뀌면 다시 읽지
+ * 않는다.** 여기 신호를 추가·수정해도 그 저장소가 다시 푸시될 때까지 옛 판정이 그대로 남는다.
+ * 그러므로 이 파일의 신호를 손대면 반드시 `DELETE FROM skill_scans;` 로 캐시를 비운다
+ * (트리 호출 100건 안팎을 한 번 더 쓸 뿐이고, 안 비우면 새 신호가 사실상 반영되지 않는다).
  */
 
 // ── 신호 ────────────────────────────────────────────────
+
+/**
+ * 원격 서비스와 통신하는 것이 **존재 이유**인 CLI 목록.
+ *
+ * ★ 위음성(false negative)을 막으려고 넣었다. googleworkspace/cli 의 `gws` 처럼 외부 서비스
+ *   CLI 를 감싸기만 하는 스킬은 SKILL.md 본문에 curl·fetch·URL 이 한 줄도 없다. 아래 NETWORK_SIGNALS
+ *   만으로는 신호 0건 → `local` 로 단정되고, 사용자는 🔒 로컬 을 믿은 채 원격 서비스를 치는 스킬을
+ *   돌린다. 이 기능에서 가장 나쁜 오류라 여기에 별도 갈래를 둔다.
+ *   (실측: 이 목록을 넣기 전 googleworkspace/cli 는 `local-sampled` 였고, 넣은 뒤 40/40 건에서
+ *    `gws` 호출이 잡혀 `external` 로 바뀌었다 — 2026-09-02 실제 저장소 재스캔.)
+ *
+ * ⚠️ **런타임 목적이 원격 통신인 것만 넣는다.** npm/pip/brew install, docker pull, git clone,
+ *    apt-get 은 네트워크를 쓰지만 **설치·빌드 단계**일 뿐 스킬이 하는 일이 아니다. 그것까지
+ *    잡으면 거의 모든 스킬이 외부로 물들어 태그가 정보를 잃는다.
+ */
+export const EXTERNAL_CLIS = [
+  "gh",
+  "gws",
+  "aws",
+  "gcloud",
+  "az",
+  "kubectl",
+  "heroku",
+  "vercel",
+  "netlify",
+  "supabase",
+  "stripe",
+  "firebase",
+  "doctl",
+  "flyctl",
+  "railway",
+  "wrangler",
+  "twilio",
+  "sentry-cli",
+  "openai",
+  "hf",
+] as const;
+
+/**
+ * CLI 이름 뒤에 오는 토큰이 이것들이면 **호출이 아니라 산문**으로 본다.
+ *
+ * "gh is the GitHub CLI" 같은 영어 설명문은 줄머리 + 소문자 단어라 명령 호출과 형태가 같다.
+ * 흔한 기능어만 잘라 내면 그 겹침이 거의 사라진다(한국어 조사는 `[a-z]` 에 안 걸려 애초에 무해).
+ */
+const CLI_PROSE_WORDS = [
+  "is", "are", "was", "were", "be", "can", "could", "will", "would", "should", "must", "may",
+  "and", "or", "but", "to", "the", "a", "an", "for", "with", "from", "in", "on", "at", "by", "of",
+  "has", "have", "had", "does", "do", "did", "not", "no", "also", "then", "so", "such", "that",
+  "this", "it", "its", "you", "we", "which", "when", "if", "only", "just",
+  "use", "uses", "used", "using", "provide", "provides", "require", "requires", "support",
+  "supports", "allow", "allows", "lets", "need", "needs", "work", "works", "means", "stands",
+  "refers", "command", "commands", "cli", "tool", "tools",
+].join("|");
+
+/**
+ * `<cli> <서브커맨드>` **명령 호출 형태**만 잡는 정규식을 만든다.
+ *
+ * 시작점은 셋뿐이다 — 줄머리(들여쓰기·`$`/`>` 프롬프트 허용), 백틱(인라인 코드·코드펜스),
+ * 파이프/`&&`/`;` 뒤(한 줄에 이어 붙인 명령). 그 다음에 `npx`/`bunx`/`uvx` 러너가 와도 된다.
+ * 뒤에는 소문자로 시작하는 서브커맨드가 **반드시** 있어야 한다.
+ *
+ * 이 형태 제약이 전부다:
+ *   "`gh pr create`" / "gws mail list" → 잡힌다.
+ *   "gh 를 쓰면 좋다" / "npm install wrangler" / "pip install openai" → 안 잡힌다.
+ *     (install 뒤의 이름은 줄머리도 백틱 뒤도 아니고, 뒤따르는 서브커맨드도 없다.)
+ */
+function cliCallRe(cli: string): RegExp {
+  const start = "(?:^[ \\t]*(?:[$>][ \\t]+)?|`[ \\t]*|(?:&&|\\|\\||;|\\|)[ \\t]*)";
+  const runner = "(?:(?:npx|bunx|uvx)[ \\t]+)?";
+  const sub = `[ \\t]+(?!(?:${CLI_PROSE_WORDS})\\b)[a-z][a-z0-9:_-]*`;
+  return new RegExp(start + runner + cli + sub, "m");
+}
 
 /**
  * 런타임 네트워크 신호. 질문은 하나다 — **"이 스킬이 돌 때 네트워크로 나가는가."**
@@ -41,6 +119,10 @@ import type {
  *    (curl -X / fetch("http…") / requests.get)와 api·graph 호스트만 좁게 잡는다.
  *    실측 분리: claude-api → WebFetch·WebSearch·curl 검출(정답) / brand-guidelines·docx·
  *    algorithmic-art → 신호 없음(정답).
+ *
+ * ⚠️ **반대쪽 오류(위음성)를 막는 갈래가 EXTERNAL_CLIS 다.** 외부 서비스 CLI 를 감싸기만 하는
+ *    스킬은 본문에 URL 도 HTTP 호출도 없어 위 신호로는 0건이 나온다 — 그러면 `local` 로
+ *    단정되고, 사용자는 🔒 로컬 을 믿은 채 원격 서비스를 치는 스킬을 돌린다. 위 정의를 보라.
  */
 export const NETWORK_SIGNALS: ReadonlyArray<{ name: string; re: RegExp }> = [
   // 에이전트 도구 이름. frontmatter 의 allowed-tools 에 적힌 것도 신호다 — "이 스킬은 웹을
@@ -61,6 +143,8 @@ export const NETWORK_SIGNALS: ReadonlyArray<{ name: string; re: RegExp }> = [
   { name: "api호스트", re: /https?:\/\/[a-z0-9.-]*(api|graph)\.[a-z0-9.-]+/i },
   // MCP 서버 참조. 도구 이름(mcp__x__y)이든 서버 선언(mcpServers)이든 외부 프로세스로 나간다.
   { name: "MCP", re: /mcp__|mcpServers/ },
+  // 외부 서비스 CLI 호출. 위 EXTERNAL_CLIS 에서 자동 생성해 붙인다(신호 이름은 `외부CLI(gh)`).
+  ...EXTERNAL_CLIS.map((cli) => ({ name: `외부CLI(${cli})`, re: cliCallRe(cli) })),
 ];
 
 /** SKILL.md 본문 1건에서 발견된 신호 이름들(중복 없음, NETWORK_SIGNALS 순서 유지). */

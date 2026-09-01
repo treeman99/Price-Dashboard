@@ -86,6 +86,20 @@ function relTime(iso: string): string | null {
 const TOPIC_LIMIT = 4;
 
 /**
+ * 🔒 쪽 툴팁에만 붙는 **판정의 한계** 한 줄.
+ *
+ * ★ 우리가 실제로 뒷받침할 수 있는 주장은 "이 스킬은 네트워크를 안 쓴다"가 아니라
+ *   **"SKILL.md 본문에서 네트워크 호출 근거를 찾지 못했다"** 이다. 스캐너는 본문의 텍스트만
+ *   보므로, 외부 서비스 CLI 를 호출만 하는 스킬처럼 본문에 흔적이 옅은 경우를 놓칠 수 있다.
+ *   칩 라벨은 짧아야 하니 이 단서는 툴팁에만 싣는다.
+ *
+ * ★ `external`/`partial` 에는 붙이지 않는다. 그쪽은 **찾은 것**이라 확정이고, 확정 옆에
+ *   "놓칠 수 있다"를 적으면 오히려 발견 사실이 의심스럽게 읽힌다.
+ */
+const LOCAL_LIMIT =
+  "SKILL.md 본문 기준입니다 — 외부 서비스 CLI 를 호출만 하는 스킬은 놓칠 수 있습니다.";
+
+/**
  * 네트워크 접근 칩의 표기 규칙(라벨·색·툴팁 본문)을 한자리에 모은다.
  *
  * ★ `local` 과 `local-sampled` 를 **같은 모양으로 그리지 않는다.** 계약(shared/skills.ts)이
@@ -105,13 +119,13 @@ function accessChip(a: SkillAccess): { label: string; cls: string; detail: strin
       return {
         label: `🔒 로컬 ${num(a.total)}/${num(a.total)}`,
         cls: "border-emerald-300 bg-emerald-50 text-emerald-700",
-        detail: `${found} · ${scanned} (전수)`,
+        detail: `${found} · ${scanned} (전수). ${LOCAL_LIMIT}`,
       };
     case "local-sampled":
       return {
         label: `🔒 로컬 추정 · 표본 ${num(a.checked)}/${num(a.total)}`,
         cls: "border-dashed border-emerald-400/70 bg-emerald-50/50 text-emerald-600",
-        detail: `${found} · ${scanned}. 표본이라 나머지는 확인하지 못했습니다 — '로컬'로 단정하지 않습니다.`,
+        detail: `${found} · ${scanned}. 표본이라 나머지는 확인하지 못했습니다 — '로컬'로 단정하지 않습니다. ${LOCAL_LIMIT}`,
       };
     case "external":
       return {

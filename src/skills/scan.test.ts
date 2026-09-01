@@ -96,6 +96,64 @@ test("curl 은 옵션이 붙은 실제 호출 형태만 잡는다", () => {
   assert.ok(detectSignals("curl -X POST /x").includes("curl"));
 });
 
+// ── ★ 외부 서비스 CLI (위음성 보완) ──
+
+test("★ 외부 서비스 CLI 호출을 신호로 잡는다 — 본문에 URL 이 없어도 원격으로 나간다", () => {
+  // googleworkspace/cli 의 gws 가 실제 사례다. SKILL.md 에 curl·fetch·URL 이 한 줄도 없어
+  // 기존 신호로는 0건 → 'local' 로 단정됐다. 🔒 로컬 을 믿고 원격 서비스를 치게 되는 오류다.
+  assert.deepEqual(detectSignals("gws mail list --max 10"), ["외부CLI(gws)"]);
+  assert.deepEqual(detectSignals("```bash\ngh pr create --fill\n```"), ["외부CLI(gh)"]);
+  assert.deepEqual(detectSignals("실행: `gh pr create` 하면 된다"), ["외부CLI(gh)"]);
+  // 줄머리 변형 — 들여쓰기·셸 프롬프트·파이프라인 뒤·npx 러너.
+  assert.ok(detectSignals("    kubectl get pods").includes("외부CLI(kubectl)"));
+  assert.ok(detectSignals("$ gcloud auth login").includes("외부CLI(gcloud)"));
+  assert.ok(detectSignals("cd app && flyctl deploy").includes("외부CLI(flyctl)"));
+  assert.ok(detectSignals("npx wrangler deploy").includes("외부CLI(wrangler)"));
+  assert.ok(detectSignals("- `stripe listen --forward-to localhost`").includes("외부CLI(stripe)"));
+  assert.ok(detectSignals("sentry-cli releases new v1").includes("외부CLI(sentry-cli)"));
+});
+
+test("★ 설치·빌드 단계 명령은 신호가 아니다 — 스킬의 런타임 목적이 아니다", () => {
+  // 이걸 잡으면 거의 모든 스킬이 '외부'로 물들어 태그가 정보를 잃는다.
+  assert.deepEqual(detectSignals("npm install foo"), []);
+  assert.deepEqual(detectSignals("pip install bar"), []);
+  assert.deepEqual(detectSignals("brew install gh"), [], "설치 대상으로 적힌 CLI 이름도 호출이 아니다");
+  assert.deepEqual(detectSignals("docker pull node:20"), []);
+  assert.deepEqual(detectSignals("apt-get install -y jq"), []);
+  assert.deepEqual(detectSignals("npm install -g @cloudflare/wrangler"), []);
+});
+
+test("★ 산문 속 CLI 언급은 신호가 아니다 — 명령 호출 형태여야 한다", () => {
+  assert.deepEqual(detectSignals("gh 는 GitHub CLI 다"), []);
+  assert.deepEqual(detectSignals("gh 를 쓰면 좋다"), []);
+  assert.deepEqual(detectSignals("gh is the GitHub CLI."), [], "영어 설명문도 줄머리+소문자라 형태가 겹친다");
+  assert.deepEqual(detectSignals("aws provides many services."), []);
+  // 서브커맨드가 아예 없으면 호출로 보지 않는다.
+  assert.deepEqual(detectSignals("vercel"), []);
+  assert.deepEqual(detectSignals("`kubectl`"), []);
+});
+
+test("외부CLI 신호도 다른 신호와 동급으로 판정에 들어간다", () => {
+  // 신호 이름만 다를 뿐, decideAccessKind 입장에서는 '신호가 나온 파일'일 뿐이다.
+  const withCli = detectSignals("gws mail list");
+  const withFetch = detectSignals("WebFetch 로 읽는다");
+  assert.equal(withCli.length > 0, true);
+  assert.equal(withFetch.length > 0, true);
+  // 한 파일에서 여러 CLI 가 나오면 전부 남긴다(어떤 서비스였는지가 툴팁에 그대로 보인다).
+  assert.deepEqual(detectSignals("gh pr list\naws s3 ls"), ["외부CLI(gh)", "외부CLI(aws)"]);
+});
+
+test("★ 기존 신호 없는 문서는 CLI 신호 추가 후에도 여전히 신호 0건이다(회귀)", () => {
+  const doc = [
+    "# Brand Guidelines",
+    "",
+    "회사 색상과 로고 사용 규칙을 로컬 문서에 적용합니다.",
+    "설치: npm install -D prettier",
+    "참고: https://example.com/brand",
+  ].join("\n");
+  assert.deepEqual(detectSignals(doc), [], "새 신호가 기존 local 판정을 흔들면 안 된다");
+});
+
 // ── 트리 → 경로·이름·표본 ──
 
 test("트리에서 SKILL.md blob 만 사전순으로 고른다(대소문자 무시, 디렉터리 제외)", () => {
