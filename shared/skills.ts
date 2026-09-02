@@ -86,7 +86,80 @@ export interface SkillRepo {
   /** ISO. 마지막 푸시 — 별만 많고 죽은 저장소를 가려낸다. */
   pushedAt: string;
   archived: boolean;
+  /**
+   * 네트워크 접근 판정(집계). 이 기능 배포 전에 만들어진 스냅샷에는 없으므로 선택 필드다.
+   * 화면은 없으면 칩을 아예 그리지 않는다(모른다고 표시하지 말 것 — 옛 스냅샷일 뿐이다).
+   */
+  access?: SkillAccess;
+  /**
+   * 펼쳐보기용 개별 스킬 목록. **표본에 든 것만** 담는다(SKILLS_SCAN_CAP).
+   * access.total 보다 짧을 수 있고, 그 사실은 access.checked 로 드러난다.
+   */
+  units?: SkillUnit[];
 }
+
+/**
+ * ── 네트워크 접근 판정 ────────────────────────────────────────────────────────
+ *
+ * 판정 근거는 **저장소 파일의 실제 내용**이다. SKILL.md 를 읽어 런타임 네트워크 신호
+ * (WebFetch / WebSearch / curl / wget / fetch("http…") / requests / httpx / axios /
+ *  urllib / api 호스트 URL / MCP 참조)를 찾는다. ★ LLM 이 판정하지 않는다 —
+ * 태그는 사실처럼 읽히므로, 틀리면 사용자가 "로컬"을 믿고 외부로 나가는 스킬을 돌린다.
+ * 검증 가능한 값과 생성된 문장을 분리하는 이 파일의 원칙(summary 주석)과 같은 이유다.
+ *
+ * ★★ 판정은 **의도적으로 비대칭**이다.
+ *   - 신호를 **찾으면** 확정이다. 표본만 봤어도 "찾았다"는 사실은 참이다.
+ *   - 신호를 **못 찾은 것**은 없다는 증거가 아니다. 전수 검사여야만 "로컬"로 단정하고,
+ *     표본이면 `local-sampled` 로 내려 단정을 피한다. 864개 중 40개만 보고 "로컬"이라
+ *     적는 것은 사실상 거짓말이다.
+ */
+export type SkillAccessKind =
+  /** 전수 검사에서 신호 0 → 로컬 확정 */
+  | "local"
+  /** 표본 검사에서 신호 0 → 로컬 '추정'. 화면은 표본 범위를 함께 적어야 한다. */
+  | "local-sampled"
+  /** 검사한 스킬 **전부**에서 신호 발견 */
+  | "external"
+  /** 검사한 스킬 중 **일부**에서 신호 발견 */
+  | "partial"
+  /** SKILL.md 가 없는 저장소(awesome 목록·도구·무관 저장소). 상위 50 중 실제로 6건 있었다. */
+  | "no-skill"
+  /** 트리 조회·파일 읽기 실패로 판정 불가. 죽은 판정이 아니라 '모른다'이다. */
+  | "unknown";
+
+/** 저장소 단위 집계 판정. */
+export interface SkillAccess {
+  kind: SkillAccessKind;
+  /** 저장소에 있는 SKILL.md 총 개수(트리 기준). */
+  total: number;
+  /** 실제로 읽어 검사한 개수. total 보다 작으면 표본이다. */
+  checked: number;
+  /** 그중 네트워크 신호가 하나라도 나온 개수. */
+  network: number;
+  /** 발견된 신호 종류(중복 제거, 표시용). 예: ["WebFetch","curl","MCP"] */
+  signals: string[];
+}
+
+/** 저장소 안의 개별 스킬 1건. 펼쳐보기 목록의 한 줄. */
+export interface SkillUnit {
+  /** SKILL.md 가 든 디렉터리명 = 스킬 이름. 루트면 저장소 이름을 쓴다. */
+  name: string;
+  /** 저장소 내 경로("skills/claude-api/SKILL.md"). */
+  path: string;
+  /** 그 파일을 GitHub 에서 여는 링크. */
+  url: string;
+  /** 이 스킬에서 발견된 네트워크 신호. **빈 배열이면 로컬**이다. */
+  signals: string[];
+}
+
+/**
+ * 저장소당 읽어볼 SKILL.md 최대 개수.
+ *
+ * 실측(2026-09-02, 상위 50 저장소): SKILL.md 합계 10,607개, 최대 보유 저장소는 6,632개.
+ * 전수는 불가능하다. 40으로 자르면 50개 저장소 중 42개가 사실상 전수이고, 876건을 10초에
+ * 읽었다. 표본이 된 저장소는 kind 가 `local-sampled` 로 내려가 단정하지 않는다.
+ */
+export const SKILLS_SCAN_CAP = 40;
 
 /** 랭킹 한 줄 = 저장소 + 그 랭킹에서의 위치·변동. */
 export interface SkillRankEntry {
