@@ -409,8 +409,11 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
   // 3) 네트워크 접근 스캔. 노출 후보(두 랭킹 TOP 50 의 합집합)의 SKILL.md 를 실제로 읽어
   //    "로컬 전용인가 / 외부로 나가는가"를 판정한다. 링크 사망 검증을 **통과한 뒤**라서
   //    죽은 저장소를 두드리지 않는다. 실패해도 회차를 죽이지 않는다(태그만 안 붙는다).
+  //    기본 브랜치는 검색 응답에 이미 들어 있던 값을 그대로 넘긴다 — 이걸 안 넘기면 스캐너가
+  //    main → master 를 찍어 보다가 **낡은 비기본 브랜치의 파일로 판정**한다(실측 3건).
   const shownRepos = dedupeById([...ranking.byStars, ...ranking.byGrowth].map((e) => e.repo));
-  const scans = await scanAccess(shownRepos);
+  const scanned = await scanAccess(shownRepos, collected.defaultBranches);
+  const scans = scanned.scans;
 
   // 4) 요약. 노출되는 두 랭킹의 합집합 중 **원문이 바뀐 것만** LLM 을 태운다.
   const shown = [...ranking.byStars, ...ranking.byGrowth];
@@ -432,7 +435,7 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
     byStars: attachAccess(attachSummaries(ranking.byStars, summaries), scans),
     byGrowth: attachAccess(attachSummaries(ranking.byGrowth, summaries), scans),
     window: ranking.window,
-    notes: buildNotes(warnings, prune),
+    notes: buildNotes(warnings, prune, scanned.budgetSkipped),
   };
 }
 
@@ -453,24 +456,32 @@ function dedupeById(repos: SkillRepo[]): SkillRepo[] {
  * ★ fail-open: 스캔이 통째로 터져도 빈 맵을 돌려준다. 그러면 access 가 없는 스냅샷이 되고,
  *   화면은 칩을 그리지 않는다 — 태그 하나 때문에 그 주 랭킹을 잃을 이유가 없다.
  */
-async function scanAccess(repos: SkillRepo[]): Promise<Map<number, RepoScan>> {
-  if (repos.length === 0) return new Map();
+async function scanAccess(
+  repos: SkillRepo[],
+  defaultBranches: Map<number, string>
+): Promise<{ scans: Map<number, RepoScan>; budgetSkipped: number }> {
+  if (repos.length === 0) return { scans: new Map(), budgetSkipped: 0 };
   try {
     const cache = loadScans(repos.map((r) => r.id));
     const hits = new Set<number>();
-    const summary = await scanRepos(repos, (repo) => {
-      const hit = cache.get(repo.id);
-      // pushed_at 이 다르면 파일이 바뀌었을 수 있다 → 다시 본다.
-      if (!hit || (hit.pushedAt ?? "") !== (repo.pushedAt ?? "")) return null;
-      hits.add(repo.id);
-      return {
-        repoId: repo.id,
-        fullName: repo.fullName,
-        branch: null, // 캐시에는 브랜치를 남기지 않는다(판정에 쓰이지 않는다)
-        access: hit.access,
-        units: hit.units,
-      };
-    });
+    const summary = await scanRepos(
+      repos,
+      (repo) => {
+        const hit = cache.get(repo.id);
+        // pushed_at 이 다르면 파일이 바뀌었을 수 있다 → 다시 본다.
+        // (신호 정의가 바뀐 행은 loadScans 가 이미 걸러 내므로 여기서 다시 볼 필요가 없다.)
+        if (!hit || (hit.pushedAt ?? "") !== (repo.pushedAt ?? "")) return null;
+        hits.add(repo.id);
+        return {
+          repoId: repo.id,
+          fullName: repo.fullName,
+          branch: null, // 캐시에는 브랜치를 남기지 않는다(판정에 쓰이지 않는다)
+          access: hit.access,
+          units: hit.units,
+        };
+      },
+      { defaultBranch: (repo) => defaultBranches.get(repo.id) ?? null }
+    );
 
     // 새로 조회한 것만 저장한다(캐시 적중분을 다시 쓰면 scanned_at 이 매주 갱신돼
     // "언제 실제로 읽었나"를 잃는다). kind="unknown" 은 saveScan 이 스스로 거른다.
@@ -487,10 +498,10 @@ async function scanAccess(repos: SkillRepo[]): Promise<Map<number, RepoScan>> {
         units: s.units,
       });
     }
-    return summary.scans;
+    return { scans: summary.scans, budgetSkipped: summary.budgetSkipped };
   } catch (e) {
     log.warn(`스킬 네트워크 스캔 실패 → 접근 태그 없이 진행: ${(e as Error).message}`);
-    return new Map();
+    return { scans: new Map(), budgetSkipped: 0 };
   }
 }
 
@@ -513,7 +524,11 @@ async function scanAccess(repos: SkillRepo[]): Promise<Map<number, RepoScan>> {
  *
  * (스냅샷 보호 안내는 여기가 아니라 staleNote() 가 별도로 덮어쓴다 — 그쪽은 진짜 이상 상황이다.)
  */
-export function buildNotes(warnings: string[], prune: PruneResult | null): string | undefined {
+export function buildNotes(
+  warnings: string[],
+  prune: PruneResult | null,
+  scanBudgetSkipped = 0
+): string | undefined {
   const parts: string[] = [];
   // 제외 건수를 남긴다 — 조용히 사라지면 "왜 그 저장소가 없지?"를 나중에 답할 수 없다.
   if (prune && prune.removed.length > 0) {
@@ -527,6 +542,14 @@ export function buildNotes(warnings: string[], prune: PruneResult | null): strin
   if (prune && prune.unknown > 0) {
     parts.push(
       `링크 판정 불가 ${prune.unknown}건은 목록에 그대로 뒀습니다(네트워크 사정으로 목록을 지우지 않습니다).`
+    );
+  }
+  // GitHub 쿼터가 모자라 접근을 못 본 건수. **'로컬'이 아니라 '판정 불가'** 라는 사실을 적는다 —
+  // 이 구분이 무너지면 사용자가 안 본 저장소를 로컬로 믿는다(그 오류를 막자고 만든 기능이다).
+  if (scanBudgetSkipped > 0) {
+    parts.push(
+      `GitHub 쿼터가 모자라 ${scanBudgetSkipped}건은 네트워크 접근을 판정하지 못했습니다` +
+        `(로컬로 단정하지 않고 '판정 불가'로 뒀습니다. GITHUB_TOKEN 을 설정하면 사라집니다).`
     );
   }
   if (warnings.length) {

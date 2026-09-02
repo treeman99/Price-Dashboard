@@ -4,10 +4,12 @@ import {
   attachAccess,
   decideAccessKind,
   detectSignals,
+  frontMatter,
   pickSkillPaths,
   sampleEvenly,
   scanRepo,
   scanRepos,
+  SCAN_SIGNATURE_VERSION,
   unitName,
 } from "./scan.ts";
 import type { SkillRankEntry, SkillRepo } from "../../shared/skills.ts";
@@ -154,6 +156,107 @@ test("★ 기존 신호 없는 문서는 CLI 신호 추가 후에도 여전히 �
   assert.deepEqual(detectSignals(doc), [], "새 신호가 기존 local 판정을 흔들면 안 된다");
 });
 
+// ── ★ MCP 선언형 (위음성 — 이 기능이 막으려던 바로 그 오류) ──
+
+/**
+ * ComposioHQ/awesome-claude-skills(★74,204, SKILL.md 864개)의 실물 본문이다.
+ * `mcp__`·`mcpServers` 만 보던 시절 이 파일은 신호 0건 → 🔒 로컬 로 표시됐다.
+ * 원격 SaaS 로 나가는 것이 **존재 이유**인 스킬이므로 이 기능에서 가장 나쁜 오류다.
+ */
+const COMPOSIO_SKILL = [
+  "---",
+  "name: affinda-automation",
+  'description: "Automate Affinda tasks via Rube MCP (Composio)."',
+  "requires:",
+  "  mcp: [rube]",
+  "---",
+  "",
+  "**Get Rube MCP**: Add `https://rube.app/mcp` as an MCP server in your client configuration.",
+  "",
+  "Call `RUBE_SEARCH_TOOLS` first to get current tool schemas.",
+].join("\n");
+
+test("★ frontmatter 의 mcp 선언과 원격 /mcp 엔드포인트를 잡는다 (Composio 위음성)", () => {
+  const signals = detectSignals(COMPOSIO_SKILL);
+  assert.ok(signals.includes("MCP(선언)"), "requires: 아래의 mcp 키가 선언이다");
+  assert.ok(signals.includes("MCP(원격)"), "https://rube.app/mcp 는 원격 엔드포인트다");
+  // frontmatter 선언만 있고 URL 이 없어도 신호는 남아야 한다.
+  assert.deepEqual(detectSignals("---\nrequires:\n  mcp: [rube]\n---\n로컬 파일만 만진다."), [
+    "MCP(선언)",
+  ]);
+  // 반대로 URL 만 있어도 잡힌다(frontmatter 가 아예 없는 파일이 실제로 있다).
+  assert.deepEqual(detectSignals("Add https://rube.app/mcp as an MCP server."), ["MCP(원격)"]);
+});
+
+test("기존 mcp__ / mcpServers 신호는 그대로 남는다(이름 'MCP')", () => {
+  assert.deepEqual(detectSignals("mcp__playwright__browser_click"), ["MCP"]);
+  assert.deepEqual(detectSignals('"mcpServers": {}'), ["MCP"]);
+});
+
+test("★ 산문 속 MCP 언급은 선언이 아니다 — frontmatter 로 범위를 좁힌다", () => {
+  // 본문에 "MCP:" 로 시작하는 설명 줄이 있어도 선언으로 세지 않는다.
+  assert.deepEqual(detectSignals("## MCP\nMCP: Model Context Protocol 을 설명한다."), []);
+  assert.deepEqual(detectSignals("about the MCP protocol in general"), []);
+  assert.deepEqual(detectSignals("npm install @modelcontextprotocol/inspector"), []);
+  // 이름에 mcp 가 든 스킬(mcp-builder)도 선언이 아니다 — 키가 name 이지 mcp 가 아니다.
+  assert.deepEqual(detectSignals("---\nname: mcp-builder\n---\n로컬에서 서버를 만든다."), []);
+});
+
+test("★ 로컬 stdio MCP 서버는 원격 신호로 몰지 않는다", () => {
+  // command/args 로 로컬 프로세스를 띄우는 형태에는 URL 이 없다 → MCP(원격) 이 붙으면 안 된다.
+  const stdio = ['{ "command": "node", "args": ["./server.js"] }', "npx -y @scope/my-mcp-server"].join(
+    "\n"
+  );
+  assert.ok(!detectSignals(stdio).includes("MCP(원격)"));
+  // 루프백으로 붙는 MCP 서버도 원격이 아니다.
+  assert.ok(!detectSignals("http://localhost:3000/mcp").includes("MCP(원격)"));
+  assert.ok(!detectSignals("http://127.0.0.1:8080/mcp").includes("MCP(원격)"));
+});
+
+test("★ MCP 문서 링크는 엔드포인트가 아니다 — 산문 속 맨 URL 규칙 그대로다", () => {
+  assert.deepEqual(detectSignals("자세한 내용은 https://docs.claude.com/en/docs/mcp 참고"), []);
+  assert.deepEqual(detectSignals("https://modelcontextprotocol.io/mcp 를 읽어라"), []);
+  assert.deepEqual(detectSignals("https://github.com/anthropics/mcp 저장소"), []);
+});
+
+// ── ★ 위양성 2종 (실측 파일 기준) ──
+
+test("★ `curl … | sh` 설치 안내는 신호가 아니다 — npm/pip install 을 빼는 규약의 셸 판본이다", () => {
+  // 실측: github/awesome-copilot 의 skills/aspire/SKILL.md
+  assert.deepEqual(detectSignals("curl -sSL https://aspire.dev/install.sh | bash"), []);
+  assert.deepEqual(detectSignals("curl -fsSL https://get.x.dev | sh"), []);
+  assert.deepEqual(detectSignals("wget -qO- https://get.x.dev/install | sudo bash"), []);
+  // ⚠️ 같은 파일에 진짜 호출이 따로 있으면 신호는 그대로 남는다(빼는 것은 '그 줄'이다).
+  const mixed = ["curl -sSL https://aspire.dev/install.sh | bash", "curl -X POST /v1/items"].join("\n");
+  assert.ok(detectSignals(mixed).includes("curl"));
+});
+
+test("★ 예약 예시 도메인은 api 호스트가 아니다 — 아무도 그 주소를 서비스하지 않는다", () => {
+  // 실측 2건: wshobson/agents 의 nextjs-app-router-patterns, github/awesome-copilot 의 openapi-…
+  assert.deepEqual(detectSignals("const res = await fetch('https://api.example.com/products', {"), []);
+  assert.deepEqual(detectSignals("- A URL to the spec (e.g., `https://api.example.com/openapi.json`)"), []);
+  assert.deepEqual(detectSignals("https://api.your-domain.com/v1 로 바꿔 쓰세요"), []);
+  assert.deepEqual(detectSignals("http://localhost:3000/api/health"), []);
+  // 진짜 api 호스트는 그대로 잡힌다(위양성 제거가 위음성을 만들면 안 된다).
+  assert.ok(detectSignals("POST https://api.github.com/graphql").includes("api호스트"));
+  assert.ok(detectSignals('fetch("https://api.openai.com/v1")').includes("fetch()"));
+});
+
+test("frontMatter 는 머리 YAML 블록만 돌려준다(없으면 빈 문자열)", () => {
+  assert.equal(frontMatter("---\nname: a\nmcp: [x]\n---\n본문"), "name: a\nmcp: [x]");
+  assert.equal(frontMatter("본문만 있는 파일"), "");
+  // 닫는 구분선이 없으면 frontmatter 가 아니다 — 본문을 통째로 훑지 않는다.
+  assert.equal(frontMatter("---\nname: a\n본문"), "");
+});
+
+// ── ★ 신호 정의 버전 (캐시 무효화) ──
+
+test("★ 신호 정의 버전은 결정적이고 개정 번호를 담는다", () => {
+  assert.match(SCAN_SIGNATURE_VERSION, /^v2-[0-9a-f]{8}$/);
+  // 같은 프로세스에서 두 번 읽어도 같다(캐시 키라 흔들리면 매주 전수 재스캔이 된다).
+  assert.equal(SCAN_SIGNATURE_VERSION, SCAN_SIGNATURE_VERSION);
+});
+
 // ── 트리 → 경로·이름·표본 ──
 
 test("트리에서 SKILL.md blob 만 사전순으로 고른다(대소문자 무시, 디렉터리 제외)", () => {
@@ -240,7 +343,15 @@ function fakeNet(files: Record<string, string>, opts: { branch?: string; truncat
   return { fetchFn: fetchFn as unknown as typeof fetch, calls };
 }
 
-const fast = { sleep: async () => {}, token: "", timeoutMs: 50, repoConcurrency: 2, fileConcurrency: 2 };
+const fast = {
+  sleep: async () => {},
+  token: "",
+  timeoutMs: 50,
+  repoConcurrency: 2,
+  fileConcurrency: 2,
+  // 테스트는 잔량 조회를 하지 않는다(가짜 fetch 를 한 번 더 두드리지 않게).
+  checkQuota: false,
+};
 
 test("전부 신호가 있으면 external, 링크만 있는 문서는 신호로 세지 않는다", async () => {
   const net = fakeNet({
@@ -298,12 +409,25 @@ test("SKILL.md 가 하나도 없으면 no-skill 이다(awesome 목록 저장소)
   assert.deepEqual(r.units, []);
 });
 
-test("main 이 없으면 master 로 재시도한다", async () => {
+test("기본 브랜치를 모르면 main → master 순으로 시도한다(폴백)", async () => {
   const net = fakeNet({ "a/SKILL.md": "WebFetch" }, { branch: "master" });
   const r = await scanRepo(repo(), { ...fast, ...net });
   assert.equal(r.branch, "master");
   assert.equal(r.access.kind, "external");
   assert.ok(net.calls.some((u) => u.includes("/git/trees/main?")), "main 을 먼저 시도한다");
+});
+
+test("★ 기본 브랜치를 알면 그것만 본다 — 낡은 main 이 남아 있어도 읽지 않는다", async () => {
+  // 실측 사례: code-yeongyu/oh-my-openagent 의 기본 브랜치는 dev 인데 낡은 master 가 남아 있어
+  // 조회는 성공했고, 그래서 **다른 파일로 판정한 것을 아무도 몰랐다.**
+  const net = fakeNet({ "a/SKILL.md": "WebFetch" }, { branch: "dev" });
+  const r = await scanRepo(repo(), { ...fast, ...net, defaultBranch: () => "dev" });
+  assert.equal(r.branch, "dev");
+  assert.equal(r.access.kind, "external");
+  const trees = net.calls.filter((u) => u.includes("/git/trees/"));
+  assert.equal(trees.length, 1, "트리 호출은 저장소당 1회로 준다(쿼터도 함께 아낀다)");
+  assert.ok(trees[0].includes("/git/trees/dev?"));
+  assert.ok(r.units[0].url.includes("/blob/dev/"), "펼침 링크도 기본 브랜치를 가리켜야 한다");
 });
 
 test("트리 조회가 전부 실패하면 unknown 이다 — '로컬'이 아니다", async () => {
@@ -377,6 +501,65 @@ test("레이트리밋에 걸리면 남은 저장소는 unknown 으로 두고 즉
   assert.equal(s.fetched, 0);
   assert.equal(trees, 1, "한 번 막히면 나머지는 두드리지 않는다(창 리셋을 기다리지 않는다)");
   for (const scan of s.scans.values()) assert.equal(scan.access.kind, "unknown");
+});
+
+// ── ★ 쿼터 예산 (모자라면 '모른다'로 두고 회차는 완주한다) ──
+
+/** /rate_limit 에 core 잔량을 실어 주는 가짜 네트워크. 트리·raw 는 files 로 응답한다. */
+function fakeNetWithQuota(files: Record<string, string>, remaining: number) {
+  const base = fakeNet(files);
+  const fetchFn = (async (input: Parameters<typeof fetch>[0]) => {
+    const url = String(input);
+    if (url.includes("/rate_limit")) {
+      base.calls.push(url);
+      return new Response(JSON.stringify({ resources: { core: { remaining } } }), { status: 200 });
+    }
+    return base.fetchFn(input);
+  }) as unknown as typeof fetch;
+  return { fetchFn, calls: base.calls };
+}
+
+test("★ core 예산이 모자라면 남은 저장소는 unknown 이다 — 절대 local 이 아니다", async () => {
+  const net = fakeNetWithQuota({ "a/SKILL.md": "로컬만 만진다" }, 5);
+  const repos = Array.from({ length: 6 }, (_, i) => repo({ id: i + 1, fullName: `acme/r${i}` }));
+  const s = await scanRepos(repos, () => null, {
+    ...fast,
+    ...net,
+    checkQuota: true,
+    quotaReserve: 3, // 잔량 5 - 여유 3 = 예산 2건
+    defaultBranch: () => "main", // 저장소당 1회
+    repoConcurrency: 1,
+  });
+  assert.equal(s.fetched, 2, "예산만큼만 새로 조회한다");
+  assert.equal(s.budgetSkipped, 4);
+  assert.equal(s.coreRemaining, 5);
+  assert.equal(net.calls.filter((u) => u.includes("/git/trees/")).length, 2);
+  // ★ 예산 부족은 "신호가 없다"가 아니다. 안 본 저장소가 로컬로 굳으면 태그가 거짓말이 된다.
+  for (const id of [3, 4, 5, 6]) assert.equal(s.scans.get(id)!.access.kind, "unknown");
+  // 예산 안의 것은 정상 판정된다(전수 검사라 local 로 단정해도 참이다).
+  assert.equal(s.scans.get(1)!.access.kind, "local");
+});
+
+test("잔량을 못 읽으면 예산 절삭을 하지 않는다(기존 403 접기가 안전망이다)", async () => {
+  const net = fakeNet({ "a/SKILL.md": "로컬만" }); // /rate_limit 은 404 로 떨어진다
+  const repos = Array.from({ length: 3 }, (_, i) => repo({ id: i + 1, fullName: `acme/r${i}` }));
+  const s = await scanRepos(repos, () => null, { ...fast, ...net, checkQuota: true });
+  assert.equal(s.budgetSkipped, 0);
+  assert.equal(s.coreRemaining, null);
+  assert.equal(s.fetched, 3);
+});
+
+test("캐시로 다 채워지면 잔량 조회조차 하지 않는다", async () => {
+  const net = fakeNetWithQuota({ "a/SKILL.md": "로컬만" }, 1);
+  const cachedAccess = { kind: "local" as const, total: 1, checked: 1, network: 0, signals: [] };
+  const s = await scanRepos(
+    [repo({ id: 1 })],
+    (r) => ({ repoId: r.id, fullName: r.fullName, branch: null, access: cachedAccess, units: [] }),
+    { ...fast, ...net, checkQuota: true }
+  );
+  assert.equal(s.cached, 1);
+  assert.equal(s.coreRemaining, null);
+  assert.equal(net.calls.length, 0, "새로 볼 것이 없으면 네트워크를 아예 안 두드린다");
 });
 
 // ── attachAccess ──

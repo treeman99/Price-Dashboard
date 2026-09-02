@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { db } from "../db/index.ts";
 import { log } from "../util/log.ts";
 import { SKILLS_RANK_SIZE } from "../../shared/skills.ts";
+import { SCAN_SIGNATURE_VERSION } from "./scan.ts";
 import type {
   SkillAccess,
   SkillAccessKind,
@@ -329,7 +330,7 @@ export function buildRankings(input: RankingInput): RankingResult {
 
 // ── 네트워크 접근 스캔 캐시 ──────────────────────────────
 
-/** 캐시된 스캔 1건. RepoScan 과 같은 모양이되 '언제·어느 푸시 기준으로' 찍었는지를 더 갖는다. */
+/** 캐시된 스캔 1건. RepoScan 과 같은 모양이되 '언제·어느 푸시·어느 신호 정의로' 찍었는지를 더 갖는다. */
 export interface ScanRecord {
   repoId: number;
   /** 스캔 당시의 저장소 pushed_at. 이 값이 지금과 같으면 파일도 같다 = 다시 안 본다. */
@@ -340,24 +341,54 @@ export interface ScanRecord {
 }
 
 /**
+ * skill_scans 에 sig_version 컬럼이 있는지 보장한다(멱등).
+ *
+ * schema.sql 은 전부 `CREATE TABLE IF NOT EXISTS` 라 **이미 있는 표에 컬럼을 못 붙인다.**
+ * 이 표를 만드는 SQL 이 전부 이 파일에 모여 있으므로(머리말 참고) 마이그레이션도 여기 둔다.
+ *
+ * 결과를 기억해 두지 않는다 — PRAGMA 한 번은 마이크로초이고 이 표를 만지는 것은 주 1회
+ * 100건 남짓이다. 아껴 봐야 무의미한 반면, 기억해 두면 "표가 바뀌었는데 플래그만 남은" 상태가
+ * 생긴다(테스트에서 실제로 밟았다).
+ */
+function ensureScanColumns(): void {
+  const conn = db();
+  const cols = new Set(
+    (conn.prepare("PRAGMA table_info(skill_scans)").all() as Array<{ name: string }>).map(
+      (r) => r.name
+    )
+  );
+  if (cols.size > 0 && !cols.has("sig_version")) {
+    conn.exec("ALTER TABLE skill_scans ADD COLUMN sig_version TEXT");
+    log.info("skill_scans.sig_version 컬럼 추가 — 옛 캐시는 버전 불일치로 자동 재스캔된다");
+  }
+}
+
+/**
  * 스캔 캐시 조회. ids 가 비면 빈 맵(쿼리도 하지 않는다).
  *
  * ★ 이 캐시가 없으면 스킬 탭은 무인증 60회/시간 안에서 매주 돌 수 없다. 파일 목록을 얻는
  *   `git/trees` 호출이 스캔의 **유일한 core 쿼터 소비 지점**이고 노출 후보가 100건 안팎이라,
  *   pushed_at 이 같은 저장소를 걸러내는 것이 유일한 통과 경로다(schema.sql 주석 참고).
+ *
+ * ★★ **신호 정의 버전이 다른 행은 없는 셈 친다.** 캐시 키가 pushed_at 뿐이던 시절에는
+ *    scan.ts 의 신호를 고쳐도 그 저장소가 다시 푸시될 때까지 옛 판정이 그대로 나왔다.
+ *    여기서 걸러 두면 호출부(skills.ts)가 아무것도 몰라도 새 정의로 다시 스캔된다 —
+ *    "신호를 고치면 캐시를 비운다"는 **사람이 지켜야 하던 규약이 코드로 내려온다.**
  */
 export function loadScans(ids: number[]): Map<number, ScanRecord> {
   const map = new Map<number, ScanRecord>();
   if (ids.length === 0) return map;
+  ensureScanColumns();
   const holes = ids.map(() => "?").join(",");
   const rows = db()
     .prepare(
-      `SELECT repo_id, pushed_at, scanned_at, kind, total, checked, network, signals, units
+      `SELECT repo_id, pushed_at, sig_version, scanned_at, kind, total, checked, network, signals, units
          FROM skill_scans WHERE repo_id IN (${holes})`
     )
     .all(...ids) as Array<{
     repo_id: number;
     pushed_at: string | null;
+    sig_version: string | null;
     scanned_at: string | null;
     kind: string | null;
     total: number | null;
@@ -366,8 +397,13 @@ export function loadScans(ids: number[]): Map<number, ScanRecord> {
     signals: string | null;
     units: string | null;
   }>;
+  let stale = 0;
   for (const r of rows) {
     if (!r.kind) continue;
+    if ((r.sig_version ?? "") !== SCAN_SIGNATURE_VERSION) {
+      stale += 1;
+      continue;
+    }
     map.set(Number(r.repo_id), {
       repoId: Number(r.repo_id),
       pushedAt: r.pushed_at,
@@ -381,6 +417,11 @@ export function loadScans(ids: number[]): Map<number, ScanRecord> {
       },
       units: parseJsonArray<SkillUnit>(r.units),
     });
+  }
+  if (stale > 0) {
+    log.info(
+      `스킬 스캔 캐시 — 신호 정의가 바뀌어 ${stale}건을 무시하고 재스캔한다(현재 ${SCAN_SIGNATURE_VERSION})`
+    );
   }
   return map;
 }
@@ -405,12 +446,14 @@ function parseJsonArray<T>(raw: string | null): T[] {
  */
 export function saveScan(rec: ScanRecord): void {
   if (rec.access.kind === "unknown") return;
+  ensureScanColumns();
   db()
     .prepare(`
-      INSERT INTO skill_scans (repo_id, pushed_at, scanned_at, kind, total, checked, network, signals, units)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO skill_scans (repo_id, pushed_at, sig_version, scanned_at, kind, total, checked, network, signals, units)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(repo_id) DO UPDATE SET
         pushed_at = excluded.pushed_at,
+        sig_version = excluded.sig_version,
         scanned_at = excluded.scanned_at,
         kind = excluded.kind,
         total = excluded.total,
@@ -422,6 +465,7 @@ export function saveScan(rec: ScanRecord): void {
     .run(
       rec.repoId,
       rec.pushedAt,
+      SCAN_SIGNATURE_VERSION,
       rec.scannedAt,
       rec.access.kind,
       rec.access.total,

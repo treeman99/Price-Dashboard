@@ -4,6 +4,7 @@ import {
   collectSkillRepos,
   mergeSkillRepos,
   pacingIntervalMs,
+  parseDefaultBranch,
   parseSearchItem,
   parseSearchPage,
   rateLimitWaitMs,
@@ -370,4 +371,28 @@ test("GITHUB_TOKEN 이 있으면 Authorization 헤더를 붙이고, 없으면 �
     1
   );
   assert.equal(seen[1].Authorization, undefined, "무인증도 정상 경로다");
+});
+
+// ── ★ 기본 브랜치 (스캐너에 넘기는 곁 채널) ──
+
+test("★ 검색 응답의 default_branch 를 곁 채널로 실어 준다 — SkillRepo 계약은 건드리지 않는다", () => {
+  const page = parseSearchPage({
+    items: [
+      { id: 1, full_name: "a/b", stargazers_count: 10, default_branch: "dev" },
+      { id: 2, full_name: "c/d", stargazers_count: 5 }, // 응답에 없으면 담지 않는다
+      { id: 3, full_name: "e/f", stargazers_count: 3, default_branch: "  " },
+    ],
+  });
+  assert.equal(page.defaultBranches.get(1), "dev");
+  assert.equal(page.defaultBranches.has(2), false, "모르는 것은 담지 않는다 → 스캐너가 폴백한다");
+  assert.equal(page.defaultBranches.has(3), false, "공백 문자열은 브랜치가 아니다");
+  // 계약(SkillRepo)에는 이 필드가 없다 — 화면·스냅샷 JSON 이 함께 읽는 타입이라 동결돼 있다.
+  assert.equal("defaultBranch" in page.repos[0], false);
+});
+
+test("parseDefaultBranch: 문자열이 아니거나 비어 있으면 null", () => {
+  assert.equal(parseDefaultBranch({ default_branch: "main" }), "main");
+  assert.equal(parseDefaultBranch({ default_branch: 7 }), null);
+  assert.equal(parseDefaultBranch({}), null);
+  assert.equal(parseDefaultBranch(null), null);
 });

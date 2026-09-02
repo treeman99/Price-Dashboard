@@ -332,16 +332,25 @@ CREATE TABLE IF NOT EXISTS skill_summaries (
 --   넘긴다. 저장소의 마지막 푸시가 지난주와 같으면 파일도 같으므로 다시 조회하지 않는다.
 --   (첫 회차만 50회 남짓 쓰고, 그 뒤로는 그 주에 실제로 푸시된 저장소만 조회한다.)
 --
+-- ★★ 캐시 무효화 키는 **두 개**다: `pushed_at` 과 `sig_version`.
+--    pushed_at 만 보던 시절, 스캐너의 신호 정의를 고쳐도 그 저장소가 다시 푸시될 때까지
+--    옛 판정이 그대로 나왔다 — 즉 **신호를 고치는 일 자체가 라이브에 반영되지 않았다.**
+--    (실제로 원격 MCP 스킬 864개짜리 저장소가 🔒 로컬 로 굳어 있었다.)
+--    지금은 src/skills/scan.ts 의 SCAN_SIGNATURE_VERSION 을 함께 저장하고, 값이 다르면
+--    캐시를 무시하고 다시 스캔한다. 그 값은 신호표의 sha256 을 포함하므로 사람이 버전을
+--    올리는 걸 잊어도 저절로 갈린다.
+--
 -- ⚠️ kind="unknown" 은 **저장하지 않는다.** '모른다'를 캐시하면 그 주의 일시적 실패가
 --    다음 주까지 굳어 버린다 — 실패는 다음 회차에 다시 시도해야 한다(호출부 saveRepoScan).
 CREATE TABLE IF NOT EXISTS skill_scans (
-  repo_id    INTEGER PRIMARY KEY,
-  pushed_at  TEXT,                  -- 스캔 당시의 저장소 마지막 푸시(ISO). 캐시 무효화 키
-  scanned_at TEXT,                  -- 우리가 스캔한 시각(ISO)
-  kind       TEXT,                  -- SkillAccessKind
-  total      INT,                   -- 트리 기준 SKILL.md 총 개수
-  checked    INT,                   -- 실제로 읽어 검사한 개수 (< total 이면 표본이다)
-  network    INT,                   -- 그중 네트워크 신호가 나온 개수
-  signals    TEXT,                  -- JSON 배열: 발견된 신호 종류
-  units      TEXT                   -- JSON 배열: SkillUnit[] (펼쳐보기 목록)
+  repo_id     INTEGER PRIMARY KEY,
+  pushed_at   TEXT,                 -- 스캔 당시의 저장소 마지막 푸시(ISO). 캐시 무효화 키 ①
+  sig_version TEXT,                 -- 그때의 신호 정의 버전. 캐시 무효화 키 ②
+  scanned_at  TEXT,                 -- 우리가 스캔한 시각(ISO)
+  kind        TEXT,                 -- SkillAccessKind
+  total       INT,                  -- 트리 기준 SKILL.md 총 개수
+  checked     INT,                  -- 실제로 읽어 검사한 개수 (< total 이면 표본이다)
+  network     INT,                  -- 그중 네트워크 신호가 나온 개수
+  signals     TEXT,                 -- JSON 배열: 발견된 신호 종류
+  units       TEXT                  -- JSON 배열: SkillUnit[] (펼쳐보기 목록)
 );

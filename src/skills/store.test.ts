@@ -33,8 +33,11 @@ const {
   summarySourceHash,
   loadSummaries,
   saveSummary,
+  loadScans,
+  saveScan,
 } = await import("./store.ts");
-const { closeDb } = await import("../db/index.ts");
+const { SCAN_SIGNATURE_VERSION } = await import("./scan.ts");
+const { closeDb, db } = await import("../db/index.ts");
 
 after(() => {
   closeDb();
@@ -274,4 +277,74 @@ test("요약 캐시는 저장·조회되고 id 가 비면 쿼리하지 않는다
   assert.equal(map.get(42)?.summary, "갱신된 요약이다.");
   assert.equal(map.get(42)?.sourceHash, "hash-b");
   assert.equal(loadSummaries([]).size, 0);
+});
+
+// ── ★ 스캔 캐시: 신호 정의 버전 (이 표의 두 번째 무효화 키) ──
+
+const scanRecord = (repoId: number) => ({
+  repoId,
+  pushedAt: "2026-09-01T00:00:00Z",
+  scannedAt: "2026-09-02T00:00:00Z",
+  access: {
+    kind: "local-sampled" as const,
+    total: 864,
+    checked: 40,
+    network: 0,
+    signals: [],
+  },
+  units: [{ name: "a", path: "a/SKILL.md", url: "https://x/a", signals: [] }],
+});
+
+test("스캔 캐시는 왕복 저장·조회되고, unknown 은 저장하지 않는다", () => {
+  saveScan(scanRecord(101));
+  saveScan({
+    ...scanRecord(102),
+    access: { kind: "unknown", total: 0, checked: 0, network: 0, signals: [] },
+  });
+  const map = loadScans([101, 102]);
+  assert.equal(map.get(101)?.access.kind, "local-sampled");
+  assert.equal(map.get(101)?.access.total, 864);
+  assert.equal(map.get(101)?.units.length, 1);
+  assert.equal(map.has(102), false, "'모른다'는 관측이 아니라 실패다 — 캐시하지 않는다");
+  assert.equal(loadScans([]).size, 0);
+});
+
+test("★ 신호 정의 버전이 다른 캐시 행은 없는 셈 친다 — 신호를 고치면 저절로 재스캔된다", () => {
+  saveScan(scanRecord(103));
+  assert.equal(loadScans([103]).size, 1, "같은 버전이면 적중한다");
+
+  // 지난주 정의로 찍힌 행을 흉내 낸다(사람이 캐시를 비우는 걸 잊었을 때의 상태 그대로다).
+  db().prepare("UPDATE skill_scans SET sig_version = ? WHERE repo_id = ?").run("v1-deadbeef", 103);
+  assert.equal(
+    loadScans([103]).size,
+    0,
+    "pushed_at 이 그대로여도 옛 정의의 판정을 돌려주면 안 된다 — 그것이 이번 회귀의 원인이었다"
+  );
+
+  // 다시 스캔해 저장하면 현재 버전으로 덮이고 적중한다.
+  saveScan(scanRecord(103));
+  const row = db()
+    .prepare("SELECT sig_version FROM skill_scans WHERE repo_id = ?")
+    .get(103) as { sig_version: string };
+  assert.equal(row.sig_version, SCAN_SIGNATURE_VERSION);
+  assert.equal(loadScans([103]).size, 1);
+});
+
+test("★ sig_version 컬럼이 없는 옛 표에도 붙는다(멱등) — 부팅이 죽지 않는다", () => {
+  // schema.sql 은 전부 CREATE TABLE IF NOT EXISTS 라 이미 있는 표에 컬럼을 못 붙인다.
+  // 이 기능 이전에 만들어진 DB 를 그대로 흉내 내 본다.
+  const conn = db();
+  conn.exec("DROP TABLE IF EXISTS skill_scans");
+  conn.exec(`CREATE TABLE skill_scans (
+    repo_id INTEGER PRIMARY KEY, pushed_at TEXT, scanned_at TEXT, kind TEXT,
+    total INT, checked INT, network INT, signals TEXT, units TEXT
+  )`);
+  conn
+    .prepare("INSERT INTO skill_scans (repo_id, pushed_at, kind, total, checked, network) VALUES (?,?,?,?,?,?)")
+    .run(201, "2026-09-01T00:00:00Z", "local", 3, 3, 0);
+
+  // loadScans 가 먼저 컬럼을 붙이고, sig_version 이 NULL 인 옛 행은 버전 불일치로 무시된다.
+  assert.equal(loadScans([201]).size, 0, "옛 정의로 찍힌 판정을 돌려주면 안 된다");
+  saveScan(scanRecord(201));
+  assert.equal(loadScans([201]).get(201)?.access.kind, "local-sampled", "재스캔분은 정상 적중한다");
 });

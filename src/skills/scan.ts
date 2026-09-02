@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { SKILLS_SCAN_CAP } from "../../shared/skills.ts";
@@ -30,11 +31,20 @@ import type {
  * 불가능하다. 그래서 저장소당 SKILLS_SCAN_CAP(40) 까지만 읽고, **표본이었다는 사실을
  * kind 로 드러낸다**(`local-sampled`). 아래 비대칭 규칙이 이 파일의 전부다.
  *
- * ── ⚠️ 신호 정의를 바꾸면 캐시를 비워야 한다 ──────────────────────────────────
- * 스캔 캐시(skill_scans)의 키는 저장소의 `pushed_at` 이다. 즉 **저장소가 안 바뀌면 다시 읽지
- * 않는다.** 여기 신호를 추가·수정해도 그 저장소가 다시 푸시될 때까지 옛 판정이 그대로 남는다.
- * 그러므로 이 파일의 신호를 손대면 반드시 `DELETE FROM skill_scans;` 로 캐시를 비운다
- * (트리 호출 100건 안팎을 한 번 더 쓸 뿐이고, 안 비우면 새 신호가 사실상 반영되지 않는다).
+ * ── 신호 정의를 바꾸면 캐시가 저절로 무효화된다 ─────────────────────────────
+ * 스캔 캐시(skill_scans)의 키는 `pushed_at` **과 `SCAN_SIGNATURE_VERSION`** 이다. 예전에는
+ * pushed_at 만 봐서, 신호를 고쳐도 그 저장소가 다시 푸시될 때까지 옛 판정이 그대로 나왔다
+ * (= 이 파일을 고치는 일 자체가 반영되지 않았다). 지금은 신호표가 바뀌면 버전 문자열이 바뀌고
+ * 캐시가 통째로 미스가 되므로, 손으로 `DELETE FROM skill_scans;` 를 칠 일이 없다.
+ *
+ * ── 쿼터: GITHUB_TOKEN 을 넣으면 이 절 전체가 사라진다 ──────────────────────
+ * 트리 호출은 core 버킷을 쓰고 **무인증은 60회/시간**이다. 노출 후보가 byStars TOP 50 ∪
+ * byGrowth TOP 50 이라 첫 회차부터 창에 닿는다(실측 57/60). 그래서 스캔 시작 전에
+ * `GET /rate_limit`(이 호출 자체는 쿼터를 쓰지 않는다) 으로 잔량을 보고 **예산 안에서만**
+ * 새로 조회하고, 못 본 저장소는 `unknown` 으로 둔 채 회차를 정상 종료한다.
+ *   ★ 예산이 모자라다고 `local` 로 떨어뜨리지 않는다. "모른다"와 "로컬"은 다른 말이다.
+ * `.env` 에 **GITHUB_TOKEN 을 넣으면 한도가 5000회/시간**이 되어 예산 절삭이 사실상 발동하지
+ * 않는다(default_branch 를 쓰는 지금 첫 회차 비용이 50회이므로 1% 남짓이다).
  */
 
 // ── 신호 ────────────────────────────────────────────────
@@ -112,6 +122,41 @@ function cliCallRe(cli: string): RegExp {
 }
 
 /**
+ * 호스트 자리에 이 표식이 있으면 신호로 세지 않는 **가짜 호스트** lookahead.
+ *
+ * `https://api.example.com/products` 는 Next.js 패턴을 가르치는 **예제 코드**이지 이 스킬이
+ * 부르는 곳이 아니다(실측 위양성 2건: wshobson/agents 의 nextjs-app-router-patterns,
+ * github/awesome-copilot 의 openapi-to-application-code). example.com/.org/.net 은 RFC 2606
+ * 예약 도메인이라 애초에 아무도 서비스하지 않고, 루프백과 `your-domain` 류는 자리표시자다.
+ *
+ * `://` 바로 뒤에 붙여 쓴다. `[a-z0-9.-]*` 가 호스트 안만 훑고(`/` 를 못 넘는다) 표식을 찾으면
+ * 매치를 취소하므로, `https://api.your-domain.com` 처럼 표식이 호스트 **중간**에 있어도 걸러진다.
+ */
+const NOT_PLACEHOLDER_HOST =
+  "(?![a-z0-9.-]*(?:example\\.(?:com|org|net)|your[-_]?(?:domain|site|host|server|api|company)|" +
+  "my[-_]?domain|localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)\\b)";
+
+/**
+ * `/mcp` 로 끝나지만 **읽을 문서**이지 붙을 서버가 아닌 호스트 lookahead.
+ *
+ * `https://docs.claude.com/en/docs/mcp` 같은 안내 링크까지 원격 엔드포인트로 세면, 이 파일이
+ * 처음부터 지켜 온 "산문 속 맨 URL 은 신호가 아니다"를 스스로 깬다.
+ */
+const NOT_MCP_DOC_HOST =
+  "(?!(?:[a-z0-9-]+\\.)*(?:github\\.com|gitlab\\.com|modelcontextprotocol\\.io|npmjs\\.com|" +
+  "anthropic\\.com|claude\\.com|readthedocs\\.io)\\b)(?!docs?\\.)";
+
+/**
+ * `curl … | sh` 설치 관용구. **신호가 아니다.**
+ *
+ * 이 파일은 npm/pip/brew install·docker pull·apt-get 을 "설치·빌드 단계일 뿐 스킬이 하는 일이
+ * 아니다"라며 이미 빼고 있는데, `curl -sSL https://…/install.sh | bash` 는 정확히 그 규약의
+ * 셸 판본이다(실측 위양성: github/awesome-copilot 의 skills/aspire). 빼지 않으면 자기 규약과
+ * 어긋난다.
+ */
+const SHELL_INSTALL_PIPE = /\|\s*(?:sudo\s+)?(?:ba|z|k|fi)?sh\b/;
+
+/**
  * 런타임 네트워크 신호. 질문은 하나다 — **"이 스킬이 돌 때 네트워크로 나가는가."**
  *
  * ⚠️ **문서에 링크가 있다고 외부 접근이 아니다.** 산문 속 맨 URL(참고 문서 링크, 저장소
@@ -120,41 +165,128 @@ function cliCallRe(cli: string): RegExp {
  *    실측 분리: claude-api → WebFetch·WebSearch·curl 검출(정답) / brand-guidelines·docx·
  *    algorithmic-art → 신호 없음(정답).
  *
- * ⚠️ **반대쪽 오류(위음성)를 막는 갈래가 EXTERNAL_CLIS 다.** 외부 서비스 CLI 를 감싸기만 하는
- *    스킬은 본문에 URL 도 HTTP 호출도 없어 위 신호로는 0건이 나온다 — 그러면 `local` 로
- *    단정되고, 사용자는 🔒 로컬 을 믿은 채 원격 서비스를 치는 스킬을 돌린다. 위 정의를 보라.
+ * ⚠️ **반대쪽 오류(위음성)를 막는 갈래가 둘 있다.**
+ *    1) EXTERNAL_CLIS — 외부 서비스 CLI 를 감싸기만 하는 스킬은 본문에 URL 도 HTTP 호출도 없다.
+ *    2) MCP 계열 3종 — 원격 MCP 스킬은 **호출을 MCP 클라이언트가 대신하므로** 본문에 HTTP
+ *       호출문이 아예 없다. `mcp__`/`mcpServers` 만 보던 시절 ComposioHQ/awesome-claude-skills
+ *       (★74,204, SKILL.md 864개)의 표본 40건이 전부 신호 0건 → 🔒 로컬 로 표시됐다.
+ *       실제 본문은 frontmatter `requires: mcp: [rube]` 와 `https://rube.app/mcp` 였다.
+ *
+ * ★ MCP 신호를 셋으로 나눈 이유는 **근거를 화면에 남기기 위해서**다. 원격 URL 은 확정이지만
+ *   frontmatter 선언만으로는 로컬 stdio 서버(`command: node ./server.js`)일 수도 있다.
+ *   이름을 나눠 두면 사용자가 툴팁에서 "무엇을 보고 그렇게 판정했는지"를 그대로 읽는다.
  */
-export const NETWORK_SIGNALS: ReadonlyArray<{ name: string; re: RegExp }> = [
+export interface NetworkSignal {
+  name: string;
+  re: RegExp;
+  /** "frontmatter" 면 파일 머리의 YAML 블록만 본다(산문에 적힌 같은 낱말과 섞이지 않게). */
+  scope?: "frontmatter";
+  /** 이 패턴에도 걸리는 줄은 신호로 세지 않는다(줄 단위로 판정한다 — 설치 안내 배제용). */
+  skipLine?: RegExp;
+}
+
+export const NETWORK_SIGNALS: ReadonlyArray<NetworkSignal> = [
   // 에이전트 도구 이름. frontmatter 의 allowed-tools 에 적힌 것도 신호다 — "이 스킬은 웹을
   // 쓸 수 있다"는 선언 자체가 우리가 답하려는 질문의 답이다.
   { name: "WebFetch", re: /\bWebFetch\b/ },
   { name: "WebSearch", re: /\bWebSearch\b/ },
   // 셸 호출. `curl` 단어만으로는 산문("curl 로도 됩니다")과 구분이 안 되므로 옵션이 붙은
   // 실제 호출 형태만 잡는다. 줄머리·공백·코드펜스 백틱 뒤가 시작점이다.
-  { name: "curl", re: /(^|[\s`])curl\s+-/m },
-  { name: "wget", re: /(^|[\s`])wget\s/m },
-  // 코드 안의 HTTP 호출.
-  { name: "fetch()", re: /\bfetch\(\s*[`'"]https?:\/\// },
+  // 설치 관용구(`| sh`)가 붙은 줄은 뺀다 — 같은 파일에 진짜 호출이 따로 있으면 그 줄이 잡는다.
+  { name: "curl", re: /(^|[\s`])curl\s+-/, skipLine: SHELL_INSTALL_PIPE },
+  { name: "wget", re: /(^|[\s`])wget\s/, skipLine: SHELL_INSTALL_PIPE },
+  // 코드 안의 HTTP 호출. 예제 도메인은 뺀다 — 교육용 코드조각은 런타임 행위가 아니다.
+  { name: "fetch()", re: new RegExp(`\\bfetch\\(\\s*[\`'"]https?://${NOT_PLACEHOLDER_HOST}`) },
   { name: "requests", re: /\brequests\.(get|post|put)\b/ },
   { name: "httpx", re: /\bhttpx\.(get|post|Client)/ },
   { name: "axios", re: /\baxios\b/ },
   { name: "urllib", re: /\burllib\.request\b/ },
   // api·graph 호스트. 문서에 적혀 있어도 "이 스킬이 부르는 곳"일 확률이 압도적이다.
-  { name: "api호스트", re: /https?:\/\/[a-z0-9.-]*(api|graph)\.[a-z0-9.-]+/i },
-  // MCP 서버 참조. 도구 이름(mcp__x__y)이든 서버 선언(mcpServers)이든 외부 프로세스로 나간다.
+  // 단 예약 예시 도메인(api.example.com)은 그 확률이 0 이다.
+  {
+    name: "api호스트",
+    re: new RegExp(`https?://${NOT_PLACEHOLDER_HOST}[a-z0-9.-]*(api|graph)\\.[a-z0-9.-]+`, "i"),
+  },
+  // ── MCP 3종 ──
+  // 1) 도구 이름(mcp__x__y)·설정 키(mcpServers). 기존 신호 그대로다.
   { name: "MCP", re: /mcp__|mcpServers/ },
+  // 2) frontmatter 선언. `requires:` 아래의 `mcp: [rube]` 가 실물이다. 산문에 "MCP" 라고 적은
+  //    것과 섞이지 않게 **머리 YAML 블록으로 범위를 좁힌다**(MCP 를 설명만 하는 스킬은 많다).
+  //    로컬 stdio 서버 선언일 수도 있어 확정하지 않고, 이름으로 근거를 남긴다.
+  {
+    name: "MCP(선언)",
+    scope: "frontmatter",
+    re: /^[ \t-]*(?:mcp[-_]?servers?|mcp)[ \t]*:|^[ \t]*requires[ \t]*:.*\bmcp\b/im,
+  },
+  // 3) 원격 MCP 엔드포인트 URL. 여기까지 오면 **원격 확정**이다 — 로컬 stdio 서버는 URL 이 없다.
+  {
+    name: "MCP(원격)",
+    re: new RegExp(
+      `(?:https?|wss?)://${NOT_PLACEHOLDER_HOST}${NOT_MCP_DOC_HOST}[^\\s"'\`<>)\\]}]*/mcp\\b`,
+      "i"
+    ),
+  },
   // 외부 서비스 CLI 호출. 위 EXTERNAL_CLIS 에서 자동 생성해 붙인다(신호 이름은 `외부CLI(gh)`).
   ...EXTERNAL_CLIS.map((cli) => ({ name: `외부CLI(${cli})`, re: cliCallRe(cli) })),
 ];
 
+/**
+ * 파일 머리의 YAML frontmatter 본문(구분선 제외). 없으면 빈 문자열.
+ * 정규식으로 흉내 내지 않고 잘라 두는 이유는 하나다 — `mcp:` 를 찾을 때 산문 본문까지 훑으면
+ * "MCP: Model Context Protocol …" 같은 설명 줄이 선언으로 둔갑한다.
+ */
+export function frontMatter(text: string): string {
+  const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+  return m ? m[1] : "";
+}
+
+/** 신호 1건이 이 본문에 있는가. skipLine 이 있으면 줄 단위로 본다. */
+function hasSignal(sig: NetworkSignal, text: string, fm: string): boolean {
+  const target = sig.scope === "frontmatter" ? fm : text;
+  if (!target) return false;
+  if (!sig.skipLine) return sig.re.test(target);
+  // 설치 안내 줄만 빼고 나머지 줄에서 다시 찾는다 — 한 파일에 설치 안내와 진짜 호출이 함께
+  // 있으면 신호는 그대로 남아야 한다(빼는 것은 '그 줄'이지 '그 신호'가 아니다).
+  for (const line of target.split("\n")) {
+    if (sig.re.test(line) && !sig.skipLine.test(line)) return true;
+  }
+  return false;
+}
+
 /** SKILL.md 본문 1건에서 발견된 신호 이름들(중복 없음, NETWORK_SIGNALS 순서 유지). */
 export function detectSignals(text: string): string[] {
+  const fm = frontMatter(text);
   const out: string[] = [];
   for (const s of NETWORK_SIGNALS) {
-    if (s.re.test(text)) out.push(s.name);
+    if (hasSignal(s, text, fm)) out.push(s.name);
   }
   return out;
 }
+
+/**
+ * 신호 정의 버전. **캐시 행에 함께 저장하고, 다르면 캐시를 버리고 다시 스캔한다.**
+ *
+ * 예전 캐시 키는 `pushed_at` 뿐이었다. 그래서 이 파일의 신호를 고쳐도 그 저장소가 다시 푸시될
+ * 때까지 옛 판정이 그대로 나왔다 — 즉 **신호를 고치는 일 자체가 라이브에 반영되지 않았다.**
+ *
+ * 수동 번호와 신호표 해시를 함께 쓴다. 번호는 "이번에 무엇을 왜 바꿨나"를 사람이 읽는 자리이고,
+ * 해시는 그 번호를 **올리는 걸 잊어도** 캐시가 저절로 무효화되게 하는 안전망이다(정확히 그
+ * 망각이 이번 회귀의 원인이었다).
+ *
+ *   1: 최초 정의 (WebFetch·curl·api호스트·MCP(mcp__|mcpServers)·외부CLI)
+ *   2: MCP 선언형·원격 URL 추가, curl 설치 관용구·예시 도메인 위양성 제거 (2026-09-02)
+ */
+export const SCAN_SIGNATURE_REVISION = 2;
+
+/** `v2-<신호표 sha256 앞 8자>`. skill_scans.sig_version 에 그대로 들어간다. */
+export const SCAN_SIGNATURE_VERSION = `v${SCAN_SIGNATURE_REVISION}-${createHash("sha256")
+  .update(
+    NETWORK_SIGNALS.map(
+      (s) => `${s.name} ${s.re.source} ${s.re.flags} ${s.scope ?? ""} ${s.skipLine?.source ?? ""}`
+    ).join("\n")
+  )
+  .digest("hex")
+  .slice(0, 8)}`;
 
 // ── ★★ 판정 (이 파일의 핵심) ────────────────────────────
 
@@ -260,15 +392,41 @@ export interface ScanDeps {
   fileConcurrency: number;
   /** 저장소당 읽을 SKILL.md 상한. */
   cap: number;
-  /** 기본 브랜치 후보. SkillRepo 에 default_branch 가 없어 순서대로 시도한다. */
+  /**
+   * 기본 브랜치를 **모를 때만** 쓰는 후보 목록. 아래 defaultBranch 가 값을 주면 쓰이지 않는다.
+   */
   branches: readonly string[];
+  /**
+   * 저장소의 실제 기본 브랜치. 모르면 null.
+   *
+   * ★ GitHub 검색 응답에 `default_branch` 가 이미 들어 있다(github.ts 가 곁으로 실어 준다).
+   *   그런데 예전에는 그걸 안 쓰고 main → master 를 찍어 봤다. 그 결과 상위 50 중 3건
+   *   (code-yeongyu/oh-my-openagent=dev, titanwings/distilly=dot-skill,
+   *    yusufkaraaslan/Skill_Seekers=development)이 **기본 브랜치가 아닌 낡은 브랜치의 파일로**
+   *   판정되고, 펼침 목록 링크도 그 낡은 브랜치를 가리켰다. 조회는 성공하니 아무도 몰랐다.
+   *   덤으로 트리 호출도 저장소당 1회로 고정된다(실측 57회 → 50회).
+   */
+  defaultBranch: (repo: SkillRepo) => string | null;
+  /** 스캔 전에 core 잔량을 확인할지. 테스트는 끈다(네트워크를 한 번 더 두드리지 않게). */
+  checkQuota: boolean;
+  /** 잔량에서 남겨 둘 여유분. 다른 경로가 core 를 쓸 때를 위한 몫이다. */
+  quotaReserve: number;
 }
 
 export const SCAN_TIMEOUT_MS = 10_000;
 export const SCAN_REPO_CONCURRENCY = 5;
 export const SCAN_FILE_CONCURRENCY = 8;
-/** main → master 순. 상위 50 저장소에서 이 두 개로 조회 실패 0건이었다(2026-09-02 실측). */
+/**
+ * 기본 브랜치를 **모를 때만** 쓰는 후보. main → master 순.
+ * 수집 경로가 default_branch 를 실어 주므로 정상 회차에서는 거의 쓰이지 않는다(폴백이다).
+ */
 export const SCAN_BRANCHES = ["main", "master"] as const;
+
+/** core 잔량에서 남겨 두는 여유분. 경계에서 아슬아슬하게 긁지 않기 위한 몫이다. */
+export const SCAN_QUOTA_RESERVE = 3;
+
+/** GitHub 잔량 조회. **이 호출 자체는 쿼터를 쓰지 않는다**(공식 문서 명시). */
+export const GITHUB_RATE_LIMIT_URL = "https://api.github.com/rate_limit";
 
 function defaultDeps(): ScanDeps {
   return {
@@ -280,6 +438,9 @@ function defaultDeps(): ScanDeps {
     fileConcurrency: SCAN_FILE_CONCURRENCY,
     cap: SKILLS_SCAN_CAP,
     branches: SCAN_BRANCHES,
+    defaultBranch: () => null,
+    checkQuota: true,
+    quotaReserve: SCAN_QUOTA_RESERVE,
   };
 }
 
@@ -329,9 +490,10 @@ interface TreeResult {
 /**
  * 저장소 파일 목록. **core 쿼터를 쓰는 유일한 호출이다.**
  *
- * SkillRepo 에 default_branch 가 없어 main → master 순으로 시도한다. 404 는 "그 브랜치가
- * 없다"는 뜻이라 다음 후보로 넘어가고, 403/429(레이트리밋)는 브랜치를 바꿔 봐야 소용없으므로
- * 즉시 접는다 — 무인증 60회/시간에서 한 저장소가 쿼터를 두 번 태우면 안 된다.
+ * **기본 브랜치를 알면 그것 하나만 본다**(deps.defaultBranch). 모를 때만 main → master 를
+ * 순서대로 찍어 본다. 404 는 "그 브랜치가 없다"는 뜻이라 다음 후보로 넘어가고, 403/429
+ * (레이트리밋)는 브랜치를 바꿔 봐야 소용없으므로 즉시 접는다 — 무인증 60회/시간에서 한
+ * 저장소가 쿼터를 두 번 태우면 안 된다.
  */
 async function fetchTree(repo: SkillRepo, deps: ScanDeps): Promise<TreeResult> {
   const headers: Record<string, string> = {
@@ -341,8 +503,11 @@ async function fetchTree(repo: SkillRepo, deps: ScanDeps): Promise<TreeResult> {
     ...(deps.token ? { Authorization: `Bearer ${deps.token}` } : {}),
   };
   let lastReason: string | null = null;
+  // 기본 브랜치를 알면 후보를 흔들지 않는다 — 낡은 main 이 남아 있어도 그쪽을 읽지 않는다.
+  const known = deps.defaultBranch(repo);
+  const candidates = known ? [known] : deps.branches;
 
-  for (const branch of deps.branches) {
+  for (const branch of candidates) {
     const url =
       `https://api.github.com/repos/${repo.fullName}/git/trees/` +
       `${encodeURIComponent(branch)}?recursive=1`;
@@ -459,7 +624,34 @@ export interface ScanSummary {
   fetched: number;
   /** 레이트리밋으로 스캔을 접은 저장소 수(전부 unknown). */
   skipped: number;
+  /**
+   * 남은 core 예산이 모자라 **아예 두드리지 않은** 저장소 수(전부 unknown).
+   * ★ skipped 와 나눠 센다 — "맞고 접었다"와 "애초에 안 갔다"는 다음 회차 판단이 다르다.
+   */
+  budgetSkipped: number;
+  /** 스캔 시작 시점의 core 잔량. 확인하지 못했으면 null. */
+  coreRemaining: number | null;
   ms: number;
+}
+
+/** `GET /rate_limit` 응답에서 core 버킷만 뽑는다. 못 읽으면 null(예산 절삭을 하지 않는다). */
+async function fetchCoreRemaining(deps: ScanDeps): Promise<number | null> {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "daily-price-dashboard/skills",
+    ...(deps.token ? { Authorization: `Bearer ${deps.token}` } : {}),
+  };
+  const got = await getText(GITHUB_RATE_LIMIT_URL, headers, deps);
+  if (!got || got.status !== 200) return null;
+  try {
+    const body = JSON.parse(got.text) as {
+      resources?: { core?: { remaining?: unknown } };
+    };
+    const n = Number(body?.resources?.core?.remaining);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -470,6 +662,12 @@ export interface ScanSummary {
  *
  * ★ 레이트리밋을 만나면 **남은 저장소를 즉시 포기한다**(kind="unknown"). 무인증 60회/시간
  *   창이 리셋되기를 기다리면 주간 회차가 한 시간을 붙잡는다. 태그 하나 때문에 그럴 수 없다.
+ *
+ * ★★ 그보다 먼저, **시작 전에 남은 예산을 보고 그 안에서만 새로 조회한다.** 리밋을 맞고 접는
+ *    것과 애초에 안 가는 것은 결과가 같아 보이지만 다르다 — 맞고 접으면 그 회차의 남은 core 가
+ *    0 이 되어 같은 시간 창의 다른 경로까지 함께 막힌다. 예산 밖 저장소는 `unknown` 으로 두고
+ *    회차는 정상 종료한다.
+ *    ⚠️ 예산이 모자란 것은 "신호가 없다"가 아니다. 절대 `local` 로 떨어뜨리지 않는다.
  */
 export async function scanRepos(
   repos: SkillRepo[],
@@ -495,12 +693,43 @@ export async function scanRepos(
     pending.push(repo);
   }
 
-  log.info(
-    `스킬 네트워크 스캔 시작 — 대상 ${repos.length}건 (캐시 재사용 ${cached}건, 신규 조회 ${pending.length}건, ` +
-      `${deps.token ? "인증 5000회/시간" : "무인증 60회/시간"})`
-  );
+  // ── 예산 산정 ──
+  // 트리 호출 비용은 기본 브랜치를 알면 1회, 모르면 후보 수(main→master = 최대 2회)다.
+  // 목록은 이미 랭킹 순이라 앞에서부터 채우면 **상위 저장소가 먼저 판정된다**.
+  const cost = (repo: SkillRepo) => (deps.defaultBranch(repo) ? 1 : deps.branches.length);
+  const coreRemaining = deps.checkQuota && pending.length > 0 ? await fetchCoreRemaining(deps) : null;
+  let runnable = pending;
+  let deferred: SkillRepo[] = [];
+  if (coreRemaining !== null) {
+    const budget = Math.max(0, coreRemaining - deps.quotaReserve);
+    let spent = 0;
+    let cut = pending.length;
+    for (let i = 0; i < pending.length; i++) {
+      const next = spent + cost(pending[i]);
+      if (next > budget) {
+        cut = i;
+        break;
+      }
+      spent = next;
+    }
+    runnable = pending.slice(0, cut);
+    deferred = pending.slice(cut);
+  }
 
-  await mapPool(pending, deps.repoConcurrency, async (repo) => {
+  log.info(
+    `스킬 네트워크 스캔 시작 — 대상 ${repos.length}건 (캐시 재사용 ${cached}건, 신규 조회 ${runnable.length}건, ` +
+      `${deps.token ? "인증 5000회/시간" : "무인증 60회/시간"}, core 잔량 ${coreRemaining ?? "?"})` +
+      (deferred.length ? ` · 예산 부족으로 ${deferred.length}건은 판정 보류` : "")
+  );
+  if (deferred.length) {
+    log.warn(
+      `스킬 네트워크 스캔 — core 잔량 ${coreRemaining}/여유분 ${deps.quotaReserve} 안에서만 조회한다 → ` +
+        `${deferred.length}건은 '판정 불가'로 남긴다(다음 회차에 다시 본다. '로컬'로 단정하지 않는다)`
+    );
+  }
+  for (const repo of deferred) scans.set(repo.id, unknownScan(repo));
+
+  await mapPool(runnable, deps.repoConcurrency, async (repo) => {
     if (rateLimited) {
       // 창이 리셋될 때까지 기다리지 않는다. 남은 것은 전부 '모른다'로 둔다.
       skipped += 1;
@@ -532,9 +761,19 @@ export async function scanRepos(
   const ms = Date.now() - t0;
   log.info(
     `스킬 네트워크 스캔 완료 — ${Math.round(ms / 1000)}초, ` +
-      `조회 ${fetched}건 / 캐시 ${cached}건 / 생략 ${skipped}건 · ${formatKindCounts(scans)}`
+      `조회 ${fetched}건 / 캐시 ${cached}건 / 생략 ${skipped}건` +
+      (deferred.length ? ` / 예산 보류 ${deferred.length}건` : "") +
+      ` · ${formatKindCounts(scans)}`
   );
-  return { scans, cached, fetched, skipped, ms };
+  return {
+    scans,
+    cached,
+    fetched,
+    skipped,
+    budgetSkipped: deferred.length,
+    coreRemaining,
+    ms,
+  };
 }
 
 /** 판정 불가 결과 1건. '로컬'이 아니라 '모른다'다 — 이 구분이 태그의 신뢰를 지킨다. */

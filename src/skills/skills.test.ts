@@ -206,6 +206,15 @@ test("판정 불가와 수집 경고도 notes 에 남는다", () => {
   assert.match(buildNotes(["topic:agent-skills 3페이지 실패"], null) ?? "", /후보가 줄었을 수 있습니다/);
 });
 
+test("★ 쿼터 부족으로 못 본 건수는 notes 에 남고, '로컬'이 아니라 '판정 불가'라고 적는다", () => {
+  const notes = buildNotes([], pruneClean(), 12) ?? "";
+  assert.match(notes, /12건은 네트워크 접근을 판정하지 못했습니다/);
+  assert.match(notes, /판정 불가/, "안 본 것을 로컬로 읽히게 두면 태그가 거짓말이 된다");
+  assert.match(notes, /GITHUB_TOKEN/, "고치는 방법까지 적어야 다음 주에 또 안 겪는다");
+  // 0 건이면 아무 말도 하지 않는다(상시 배너 금지 규약).
+  assert.equal(buildNotes([], pruneClean(), 0), undefined);
+});
+
 test("추적 저장소 수·첫 회차 안내는 notes 에 넣지 않는다(화면에 이미 있다)", () => {
   // 둘 다 상시 정보다 — trackedCount 는 각주로, 첫 회차는 window === null 빈 상태로 이미 나온다.
   const notes = buildNotes([], pruneClean({ unknown: 1 })) ?? "";

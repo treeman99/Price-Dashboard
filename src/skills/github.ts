@@ -13,7 +13,7 @@ import type { SkillRepo } from "../../shared/skills.ts";
  *   - `q=topic:agent-skills` → total_count 20,115. per_page=100 · page=2 까지 정상.
  *   - item 에서 실제로 확인한 필드: id, full_name, name, owner.login, html_url, description,
  *     stargazers_count, forks_count, watchers_count, open_issues_count, topics[],
- *     license{spdx_id}, language, created_at, pushed_at, archived, fork.
+ *     license{spdx_id}, language, created_at, pushed_at, archived, fork, **default_branch**.
  *   - 실측 주의: 1위 anthropics/skills 는 **license 가 null** 이다. 라이선스·설명은 반드시
  *     nullable 로 다뤄야 한다(계약도 그렇게 돼 있다).
  *
@@ -161,9 +161,26 @@ export function parseSearchItem(raw: unknown): SkillRepo | null {
   };
 }
 
+/**
+ * 검색 응답 item 의 `default_branch`. 없거나 이상하면 null.
+ *
+ * ★ 왜 SkillRepo 에 넣지 않고 곁 채널(Map)로 나르는가 —
+ *   `SkillRepo` 는 화면·API·스냅샷 JSON 이 함께 읽는 **동결된 계약**이고(shared/skills.ts),
+ *   기본 브랜치는 화면이 쓰지 않는 수집 내부 사정이다. 계약에 필드를 하나 늘리면 옛 스냅샷
+ *   호환과 프런트 타입까지 따라 움직여야 하는데, 이 값이 필요한 곳은 스캐너 한 군데뿐이다.
+ *   그래서 CollectResult 에 `defaultBranches` 로 실어 스캐너에만 건넨다.
+ */
+export function parseDefaultBranch(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const b = (raw as Record<string, unknown>).default_branch;
+  return typeof b === "string" && b.trim() ? b.trim() : null;
+}
+
 /** 검색 응답 1페이지 파싱 결과. `forks` 는 fork 저장소(=제외 대상) 건수 — 로그용이다. */
 export interface SearchPage {
   repos: SkillRepo[];
+  /** repo id → 기본 브랜치. SkillRepo 계약을 건드리지 않는 곁 채널이다(위 설명 참고). */
+  defaultBranches: Map<number, string>;
   totalCount: number;
   incomplete: boolean;
   /** 이 페이지에서 fork 라서 제외한 건수 */
@@ -190,6 +207,7 @@ export function parseSearchPage(body: unknown): SearchPage {
   const b = (body ?? {}) as Record<string, unknown>;
   const items = Array.isArray(b.items) ? b.items : [];
   const repos: SkillRepo[] = [];
+  const defaultBranches = new Map<number, string>();
   let forksDropped = 0;
   let malformed = 0;
   for (const raw of items) {
@@ -203,9 +221,12 @@ export function parseSearchPage(body: unknown): SearchPage {
       continue;
     }
     repos.push(repo);
+    const branch = parseDefaultBranch(raw);
+    if (branch) defaultBranches.set(repo.id, branch);
   }
   return {
     repos,
+    defaultBranches,
     totalCount: num(b.total_count) ?? repos.length,
     incomplete: b.incomplete_results === true,
     forksDropped,
@@ -239,6 +260,11 @@ export function mergeSkillRepos(pages: SkillRepo[][], limit = SKILLS_TRACK_POOL)
 /** 수집 1회의 결과. warnings 는 화면에 올리지 않고 로그·notes 근거로만 쓴다. */
 export interface CollectResult {
   repos: SkillRepo[];
+  /**
+   * repo id → 기본 브랜치. 네트워크 접근 스캐너에만 건넨다(parseDefaultBranch 주석 참고).
+   * 이걸 안 쓰던 시절 상위 50 중 3건이 **기본 브랜치가 아닌 낡은 브랜치의 파일로** 판정됐다.
+   */
+  defaultBranches: Map<number, string>;
   warnings: string[];
   /** 실제로 성공한 검색 호출 수 / 시도한 호출 수 */
   pagesOk: number;
@@ -286,6 +312,9 @@ export async function collectSkillRepos(
   const interval = pacingIntervalMs(rpm);
   const warnings: string[] = [];
   const collected: SkillRepo[][] = [];
+  // 같은 저장소가 4개 topic 에 겹쳐 오지만 기본 브랜치는 하나뿐이라, 나중 페이지 값으로 덮어도
+  // 결과가 흔들리지 않는다(리네임·이관 직후라면 나중 값이 오히려 최신이다).
+  const defaultBranches = new Map<number, string>();
   let lastCallAt = 0;
   let pagesOk = 0;
   let pagesTried = 0;
@@ -335,6 +364,7 @@ export async function collectSkillRepos(
 
           const parsed = parseSearchPage(await res.json());
           collected.push(parsed.repos);
+          for (const [id, branch] of parsed.defaultBranches) defaultBranches.set(id, branch);
           pagesOk += 1;
           ok = true;
           if (parsed.incomplete) {
@@ -371,7 +401,17 @@ export async function collectSkillRepos(
     `스킬 저장소 수집 완료 — 추적 풀 ${repos.length}건 ` +
       `(${pagesOk}/${pagesTried} 페이지 성공, 최다 star ${repos[0].stars.toLocaleString()})`
   );
-  return { repos, warnings, pagesOk, pagesTried };
+  // 추적 풀에 남은 저장소의 브랜치만 넘긴다(400건 밖의 것을 스캐너가 볼 일은 없다).
+  const branches = new Map<number, string>();
+  for (const r of repos) {
+    const b = defaultBranches.get(r.id);
+    if (b) branches.set(r.id, b);
+  }
+  log.info(
+    `스킬 저장소 기본 브랜치 확보 — ${branches.size}/${repos.length}건 ` +
+      "(모르는 저장소만 main → master 순으로 찍어 본다)"
+  );
+  return { repos, defaultBranches: branches, warnings, pagesOk, pagesTried };
 }
 
 /**
