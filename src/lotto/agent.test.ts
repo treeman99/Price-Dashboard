@@ -61,7 +61,7 @@ const ctx: LottoEvolveContext = {
     rationale: "기준점.",
     hypothesis: "무작위 추출.",
     author: "agent",
-    model: "claude-opus-5",
+    model: "claude-fable-5-1",
     createdAt: "2026-07-29T00:00:00.000Z",
   },
   latest,
@@ -77,15 +77,15 @@ const ctx: LottoEvolveContext = {
       rationale: "기준점.",
       hypothesis: "searchSteps 를 0으로 되돌리면 가중점수가 표준오차 안에서 구별되지 않을 것이다.",
       author: "agent",
-      model: "claude-opus-5",
+      model: "claude-fable-5-1",
       createdAt: "2026-07-29T00:00:00.000Z",
     },
   ],
 };
 
-test("모델은 프로젝트 공용 설정과 무관하게 Opus 5 로 고정된다", () => {
+test("모델은 프로젝트 공용 설정과 무관하게 Fable 5.1 로 고정된다", () => {
   // 사용자 요구(2026-07-29). 한도 소진 시에도 다른 모델로 갈아타지 않는다.
-  assert.equal(LOTTO_AGENT_MODEL, "claude-opus-5");
+  assert.equal(LOTTO_AGENT_MODEL, "claude-fable-5-1");
 });
 
 test("프롬프트가 목표 지표·현재 사양·적용 회차를 함께 싣는다", () => {
@@ -173,7 +173,7 @@ test("토큰 한도 오류를 알아본다", () => {
 
 /**
  * 번들 CLI 는 `You've hit your ${라벨}` 로 한도를 통보하고 라벨이 6종이다.
- * 예전에는 `You'?ve hit your limit` 한 종류만 실패로 승격돼, **Opus 5 에서 가장 유력한
+ * 예전에는 `You'?ve hit your limit` 한 종류만 실패로 승격돼, **구독 모델에서 가장 유력한
  * 두 라벨(Opus limit · session limit)이 통째로 미탐**이었다. 그러면 한도 소진이
  * "JSON 미발견" 으로 둔갑해 재시도 예약 없이 '사양 유지'로 넘어가고, 그 주의 전략 갱신이
  * 조용히 사라진다. 4시간 재시도가 이 한 줄에 걸려 있으므로 6종 전부를 못박는다.
