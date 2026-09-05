@@ -93,7 +93,9 @@
 - **macOS** (launchd 서비스 등록 기준) / **Node.js 18 이상** (`node -v`로 확인, 권장 20+)
 - (선택) 네이버 개발자센터 검색 API 키 — 팝업·전시 탭의 webkr/blog 보강용. https://developers.naver.com/
 - (선택) Anthropic Console API 키 — Opus 5 큐레이션용
-- Codex CLI + ChatGPT 로그인 — **기본 모델(Codex 5.6 Sol)** 이 정액제 크레딧을 쓴다
+- Codex CLI **0.153.0 이상** + ChatGPT 로그인 — **기본 모델(Codex 6 Astra)** 이 정액제 크레딧을 쓴다.
+  구버전 CLI 는 `gpt-6-astra` 에 HTTP 400(`requires a newer version of Codex`)을 돌려주고,
+  이 실패는 한도/로그인 신호가 아니라 임시 대체가 걸리지 않는다 → `npm install -g @openai/codex@latest`
 - (선택) Python 3 — 팝업/전시 날짜 검증(insane-engine)용. `bash tools/insane-engine/setup.sh` 1회 실행
 - 별도 DB 설치 불필요 (Node 내장 SQLite 사용)
 
@@ -137,7 +139,7 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 
 > 알림 자격증명이 없으면 이메일 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
 >
-> **AI 에이전트 선택**: 대시보드 상단에서 `Codex 5.6 Sol`(기본) · `Opus 5` · `Codex 5.6 Terra` 중 고른다.
+> **AI 에이전트 선택**: 대시보드 상단에서 `Codex 6 Astra`(기본) · `Opus 5` 중 고른다.
 > Codex는 `codex login status`가 `Logged in using ChatGPT`일 때만 실행하며,
 > `OPENAI_API_KEY`/`CODEX_API_KEY`를 전달하거나 API 종량 과금으로 자동 전환하지 않는다.
 >

@@ -17,6 +17,16 @@ if [ -z "$NODE" ]; then
 fi
 if [ -z "$CODEX" ]; then
   echo "⚠ codex CLI를 찾을 수 없습니다. Opus 5는 동작하지만 Codex 에이전트는 선택할 수 없습니다."
+else
+  # 기본 모델(gpt-6-astra)은 최소 CLI 버전을 요구한다. 구버전은 HTTP 400
+  # ("requires a newer version of Codex")을 돌려주는데, 이건 한도/로그인 신호가 아니라서
+  # 임시 대체가 걸리지 않고 수집이 그대로 실패한다. 설치 시점에 미리 경고한다.
+  CODEX_VER="$("$CODEX" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  CODEX_MIN="0.153.0"
+  if [ -n "$CODEX_VER" ] && [ "$(printf '%s\n%s\n' "$CODEX_MIN" "$CODEX_VER" | sort -V | head -1)" != "$CODEX_MIN" ]; then
+    echo "⚠ codex CLI $CODEX_VER 은(는) 기본 모델 gpt-6-astra 를 지원하지 않습니다(필요: $CODEX_MIN+)."
+    echo "  npm install -g @openai/codex@latest 로 올리세요. 그전까지 Codex 수집은 400 으로 실패합니다."
+  fi
 fi
 if [ ! -f "$TSX_CLI" ]; then
   echo "✖ tsx 가 없습니다. 먼저 'npm install' 을 실행하세요. ($TSX_CLI)" >&2

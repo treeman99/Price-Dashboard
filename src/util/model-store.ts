@@ -21,11 +21,16 @@ const STORE_PATH = path.join(path.dirname(config.dbPath), "model.json");
  *
  * 목록에서 뺀 모델 ID 가 data/model.json 에 남아 있어도 안전하다 — validModel 이 걸러
  * 기본값으로 fail-open 한다.
+ *
+ * ⚠️ Codex 모델은 **CLI 버전이 받쳐 줘야** 돈다. 구버전 CLI 는 모르는 모델에 HTTP 400
+ * ("requires a newer version of Codex")을 돌려주고, 그 실패는 한도/로그인 신호가 아니라서
+ * 폴백 없이 그대로 수집 실패가 된다. gpt-6-astra 는 codex-cli 0.153.x 에서 실측 확인했다
+ * (0.150.1 은 400). 모델 ID 를 올릴 때는 `codex --version` 도 같이 올려야 한다.
  */
 export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
   {
-    id: "gpt-5.6-sol",
-    label: "Codex 5.6 Sol",
+    id: "gpt-6-astra",
+    label: "Codex 6 Astra",
     description: "기본값 — ChatGPT 정액제 Codex, 못 쓰는 동안만 Opus 5로 임시 대체",
   },
   {
@@ -33,14 +38,9 @@ export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
     label: "Opus 5",
     description: "Codex를 못 쓸 때 대신 실행 — 가장 높은 수집·큐레이션 품질",
   },
-  {
-    id: "gpt-5.6-terra",
-    label: "Codex 5.6 Terra",
-    description: "ChatGPT 정액제 Codex — medium 추론, 일상 수집용 균형 모델",
-  },
 ];
 
-/** 기본 모델 = 목록 첫 항목(Codex 5.6 Sol). */
+/** 기본 모델 = 목록 첫 항목(Codex 6 Astra). */
 export const DEFAULT_AGENT_MODEL = AGENT_MODEL_OPTIONS[0].id;
 
 /** 평상시 모델. 저장된 선택이 없을 때의 값이자 UI 의 '기본' 표식. */

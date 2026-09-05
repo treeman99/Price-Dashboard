@@ -21,8 +21,9 @@ import {
 } from "./codex-query.ts";
 
 test("Codex 모델만 별도 실행 경로로 분류한다", () => {
+  assert.equal(isCodexModel("gpt-6-astra"), true);
+  // 목록에서 빠진 옛 세대도 gpt- 접두어면 Codex 경로다(파일에 남은 값이 SDK 로 새지 않게).
   assert.equal(isCodexModel("gpt-5.6-sol"), true);
-  assert.equal(isCodexModel("gpt-5.6-terra"), true);
   assert.equal(isCodexModel("claude-opus-5"), false);
   assert.equal(isCodexModel(undefined), false);
 });
@@ -45,8 +46,8 @@ test("Codex 환경은 앱/API 비밀값을 전달하지 않는다", () => {
   });
 });
 
-test("Codex 인자는 ChatGPT 로그인·Terra medium·최소 권한을 강제한다", () => {
-  const webArgs = buildCodexArgs("gpt-5.6-terra", true);
+test("Codex 인자는 ChatGPT 로그인·medium 추론·최소 권한을 강제한다", () => {
+  const webArgs = buildCodexArgs("gpt-6-astra", true);
   const joined = webArgs.join(" ");
   assert.ok(webArgs.includes("--search"));
   assert.match(joined, /forced_login_method="chatgpt"/);
@@ -59,7 +60,7 @@ test("Codex 인자는 ChatGPT 로그인·Terra medium·최소 권한을 강제�
   assert.ok(webArgs.includes("--json"));
   assert.equal(webArgs.includes("--dangerously-bypass-approvals-and-sandbox"), false);
 
-  const offlineArgs = buildCodexArgs("gpt-5.6-terra", false);
+  const offlineArgs = buildCodexArgs("gpt-6-astra", false);
   assert.equal(offlineArgs.includes("--search"), false);
   assert.ok(offlineArgs.includes('web_search="disabled"'));
 });
@@ -120,7 +121,7 @@ test("Codex JSONL의 오류 이벤트를 모은다(한도 감지의 1차 근거)
 
 test("한도 소진 문구를 정액제 신호로 인식한다", () => {
   // Codex CLI 바이너리에서 실측한 사용자 대면 문구들.
-  assert.equal(isCodexUsageLimitText("You've hit your usage limit for gpt-5.6-sol"), true);
+  assert.equal(isCodexUsageLimitText("You've hit your usage limit for gpt-6-astra"), true);
   assert.equal(
     isCodexUsageLimitText("Usage limit reached. You've reached your usage limit."),
     true
