@@ -31,12 +31,12 @@ export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
   {
     id: "gpt-6-astra",
     label: "Codex 6 Astra",
-    description: "기본값 — ChatGPT 정액제 Codex, 못 쓰는 동안만 Opus 5로 임시 대체",
+    description: "기본값 — ChatGPT 정액제 Codex, 못 쓰는 동안만 Fable 5.1로 임시 대체",
   },
   {
-    id: "claude-opus-5",
-    label: "Opus 5",
-    description: "Codex를 못 쓸 때 대신 실행 — 가장 높은 수집·큐레이션 품질",
+    id: "claude-fable-5-1",
+    label: "Fable 5.1",
+    description: "Codex를 못 쓸 때 대신 실행 — 가장 높은 수집·큐레이션 품질(Claude 구독 한도 사용)",
   },
 ];
 
@@ -46,8 +46,19 @@ export const DEFAULT_AGENT_MODEL = AGENT_MODEL_OPTIONS[0].id;
 /** 평상시 모델. 저장된 선택이 없을 때의 값이자 UI 의 '기본' 표식. */
 export const PRIMARY_AGENT_MODEL = DEFAULT_AGENT_MODEL;
 
-/** Codex 를 쓸 수 없을 때 대신 실행할 모델. Codex 와 다른 제공자여야 의미가 있다. */
-export const FALLBACK_AGENT_MODEL = "claude-opus-5";
+/**
+ * Codex 를 쓸 수 없을 때 대신 실행할 모델. Codex 와 다른 제공자여야 의미가 있다.
+ *
+ * ⚠️ Codex 모델과 마찬가지로 **번들 CLI 버전이 받쳐 줘야** 돈다. Agent SDK 0.1.77(번들
+ * Claude Code 2.0.77)은 claude-fable-5-1 에 HTTP 400 을 돌려준다
+ * ("does not support this model; version 2.1.251 or newer is required"). 0.3.261 에서
+ * 실측 확인했다. 여기를 바꿀 때는 package.json 의 @anthropic-ai/claude-agent-sdk 도 함께 본다.
+ *
+ * ⚠️ 이 경로는 로컬 Claude 로그인(Max 구독 OAuth)으로 돈다 — .env 의 ANTHROPIC_API_KEY 는
+ * 비어 있어 종량 과금이 아니다. 대신 **구독 한도**를 쓰므로, Fable 은 Opus 보다 주간 한도를
+ * 빨리 깎는다. 한도가 소진되면 FAILURE_SIGNALS 가 그 통보를 실패로 승격시킨다(agent-query.ts).
+ */
+export const FALLBACK_AGENT_MODEL = "claude-fable-5-1";
 
 /**
  * data/model.json 의 스키마.
@@ -88,8 +99,8 @@ function readState(): ModelState {
       let model = validModel(raw?.model) ?? DEFAULT_AGENT_MODEL;
       // 옛 스키마 이관: 예전 자동 전환은 `model` 자체를 대체 모델로 덮어썼고 주간 cron 이
       // 되돌렸다. 그 cron 이 사라졌으므로 남아 있는 덮어쓰기를 원래 선택(fallback.from)으로
-      // 돌려놓는다 — 그러지 않으면 고른 적 없는 Opus 5 에 영원히 눌러앉는다.
-      // (수동 선택은 fallback 을 null 로 지우므로 사용자가 직접 고른 Opus 는 여기 걸리지 않는다.)
+      // 돌려놓는다 — 그러지 않으면 고른 적 없는 대체 모델에 영원히 눌러앉는다.
+      // (수동 선택은 fallback 을 null 로 지우므로 사용자가 직접 고른 대체 모델은 여기 걸리지 않는다.)
       if (fallback && model === FALLBACK_AGENT_MODEL) {
         model = validModel(fallback.from) ?? model;
       }

@@ -80,12 +80,18 @@ export function preview(text: string, max = 400): string {
  * 원인(한도 소진/인증/크레딧)을 알 수 없어 원인 규명이 막힌다(실측: 실패 원문이 로그에
  * 전혀 남지 않아 반나절을 헤맴). 여기서 실패로 승격해 원문을 에러 메시지에 실어 보낸다.
  *
+ * `Not logged in · Please run /login` 은 로그인이 풀렸을 때의 통보다. 목록에 `Please run /login`
+ * 만 있던 동안에는 **정규식이 문두 고정**이라 이 33자짜리 결과가 통째로 '성공'으로 통과했다
+ * (2026-09-05 실측: 폴백 경로를 강제로 태우다 발견). 이 경로의 인증은 API 키가 아니라 로컬
+ * Claude 구독 OAuth 라서 만료·로그아웃이 실제로 일어나며, 조용히 통과하면 빈 스냅샷이 정상
+ * 저장된다.
+ *
  * `You've hit your limit · resets 6pm (Asia/Seoul)` 은 Claude CLI 의 한도 통보 형태다.
  * 목록에 없던 동안 이 47자짜리 결과가 '성공'으로 통과해 빈 스냅샷만 남겼다(로그 실측).
  * 한도 소진 시 자동 전환의 도착지가 Claude 이므로, 이 문구가 조용하면 전환 후 실패가
  * 그대로 묻힌다.
  *
- * ⚠️ 한도 문구에는 **라벨이 붙는다.** 번들 CLI(`node_modules/@anthropic-ai/claude-agent-sdk/cli.js`)
+ * ⚠️ 한도 문구에는 **라벨이 붙는다.** Agent SDK 가 번들한 Claude Code CLI
  * 는 `You've hit your ${라벨}` 로 문장을 만들고, 라벨은 `limit` / `session limit`(5시간) /
  * `Opus limit`(주간 Opus) / `weekly limit` / `Sonnet limit` / `usage limit` 6종이다.
  * 예전 패턴 `You'?ve hit your limit` 은 **그중 첫 번째 하나만** 잡았고 나머지 5종은 전부
@@ -95,7 +101,7 @@ export function preview(text: string, max = 400): string {
  * 발화하지 않는다(로또 실험의 4시간 자동 재개가 바로 이 경로에 걸려 있었다).
  */
 const FAILURE_SIGNALS =
-  /^\s*(API Error:|Claude AI usage limit reached|You'?ve hit your (?:\w+ ){0,2}limit|Credit balance is too low|Invalid API key|OAuth token has expired|Please run \/login|Execution error)/i;
+  /^\s*(API Error:|Claude AI usage limit reached|You'?ve hit your (?:\w+ ){0,2}limit|Credit balance is too low|Invalid API key|Not logged in|OAuth token has expired|Please run \/login|Execution error)/i;
 
 /** 결과 텍스트가 '성공을 가장한 실패 통보'인지. */
 export function isFailureSignal(text: string): boolean {
@@ -146,7 +152,7 @@ export async function runAgentQueryText(
 }
 
 /**
- * Codex 를 쓸 수 없을 때 **이번 실행만** 대체 모델(Opus 5)로 살린다.
+ * Codex 를 쓸 수 없을 때 **이번 실행만** 대체 모델(FALLBACK_AGENT_MODEL)로 살린다.
  *
  * 기록만 하고 던지면 그 수집은 통째로 빈 스냅샷이 된다 — 로그인은 아무 때나 풀리고 한도는
  * 정오에도 소진되므로 "다음 수집부터 정상"은 하루치 결과를 버리는 것과 같다.

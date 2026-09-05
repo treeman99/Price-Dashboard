@@ -24,7 +24,7 @@ test("Codex 모델만 별도 실행 경로로 분류한다", () => {
   assert.equal(isCodexModel("gpt-6-astra"), true);
   // 목록에서 빠진 옛 세대도 gpt- 접두어면 Codex 경로다(파일에 남은 값이 SDK 로 새지 않게).
   assert.equal(isCodexModel("gpt-5.6-sol"), true);
-  assert.equal(isCodexModel("claude-opus-5"), false);
+  assert.equal(isCodexModel("claude-fable-5-1"), false);
   assert.equal(isCodexModel(undefined), false);
 });
 

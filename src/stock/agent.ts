@@ -16,7 +16,7 @@ import { getAgentModel } from "../util/model-store.ts";
  *
  * ## 분리하지 **않은** 것: 모델
  * 사용자가 인터뷰에서 "모델은 그대로 따르고 에이전트만 분리"를 선택했다. 모델은 계속
- * `getAgentModel()`(대시보드에서 고른 Opus 5 / Codex)을 공유한다. 증시 전용 모델 선택을
+ * `getAgentModel()`(대시보드에서 고른 Codex / Fable 5.1)을 공유한다. 증시 전용 모델 선택을
  * 넣고 싶어지면 이 파일의 `model:` 한 줄만 바꾸면 된다.
  */
 

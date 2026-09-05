@@ -19,6 +19,9 @@ test("isFailureSignal — '성공을 가장한 실패 통보'를 잡아낸다", 
   assert.equal(isFailureSignal("Credit balance is too low"), true);
   assert.equal(isFailureSignal("Invalid API key · Please run /login"), true);
   assert.equal(isFailureSignal("OAuth token has expired"), true);
+  // 폴백 경로의 인증은 로컬 Claude 구독 OAuth 라 로그아웃이 실제로 일어난다. 정규식이 문두
+  // 고정이라 `Please run /login` 항목만으로는 이 문장을 잡지 못했다(2026-09-05 실측).
+  assert.equal(isFailureSignal("Not logged in · Please run /login"), true);
   assert.equal(isFailureSignal("Execution error"), true);
   // Claude CLI 의 짧은 한도 통보. 목록에 없던 동안 '성공'으로 통과해 빈 스냅샷만 남았다.
   assert.equal(isFailureSignal("You've hit your limit · resets 6pm (Asia/Seoul)"), true);
