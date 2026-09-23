@@ -92,8 +92,8 @@
 ## 사전 요구사항
 - **macOS** (launchd 서비스 등록 기준) / **Node.js 18 이상** (`node -v`로 확인, 권장 20+)
 - (선택) 네이버 개발자센터 검색 API 키 — 팝업·전시 탭의 webkr/blog 보강용. https://developers.naver.com/
-- (선택) Anthropic Console API 키 — Fable 5.1 큐레이션용
-- `@anthropic-ai/claude-agent-sdk` **0.3.x 이상** — `Fable 5.1` 은 번들 Claude Code 2.1.251+ 를 요구한다
+- (선택) Anthropic Console API 키 — Opus 5.5 큐레이션용
+- `@anthropic-ai/claude-agent-sdk` **0.3.280 이상** — `Opus 5.5` 는 번들 Claude Code 2.1.280+ 를 요구한다
   (0.1.x 는 HTTP 400 `claude_code_version_too_old`). `npm install` 로 package.json 의 범위를 따라간다
 - Codex CLI **0.155.0 이상** + ChatGPT 로그인 — **기본 모델(Codex 6 Sol)** 이 정액제 크레딧을 쓴다.
   구버전 CLI 는 `gpt-6-sol` 에 HTTP 400(`not supported when using Codex with a ChatGPT account`)을 돌려주고,
@@ -133,7 +133,7 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | 키 | 필수 | 설명 |
 |---|---|---|
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 팝업·전시에 필수 | 네이버 검색 API(webkr/blog). 팝업·전시 원본 코퍼스 = LLM 씨앗 + 링크 진실원 + 폴백. 없으면 그 탭이 빈 화면이 된다(다른 탭은 무관) |
-| `ANTHROPIC_API_KEY` | 선택 | Fable 5.1 큐레이션용. Codex 선택 시에는 불필요 |
+| `ANTHROPIC_API_KEY` | 선택 | Opus 5.5 큐레이션용. Codex 선택 시에는 불필요 |
 | `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`. 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
 | `EVENTS_COLLECT_TIME` | 기본 10:00 | 매일 팝업/전시 갱신 시각(로컬) |
@@ -141,14 +141,14 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 
 > 알림 자격증명이 없으면 이메일 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
 >
-> **AI 에이전트 선택**: 대시보드 상단에서 `Codex 6 Sol`(기본) · `Fable 5.1` 중 고른다.
+> **AI 에이전트 선택**: 대시보드 상단에서 `Codex 6 Sol`(기본) · `Opus 5.5` 중 고른다.
 > Codex는 `codex login status`가 `Logged in using ChatGPT`일 때만 실행하며,
 > `OPENAI_API_KEY`/`CODEX_API_KEY`를 전달하거나 API 종량 과금으로 자동 전환하지 않는다.
 >
 > **실행마다 Codex 확인 → 임시 대체**: Codex를 고른 상태에서 **수집을 실행할 때마다 Codex를 먼저
 > 확인**한다. 로그인이 초기화됐거나(`codex login status`가 ChatGPT 로그인이 아님), CLI가 없거나,
 > 정액제 한도가 소진됐으면(`You've hit your usage limit`, `Quota exceeded`, `429` 등)
-> **그 실행만** 남은 시간 안에서 `Fable 5.1`로 즉시 재시도해 결과를 살린다.
+> **그 실행만** 남은 시간 안에서 `Opus 5.5`로 즉시 재시도해 결과를 살린다.
 > 대시보드에 저장된 **선택은 그대로 유지**되고, 대체 중이라는 사실만 모델 버튼에 배지로 남는다.
 > 복귀에 정해진 시각은 없다 — 다음 실행에서 Codex가 다시 응답하는 순간 배지가 풀리고 그대로
 > Codex로 돌아간다. 프롬프트 오류·네트워크 오류 같은 '진짜 실패'는 대체하지 않고 그대로 실패한다
@@ -227,8 +227,8 @@ npx tsx src/cli.ts config                        # 현재 설정·경고 확인
 | 증상 | 원인 / 해결 |
 |---|---|
 | 대시보드에 "프론트가 아직 빌드되지 않았습니다" | `npm run web:build` 실행 후 새로고침 |
-| 모델 버튼에 "→ Fable 5.1 임시 대체" 배지 | Codex를 지금 못 쓰는 상태(로그인 초기화 / 정액제 한도 소진). 배지 안에 사유·시작 시각이 있다. 선택은 Codex 그대로이고, 다음 수집에서 Codex가 응답하면 저절로 풀린다. 로그인이 원인이면 `codex login` 후 다음 수집을 기다리거나 "지금 갱신"을 누르면 된다 |
-| Codex 수집이 로그인 오류로 실패 | `codex login` 실행 후 `codex login status`가 `Logged in using ChatGPT`인지 확인. API 키 로그인은 의도적으로 거부. 로그인이 풀린 동안에도 수집은 Fable 5.1로 대체 실행되므로 결과가 비지는 않는다 |
+| 모델 버튼에 "→ Opus 5.5 임시 대체" 배지 | Codex를 지금 못 쓰는 상태(로그인 초기화 / 정액제 한도 소진). 배지 안에 사유·시작 시각이 있다. 선택은 Codex 그대로이고, 다음 수집에서 Codex가 응답하면 저절로 풀린다. 로그인이 원인이면 `codex login` 후 다음 수집을 기다리거나 "지금 갱신"을 누르면 된다 |
+| Codex 수집이 로그인 오류로 실패 | `codex login` 실행 후 `codex login status`가 `Logged in using ChatGPT`인지 확인. API 키 로그인은 의도적으로 거부. 로그인이 풀린 동안에도 수집은 Opus 5.5로 대체 실행되므로 결과가 비지는 않는다 |
 | `ExperimentalWarning: SQLite ...` | Node 내장 SQLite 경고(무해). 서비스는 `NODE_NO_WARNINGS=1`로 숨김 |
 | 포트 충돌 | `.env`의 `PORT` 변경 후 재시작 |
 | launchd 서비스 상태 확인 | `launchctl print gui/$(id -u)/com.daegun.dailyprice \| head` / 로그: `logs/stderr.log` |

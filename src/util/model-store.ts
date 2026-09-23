@@ -31,11 +31,11 @@ export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
   {
     id: "gpt-6-sol",
     label: "Codex 6 Sol",
-    description: "기본값 — ChatGPT 정액제 Codex, 못 쓰는 동안만 Fable 5.1로 임시 대체",
+    description: "기본값 — ChatGPT 정액제 Codex, 못 쓰는 동안만 Opus 5.5로 임시 대체",
   },
   {
-    id: "claude-fable-5-1",
-    label: "Fable 5.1",
+    id: "claude-opus-5-5",
+    label: "Opus 5.5",
     description: "Codex를 못 쓸 때 대신 실행 — 가장 높은 수집·큐레이션 품질(Claude 구독 한도 사용)",
   },
 ];
@@ -49,16 +49,16 @@ export const PRIMARY_AGENT_MODEL = DEFAULT_AGENT_MODEL;
 /**
  * Codex 를 쓸 수 없을 때 대신 실행할 모델. Codex 와 다른 제공자여야 의미가 있다.
  *
- * ⚠️ Codex 모델과 마찬가지로 **번들 CLI 버전이 받쳐 줘야** 돈다. Agent SDK 0.1.77(번들
- * Claude Code 2.0.77)은 claude-fable-5-1 에 HTTP 400 을 돌려준다
- * ("does not support this model; version 2.1.251 or newer is required"). 0.3.261 에서
+ * ⚠️ Codex 모델과 마찬가지로 **번들 CLI 버전이 받쳐 줘야** 돈다. Agent SDK 0.3.261(번들
+ * Claude Code 2.1.261)은 claude-opus-5-5 에 HTTP 400 을 돌려준다
+ * ("does not support this model; version 2.1.280 or newer is required"). 0.3.280 에서
  * 실측 확인했다. 여기를 바꿀 때는 package.json 의 @anthropic-ai/claude-agent-sdk 도 함께 본다.
  *
  * ⚠️ 이 경로는 로컬 Claude 로그인(Max 구독 OAuth)으로 돈다 — .env 의 ANTHROPIC_API_KEY 는
- * 비어 있어 종량 과금이 아니다. 대신 **구독 한도**를 쓰므로, Fable 은 Opus 보다 주간 한도를
- * 빨리 깎는다. 한도가 소진되면 FAILURE_SIGNALS 가 그 통보를 실패로 승격시킨다(agent-query.ts).
+ * 비어 있어 종량 과금이 아니다. 대신 **구독 한도**를 쓰므로, Opus 5.5 도 주간 한도를
+ * 깎는다. 한도가 소진되면 FAILURE_SIGNALS 가 그 통보를 실패로 승격시킨다(agent-query.ts).
  */
-export const FALLBACK_AGENT_MODEL = "claude-fable-5-1";
+export const FALLBACK_AGENT_MODEL = "claude-opus-5-5";
 
 /**
  * data/model.json 의 스키마.

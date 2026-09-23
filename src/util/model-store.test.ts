@@ -31,12 +31,12 @@ test("기본 모델은 목록 첫 항목(Codex 6 Sol)", () => {
   assert.equal(DEFAULT_AGENT_MODEL, "gpt-6-sol");
   assert.equal(AGENT_MODEL_OPTIONS[0].id, DEFAULT_AGENT_MODEL);
   assert.equal(PRIMARY_AGENT_MODEL, "gpt-6-sol");
-  assert.equal(FALLBACK_AGENT_MODEL, "claude-fable-5-1");
+  assert.equal(FALLBACK_AGENT_MODEL, "claude-opus-5-5");
 });
 
-test("선택지는 Sol(기본) · Fable 5.1(대체)", () => {
+test("선택지는 Sol(기본) · Opus 5.5(대체)", () => {
   const ids = AGENT_MODEL_OPTIONS.map((o) => o.id);
-  assert.deepEqual(ids, ["gpt-6-sol", "claude-fable-5-1"]);
+  assert.deepEqual(ids, ["gpt-6-sol", "claude-opus-5-5"]);
   // 대체 모델이 목록에 없으면 임시 대체 중 UI 가 실제 실행 모델을 표시하지 못한다.
   assert.ok(ids.includes(FALLBACK_AGENT_MODEL));
 });
@@ -51,16 +51,16 @@ test("저장 전에는 기본값을 반환", () => {
 
 test("허용된 모델 저장 후 그 값을 반환", () => {
   resetStore();
-  const updated = saveAgentModel("claude-fable-5-1");
-  assert.equal(updated.model, "claude-fable-5-1");
-  assert.equal(getAgentModel(), "claude-fable-5-1");
+  const updated = saveAgentModel("claude-opus-5-5");
+  assert.equal(updated.model, "claude-opus-5-5");
+  assert.equal(getAgentModel(), "claude-opus-5-5");
 });
 
 test("허용 목록 밖 모델은 거부(throw)하고 저장값은 불변", () => {
   assert.throws(() => saveAgentModel("gpt-4o"), /허용되지 않은/);
   assert.throws(() => saveAgentModel(""), /허용되지 않은/);
   assert.throws(() => saveAgentModel(123), /허용되지 않은/);
-  assert.equal(getAgentModel(), "claude-fable-5-1"); // 직전 유효 저장 유지
+  assert.equal(getAgentModel(), "claude-opus-5-5"); // 직전 유효 저장 유지
 });
 
 test("사용 불가 기록은 사유를 남기되 **사용자 선택을 바꾸지 않는다**", () => {
@@ -103,15 +103,15 @@ test("다른 모델로 막히면 새 기록으로 취급한다(시각 재설정)
 test("수동 선택은 임시 대체 배지를 해제한다", () => {
   resetStore();
   recordCodexFallback("gpt-6-sol", "한도");
-  saveAgentModel("claude-fable-5-1");
+  saveAgentModel("claude-opus-5-5");
   const s = getModelSettings();
-  assert.equal(s.model, "claude-fable-5-1");
+  assert.equal(s.model, "claude-opus-5-5");
   assert.equal(s.fallback, null);
 });
 
 test("옛 스키마({model}만 있는 파일)도 그대로 읽힌다", () => {
-  fs.writeFileSync(storePath, JSON.stringify({ model: "claude-fable-5-1" }), "utf8");
-  assert.equal(getAgentModel(), "claude-fable-5-1");
+  fs.writeFileSync(storePath, JSON.stringify({ model: "claude-opus-5-5" }), "utf8");
+  assert.equal(getAgentModel(), "claude-opus-5-5");
   assert.equal(getModelSettings().fallback, null);
 });
 
@@ -120,7 +120,7 @@ test("이관: 옛 자동 전환이 덮어쓴 model 은 원래 선택으로 되�
   fs.writeFileSync(
     storePath,
     JSON.stringify({
-      model: "claude-fable-5-1",
+      model: "claude-opus-5-5",
       fallback: { from: "gpt-6-sol", at: "2026-07-20T12:00:00.000Z", reason: "한도" },
       lastWeeklyResetAt: "2026-07-15T12:00:00.000Z", // 옛 필드가 남아 있어도 무시된다
     }),
@@ -133,8 +133,8 @@ test("이관: 옛 자동 전환이 덮어쓴 model 은 원래 선택으로 되�
 test("이관: 사용자가 직접 고른 대체 모델(전환 기록 없음)은 건드리지 않는다", () => {
   fs.writeFileSync(
     storePath,
-    JSON.stringify({ model: "claude-fable-5-1", fallback: null }),
+    JSON.stringify({ model: "claude-opus-5-5", fallback: null }),
     "utf8"
   );
-  assert.equal(getAgentModel(), "claude-fable-5-1");
+  assert.equal(getAgentModel(), "claude-opus-5-5");
 });
