@@ -32,7 +32,7 @@ export interface ScheduleSettings {
 
 /** 선택 가능한 에이전트 모델 1건. */
 export interface AgentModelOption {
-  /** 제공자 실행기에 그대로 넘기는 모델 ID (예: "claude-fable-5-1", "gpt-6-astra"). */
+  /** 제공자 실행기에 그대로 넘기는 모델 ID (예: "claude-fable-5-1", "gpt-6-sol"). */
   id: string;
   /** UI 표시명 (예: "Fable 5.1"). */
   label: string;

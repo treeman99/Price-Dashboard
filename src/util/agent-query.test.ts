@@ -54,7 +54,7 @@ test("preview — 개행을 접고 길이를 제한한다", () => {
  * 정상 운영 중에는 절대 안 도는 코드라 "죽었는지" 알 방법이 테스트밖에 없다.
  * ------------------------------------------------------------------------- */
 
-const CODEX_MODEL = "gpt-6-astra";
+const CODEX_MODEL = "gpt-6-sol";
 const codexOptions = { model: CODEX_MODEL } as Omit<Options, "abortController">;
 
 interface FakeCall {
