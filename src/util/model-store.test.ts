@@ -27,16 +27,16 @@ function resetStore() {
   fs.rmSync(storePath, { force: true });
 }
 
-test("기본 모델은 목록 첫 항목(Codex 6 Sol)", () => {
-  assert.equal(DEFAULT_AGENT_MODEL, "gpt-6-sol");
+test("기본 모델은 목록 첫 항목(Codex 6.1 Sol)", () => {
+  assert.equal(DEFAULT_AGENT_MODEL, "gpt-6.1-sol");
   assert.equal(AGENT_MODEL_OPTIONS[0].id, DEFAULT_AGENT_MODEL);
-  assert.equal(PRIMARY_AGENT_MODEL, "gpt-6-sol");
+  assert.equal(PRIMARY_AGENT_MODEL, "gpt-6.1-sol");
   assert.equal(FALLBACK_AGENT_MODEL, "claude-opus-5-5");
 });
 
 test("선택지는 Sol(기본) · Opus 5.5(대체)", () => {
   const ids = AGENT_MODEL_OPTIONS.map((o) => o.id);
-  assert.deepEqual(ids, ["gpt-6-sol", "claude-opus-5-5"]);
+  assert.deepEqual(ids, ["gpt-6.1-sol", "claude-opus-5-5"]);
   // 대체 모델이 목록에 없으면 임시 대체 중 UI 가 실제 실행 모델을 표시하지 못한다.
   assert.ok(ids.includes(FALLBACK_AGENT_MODEL));
 });
@@ -65,19 +65,19 @@ test("허용 목록 밖 모델은 거부(throw)하고 저장값은 불변", () =
 
 test("사용 불가 기록은 사유를 남기되 **사용자 선택을 바꾸지 않는다**", () => {
   resetStore();
-  saveAgentModel("gpt-6-sol");
-  assert.equal(recordCodexFallback("gpt-6-sol", "You've hit your usage limit"), true);
+  saveAgentModel("gpt-6.1-sol");
+  assert.equal(recordCodexFallback("gpt-6.1-sol", "You've hit your usage limit"), true);
   // 핵심 회귀: 예전에는 여기서 저장 모델이 Opus 로 덮어써졌고, 되돌리는 유일한 장치가
   // 주간 cron 이었다. 선택이 그대로여야 다음 실행이 다시 Codex 를 시도한다.
-  assert.equal(getAgentModel(), "gpt-6-sol");
+  assert.equal(getAgentModel(), "gpt-6.1-sol");
   const s = getModelSettings();
-  assert.equal(s.fallback?.from, "gpt-6-sol");
+  assert.equal(s.fallback?.from, "gpt-6.1-sol");
   assert.match(s.fallback?.reason ?? "", /usage limit/);
 });
 
 test("대체가 이어지는 동안 최초 시각은 보존하고 사유만 갱신한다", () => {
   const first = getModelSettings().fallback?.at;
-  assert.equal(recordCodexFallback("gpt-6-sol", "로그인이 확인되지 않습니다"), false);
+  assert.equal(recordCodexFallback("gpt-6.1-sol", "로그인이 확인되지 않습니다"), false);
   const s = getModelSettings();
   assert.equal(s.fallback?.at, first); // '언제부터 못 쓰나'가 밀리면 안 된다
   assert.match(s.fallback?.reason ?? "", /로그인/); // 최신 원인은 보여야 한다
@@ -86,7 +86,7 @@ test("대체가 이어지는 동안 최초 시각은 보존하고 사유만 갱�
 test("Codex 가 다시 응답하면 대체 상태가 풀린다(달력 아닌 성공이 복귀 조건)", () => {
   assert.equal(clearCodexFallback(), true);
   assert.equal(getModelSettings().fallback, null);
-  assert.equal(getAgentModel(), "gpt-6-sol");
+  assert.equal(getAgentModel(), "gpt-6.1-sol");
   // 풀 게 없으면 조용히 false — 성공할 때마다 파일을 다시 쓰지 않기 위한 것이다.
   assert.equal(clearCodexFallback(), false);
 });
@@ -95,14 +95,14 @@ test("다른 모델로 막히면 새 기록으로 취급한다(시각 재설정)
   // 실제로 걸리는 경우: 모델 세대를 올린 뒤 옛 모델(gpt-6-sol) 기록이 파일에 남아 있는데
   // 새 모델이 막히는 상황. 'from' 이 갱신되지 않으면 화면이 없어진 모델을 사유로 설명한다.
   resetStore();
-  assert.equal(recordCodexFallback("gpt-6-astra", "한도"), true);
   assert.equal(recordCodexFallback("gpt-6-sol", "한도"), true);
-  assert.equal(getModelSettings().fallback?.from, "gpt-6-sol");
+  assert.equal(recordCodexFallback("gpt-6.1-sol", "한도"), true);
+  assert.equal(getModelSettings().fallback?.from, "gpt-6.1-sol");
 });
 
 test("수동 선택은 임시 대체 배지를 해제한다", () => {
   resetStore();
-  recordCodexFallback("gpt-6-sol", "한도");
+  recordCodexFallback("gpt-6.1-sol", "한도");
   saveAgentModel("claude-opus-5-5");
   const s = getModelSettings();
   assert.equal(s.model, "claude-opus-5-5");
@@ -121,12 +121,12 @@ test("이관: 옛 자동 전환이 덮어쓴 model 은 원래 선택으로 되�
     storePath,
     JSON.stringify({
       model: "claude-opus-5-5",
-      fallback: { from: "gpt-6-sol", at: "2026-07-20T12:00:00.000Z", reason: "한도" },
+      fallback: { from: "gpt-6.1-sol", at: "2026-07-20T12:00:00.000Z", reason: "한도" },
       lastWeeklyResetAt: "2026-07-15T12:00:00.000Z", // 옛 필드가 남아 있어도 무시된다
     }),
     "utf8"
   );
-  assert.equal(getAgentModel(), "gpt-6-sol");
+  assert.equal(getAgentModel(), "gpt-6.1-sol");
   assert.equal(getModelSettings().fallback?.at, "2026-07-20T12:00:00.000Z");
 });
 
