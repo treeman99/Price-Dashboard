@@ -30,6 +30,7 @@ import {
  * ⚠️ 따라서 한도 소진 시 자동 대체 모델 전환도 하지 않는다. 대신 전략 갱신만 미뤘다가
  *    4시간 뒤 같은 모델로 재시도한다(cycle.ts). **번호 추출은 미루지 않는다** —
  *    한도 소진 때문에 그 주 번호가 비면 안 되므로 직전 세대로 뽑아 둔다.
+ *    Claude 인증 실패(구독 OAuth 만료·로그아웃)도 같은 경로로 미룬다(isLottoAuthFailure).
  *
  * ## 모델 경계 (2026-09-05)
  * v1~v174 세대는 `claude-opus-5` 가 만들었고, v175 부터 `claude-fable-5-1` 이 이어받는다.
@@ -312,6 +313,27 @@ export function isLottoUsageLimit(e: unknown): boolean {
   return /credit balance is too low|upgrade to increase your usage limit/i.test(msg);
 }
 
+/**
+ * 잡은 예외가 **Claude 인증 실패**(구독 OAuth 만료·로그아웃·키 무효)인지.
+ *
+ * 왜 따로 가려내나: 인증 실패는 모델 출력의 문제가 아니라 **환경 장애**다. 1초 만에 토큰 소모
+ * 없이 실패하고, 사람이 다시 로그인하면(혹은 세션이 스스로 갱신되면) 같은 호출이 그대로
+ * 성공한다. 그런데 '그냥 실패'로 분류되면 cycle.ts 가 그 주 갱신을 포기해 버려 — 회복된 뒤에도
+ * 그 주 결과는 영영 반영되지 않는다(2026-10-04 실측: v178→v179 갱신이 `Failed to authenticate:
+ * OAuth session expired and could not be refreshed` 로 끝나 "JSON 미발견 → 직전 사양 유지").
+ * 한도 소진처럼 미뤘다가 4시간 뒤 재시도해야 재로그인 후 자동으로 회복된다.
+ *
+ * 문구는 agent-query 의 FAILURE_SIGNALS·is_error 경로가 `Agent API 오류: <원문>` 으로 실어
+ * 올리는 Claude CLI 통보들이다. 오탐이면 4시간마다 같은 실패를 반복하므로 인증 고유 문구만 본다.
+ */
+export function isLottoAuthFailure(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  if (!msg) return false;
+  return /failed to authenticate|oauth session expired|oauth token has expired|not logged in|please run \/login|invalid api key|authentication_error/i.test(
+    msg
+  );
+}
+
 export interface LottoEvolveProposal {
   spec: LottoStrategySpec;
   hypothesis: string;
@@ -321,10 +343,10 @@ export interface LottoEvolveProposal {
 }
 
 /**
- * 전략 개정 1회. 실패는 throw — 호출부가 '한도라서 멈춤'과 '그냥 실패'를 구분해 처리한다.
+ * 전략 개정 1회. 실패는 throw — 호출부가 '한도·인증이라서 미룸'과 '그냥 실패'를 구분해 처리한다.
  *
  * ⚠️ 실패해도 **직전 세대를 그대로 이어 쓰면 안 된다**는 규칙은 여기 없다. 호출부가 정한다:
- *    한도면 멈췄다가 재개(세대 유지), 그 외 오류면 세대를 유지한 채 다음 구간으로 진행한다.
+ *    한도·인증 실패면 미뤘다가 재개(세대 유지), 그 외 오류면 세대를 유지한 채 다음 구간으로 진행한다.
  *    전략이 없는 회차를 만들지 않는 것이 우선이기 때문이다.
  */
 export async function runLottoEvolveAgent(

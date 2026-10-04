@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { LottoDraw } from "../../shared/lotto.ts";
 
 /**
@@ -16,33 +17,41 @@ import type { LottoDraw } from "../../shared/lotto.ts";
  *
  * ⚠️ 이 테스트는 실제 SQLite 를 쓴다(임시 파일). config 가 모듈 초기화 시점에 DB_PATH 를
  *    읽으므로, **import 보다 먼저** 환경변수를 세워야 한다 → 아래 동적 import.
+ * ⚠️ 사이클 상태 파일(lotto-state.json)은 **DB 옆**에 생긴다. tmpdir 바로 아래에 DB 를 두면
+ *    다른 실행과 상태 파일을 공유하므로 전용 임시 디렉터리를 쓴다.
  */
-const DB_FILE = path.join(os.tmpdir(), `lotto-cycle-test-${process.pid}.db`);
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "lotto-cycle-test-"));
+const DB_FILE = path.join(TMP_DIR, "price.db");
 process.env.DB_PATH = DB_FILE;
 
 const { saveDraws } = await import("./draws.ts");
 const {
   clearUpcoming,
   ensureSeedStrategy,
+  getLottoState,
   getUpcoming,
   insertStrategy,
   lastScored,
+  latestStrategy,
   recentResultsWithDraw,
   saveUpcoming,
   summarize,
 } = await import("./store.ts");
-const { scorePendingPicks, writeUpcomingPicks } = await import("./cycle.ts");
+const {
+  LOTTO_RETRY_WAIT_MS,
+  __setCycleDepsForTest,
+  runWeeklyCycle,
+  scorePendingPicks,
+  shouldRunCycle,
+  writeUpcomingPicks,
+} = await import("./cycle.ts");
+const { __setAgentQueryDepsForTest } = await import("../util/agent-query.ts");
+const { LOTTO_AGENT_MODEL } = await import("./agent.ts");
 const { closeDb } = await import("../db/index.ts");
 
 after(() => {
   closeDb();
-  for (const suffix of ["", "-wal", "-shm"]) {
-    try {
-      fs.rmSync(`${DB_FILE}${suffix}`);
-    } catch {
-      /* 없으면 지울 것도 없다 */
-    }
-  }
+  fs.rmSync(TMP_DIR, { recursive: true, force: true });
 });
 
 const RUN = 1;
@@ -136,4 +145,120 @@ test("추첨 전 회차는 채점하지 않고 그대로 둔다", () => {
   writeUpcomingPicks(RUN, seed, 4); // 4회차 추첨 결과는 아직 없다
   assert.equal(scorePendingPicks(), null);
   assert.equal(getUpcoming()?.round, 4, "추첨 전 추천 번호가 사라졌다");
+});
+
+/* ------------------------------------------------------------------------- *
+ * Claude 인증 실패 → 전략 갱신만 미루고 4시간 뒤 재시도
+ *
+ * 2026-10-04 사고: 구독 OAuth 세션 만료로 v178→v179 갱신이 실패했는데 사이클은 이를 '그냥
+ * 실패'로 보고 lastEvolvedRound 를 진행시켰다(그 주 갱신 포기). 인증은 재로그인하면 그대로
+ * 회복되는 환경 장애라 한도 소진처럼 미뤄야 한다. 아래는 SDK 스트림 층만 가짜로 두고
+ * agent-query → 로또 에이전트 → 사이클의 실제 분류 경로를 그대로 태운다.
+ * ------------------------------------------------------------------------- */
+
+const AUTH_EXPIRED = "Failed to authenticate: OAuth session expired and could not be refreshed";
+
+/** 하위 CLI 가 실제로 내보낸 모양: is_error 결과 뒤 "returned an error result" 로 스트림 종료. */
+function authExpiredStream(): AsyncIterable<SDKMessage> {
+  return (async function* () {
+    yield { type: "result", subtype: "success", is_error: true, result: AUTH_EXPIRED } as unknown as SDKMessage;
+    throw new Error(`Claude Code returned an error result: ${AUTH_EXPIRED}`);
+  })();
+}
+
+function okStream(text: string): AsyncIterable<SDKMessage> {
+  return (async function* () {
+    yield { type: "result", subtype: "success", is_error: false, result: text } as unknown as SDKMessage;
+  })();
+}
+
+/** 동행복권을 부르지 않는 수집기. 수집 실패의 retry 가 검증 대상 분기를 가리지 않게 한다. */
+const noNetworkSync = async () => ({ added: 0, latest: 4 });
+
+test("Claude 인증 실패면 갱신을 미루고(재시도 예약·lastEvolvedRound 유지) 번호는 직전 세대로 확정한다", async () => {
+  // 4회차 추첨 결과가 들어와, 못박아 둔 4회차 번호를 채점하고 에이전트를 부를 차례다.
+  saveDraws([draw(4, [1, 2, 3, 4, 5, 6], 7)]);
+  const before = latestStrategy();
+  assert.ok(before);
+  const models: unknown[] = [];
+  const restoreCycle = __setCycleDepsForTest({ syncDraws: noNetworkSync });
+  const restoreAgent = __setAgentQueryDepsForTest({
+    sdkQuery: ({ options }) => {
+      models.push(options.model);
+      return authExpiredStream();
+    },
+  });
+  try {
+    const startedAt = Date.now();
+    const r = await runWeeklyCycle("test");
+
+    assert.equal(models.length, 1, "에이전트가 한 번 불려야 한다");
+    assert.equal(models[0], LOTTO_AGENT_MODEL);
+    assert.equal(r.scoredRound, 4);
+    assert.equal(r.reason, "auth-failed");
+    assert.equal(r.usageLimited, false, "한도 소진과 구분돼야 한다");
+    assert.equal(r.newVersion, null);
+    assert.equal(latestStrategy()?.version, before.version, "실패한 갱신이 새 세대를 찍으면 안 된다");
+
+    const st = getLottoState();
+    assert.match(st.lastError ?? "", /인증/);
+    assert.doesNotMatch(st.lastError ?? "", /JSON 미발견|한도/);
+    assert.ok(st.retryAt, "재시도가 예약돼야 한다");
+    const retryAt = new Date(st.retryAt).getTime();
+    assert.ok(
+      retryAt >= startedAt + LOTTO_RETRY_WAIT_MS && retryAt <= Date.now() + LOTTO_RETRY_WAIT_MS,
+      `retryAt=${st.retryAt} 가 4시간 뒤가 아니다`
+    );
+    // ★ 핵심: 포기(진행)하면 재로그인 뒤에도 4회차 결과가 영영 반영되지 않는다.
+    assert.equal(st.lastEvolvedRound, null, "인증 실패로 lastEvolvedRound 가 진행됐다");
+
+    // 번호 추출은 미루지 않는다 — 직전 세대로 5회차를 못박는다.
+    const pinned = getUpcoming();
+    assert.equal(pinned?.round, 5);
+    assert.equal(pinned?.version, before.version);
+  } finally {
+    restoreAgent();
+    restoreCycle();
+  }
+});
+
+test("재로그인 뒤 4시간 재시도에서 미뤘던 갱신이 회복되고, 못박은 번호는 그대로다", async () => {
+  const before = latestStrategy();
+  const pinned = getUpcoming();
+  assert.ok(before && pinned);
+  // 예약 시각이 지나면 일요일이 아니어도 사이클이 다시 돈다.
+  assert.equal(
+    shouldRunCycle(new Date(Date.now() + LOTTO_RETRY_WAIT_MS + 60_000), getLottoState(), true),
+    true
+  );
+
+  const proposal = JSON.stringify({
+    spec: before.spec,
+    changed: [],
+    hypothesis: "표본 1회차라 사양을 유지한다.",
+    rationale: "근거가 표준오차를 넘지 못했다.",
+  });
+  const restoreCycle = __setCycleDepsForTest({ syncDraws: noNetworkSync });
+  const restoreAgent = __setAgentQueryDepsForTest({ sdkQuery: () => okStream(proposal) });
+  try {
+    const r = await runWeeklyCycle("retry");
+    assert.equal(r.reason, "ok");
+    assert.equal(r.error, null);
+    assert.equal(r.newVersion, before.version + 1, "미뤘던 4회차 결과로 갱신돼야 한다");
+
+    const st = getLottoState();
+    assert.equal(st.lastEvolvedRound, 4);
+    assert.equal(st.retryAt, null);
+    assert.equal(st.lastError, null);
+
+    // 새 세대는 못박은 5회차 **다음**부터 적용되고, 5회차 번호는 바뀌지 않는다.
+    assert.equal(latestStrategy()?.fromRound, 6);
+    const again = getUpcoming();
+    assert.equal(again?.round, 5);
+    assert.equal(again?.version, pinned.version);
+    assert.deepEqual(again?.sets, pinned.sets);
+  } finally {
+    restoreAgent();
+    restoreCycle();
+  }
 });

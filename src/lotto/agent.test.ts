@@ -4,6 +4,7 @@ import {
   LOTTO_AGENT_MODEL,
   LOTTO_AGENT_WINDOW,
   buildEvolvePrompt,
+  isLottoAuthFailure,
   isLottoUsageLimit,
   type LottoEvolveContext,
 } from "./agent.ts";
@@ -202,4 +203,34 @@ test("한도가 아닌 실패를 한도로 오인하지 않는다", () => {
   assert.equal(isLottoUsageLimit(new Error("Agent 응답 시간 초과(600s)")), false);
   assert.equal(isLottoUsageLimit(new Error("Agent 비정상 종료(error_max_turns)")), false);
   assert.equal(isLottoUsageLimit(null), false);
+});
+
+/**
+ * 인증 실패는 **환경 장애**라 한도처럼 미뤘다가 재시도해야 한다. '그냥 실패'로 떨어지면 그 주
+ * 갱신이 포기돼 재로그인 뒤에도 영영 반영되지 않는다(2026-10-04: v178→v179 가 OAuth 만료로
+ * "JSON 미발견 → 사양 유지"). agent-query 가 실어 올리는 형태 그대로 못박는다.
+ */
+test("Claude 인증 실패를 알아본다", () => {
+  const notices = [
+    "Failed to authenticate: OAuth session expired and could not be refreshed", // 2026-10-04 실측 원문
+    "OAuth token has expired. Please obtain a new token or refresh your existing token.",
+    "Not logged in · Please run /login",
+    "Invalid API key · Please run /login",
+    'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+  ];
+  for (const n of notices) {
+    assert.ok(isLottoAuthFailure(new Error(`Agent API 오류: ${n}`)), `인증 실패로 분류되지 않음: ${n}`);
+    // 한도로 잘못 분류되면 사유 문구가 "토큰 한도 소진" 으로 나가 재로그인이 필요하다는 사실이 가려진다.
+    assert.equal(isLottoUsageLimit(new Error(`Agent API 오류: ${n}`)), false, `한도로 오분류: ${n}`);
+  }
+});
+
+test("인증이 아닌 실패를 인증 실패로 오인하지 않는다", () => {
+  // 오인하면 모델 출력 문제를 4시간마다 같은 방식으로 반복한다.
+  assert.equal(isLottoAuthFailure(new Error("JSON 미발견")), false);
+  assert.equal(isLottoAuthFailure(new Error("Agent 응답 시간 초과(600s)")), false);
+  assert.equal(isLottoAuthFailure(new Error("Agent 비정상 종료(error_max_turns)")), false);
+  assert.equal(isLottoAuthFailure(new Error("Agent API 오류: You've hit your Opus limit · resets 3pm")), false);
+  assert.equal(isLottoAuthFailure(new Error("Agent API 오류: API Error: 500 Internal server error")), false);
+  assert.equal(isLottoAuthFailure(null), false);
 });

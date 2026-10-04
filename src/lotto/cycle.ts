@@ -4,6 +4,7 @@ import { generateSets } from "./strategy.ts";
 import {
   LOTTO_AGENT_RECENT,
   LOTTO_AGENT_WINDOW,
+  isLottoAuthFailure,
   isLottoUsageLimit,
   runLottoEvolveAgent,
 } from "./agent.ts";
@@ -56,12 +57,34 @@ export const LOTTO_CYCLE_CRON = `0 ${LOTTO_CYCLE_HOUR} * * ${LOTTO_CYCLE_WEEKDAY
 export const LOTTO_CYCLE_LABEL = "일요일 10:00";
 
 /**
- * 실패(수집 오류·토큰 한도) 후 재시도까지 기다리는 시간.
+ * 실패(수집 오류·토큰 한도·Claude 인증) 후 재시도까지 기다리는 시간.
  * 다음 주까지 미루면 그 주의 전략 갱신이 통째로 사라지므로 짧게 되돌아온다.
  */
 export const LOTTO_RETRY_WAIT_MS = 4 * 60 * 60 * 1000;
 
 let cycling = false;
+
+/**
+ * 외부 수집 주입 지점. **테스트 전용**이다(agent-query 의 __setAgentQueryDepsForTest 와 같은 관례).
+ *
+ * 사이클의 실패 분기(한도·인증으로 미룸 vs 포기)는 실제 상태 파일·DB 에 무엇이 남는지로만
+ * 검증할 수 있는데, 1번 수집이 동행복권을 실제로 부르면 테스트가 네트워크에 묶이고, 수집이
+ * 실패하면 그 자체로 retry 가 서서 검증하려는 분기가 가려진다.
+ */
+interface CycleDeps {
+  syncDraws: () => Promise<{ added: number; latest: number }>;
+}
+
+let deps: CycleDeps = { syncDraws: () => syncDraws() };
+
+/** 테스트에서 수집기를 갈아끼운다. 반환된 함수로 반드시 원복할 것(운영 코드는 호출 금지). */
+export function __setCycleDepsForTest(patch: Partial<CycleDeps>): () => void {
+  const prev = deps;
+  deps = { ...deps, ...patch };
+  return () => {
+    deps = prev;
+  };
+}
 
 export function isCycleRunning(): boolean {
   return cycling;
@@ -111,9 +134,14 @@ export interface CycleResult {
   newVersion: number | null;
   /** 못박은(또는 이미 못박혀 있던) 다음 회차 */
   upcomingRound: number | null;
-  /** 토큰 한도로 전략 갱신을 미뤘는지 */
+  /** 토큰 한도로 전략 갱신을 미뤘는지. 인증 실패로 미룬 경우는 false 다(reason 으로 구분) */
   usageLimited: boolean;
   error: string | null;
+  /**
+   * 사이클이 끝난 사유. "ok" · "already-running" · "sync-failed" · "error" 와, 전략 갱신 결과인
+   * "usage-limit"(한도 — 미루고 재시도) · "auth-failed"(Claude 인증 — 미루고 재시도) ·
+   * "evolve-failed"(그 외 — 그 주 갱신 포기).
+   */
   reason: string;
 }
 
@@ -150,7 +178,7 @@ export async function runWeeklyCycle(trigger: string): Promise<CycleResult> {
     // 1) 새 추첨 결과 수집. 실패해도 멈추지 않는다 — 이미 가진 회차로 채점·추출은 되고,
     //    '새 회차가 없다'로 자연히 흘러간다. 대신 4시간 뒤 재시도를 예약한다.
     try {
-      const r = await syncDraws();
+      const r = await deps.syncDraws();
       if (r.added > 0) log.info(`로또 회차 신규 ${r.added}건 확보 — 최신 ${r.latest}회차`);
     } catch (e) {
       error = `회차 수집 실패: ${(e as Error).message}`;
@@ -197,9 +225,17 @@ export async function runWeeklyCycle(trigger: string): Promise<CycleResult> {
         retry = true;
         reason = "usage-limit";
         error = "토큰 한도 소진 — 전략 갱신을 미뤘습니다(번호는 직전 세대로 확정했습니다).";
+      } else if (r.authFailed) {
+        // 인증 실패는 모델 출력 문제가 아니라 환경 장애다 — 토큰 소모 없이 즉시 실패하고, 재로그인
+        // (또는 세션 자가 갱신) 뒤에는 같은 호출이 그대로 성공한다. 그래서 한도처럼 미루고
+        // lastEvolvedRound 를 진행시키지 않는다. 포기하면 회복된 뒤에도 그 주 결과가 영영 반영되지
+        // 않는다(2026-10-04: v178→v179 갱신이 OAuth 만료로 "JSON 미발견 → 사양 유지"로 끝났다).
+        retry = true;
+        reason = "auth-failed";
+        error = "Claude 인증 실패 — 전략 갱신을 미뤘습니다(번호는 직전 세대로 확정했습니다).";
       } else {
-        // 한도가 아닌 실패까지 재시도 대상으로 두면 4시간마다 같은 실패를 반복한다. 그 주의
-        // 갱신 한 번을 포기하고, 다음 주에 누적된 결과로 다시 부른다.
+        // 한도·인증이 아닌 실패(모델 출력 문제 등)까지 재시도 대상으로 두면 4시간마다 같은 실패를
+        // 반복한다. 그 주의 갱신 한 번을 포기하고, 다음 주에 누적된 결과로 다시 부른다.
         setLottoState({ lastEvolvedRound: last.round });
         if (r.error) {
           error = `전략 갱신 실패(직전 사양 유지): ${r.error}`;
@@ -208,8 +244,8 @@ export async function runWeeklyCycle(trigger: string): Promise<CycleResult> {
       }
     }
 
-    // 4) 다음 회차 번호를 뽑아 못박는다. 3번이 실패했어도 **반드시** 한다 — 한도 소진 때문에
-    //    그 주의 번호가 비면 사용자가 볼 것이 없어진다.
+    // 4) 다음 회차 번호를 뽑아 못박는다. 3번이 실패했어도 **반드시** 한다 — 한도 소진·인증
+    //    실패 때문에 그 주의 번호가 비면 사용자가 볼 것이 없어진다.
     upcomingRound = writeUpcomingPicks(run, strategy, range.latest + 1);
 
     setLottoState({
@@ -320,15 +356,20 @@ export function writeUpcomingPicks(run: number, strategy: LottoStrategy, round: 
 /**
  * 전략 갱신 1회.
  *
- * 실패를 던지지 않고 분류해 돌려준다 — 호출부가 '한도라서 미룸'(재시도)과 '그냥 실패'(포기)를
- * 다르게 처리해야 하고, 어느 쪽이든 **번호 추출은 계속돼야** 하기 때문이다.
+ * 실패를 던지지 않고 분류해 돌려준다 — 호출부가 '한도·인증이라서 미룸'(재시도)과 '그냥 실패'
+ * (포기)를 다르게 처리해야 하고, 어느 쪽이든 **번호 추출은 계속돼야** 하기 때문이다.
  */
 async function evolve(
   run: number,
   fromRound: number,
   current: LottoStrategy,
   scoredThrough: number
-): Promise<{ strategy: LottoStrategy | null; usageLimited: boolean; error?: string }> {
+): Promise<{
+  strategy: LottoStrategy | null;
+  usageLimited: boolean;
+  authFailed?: boolean;
+  error?: string;
+}> {
   const recent = recentResultsWithDraw(run, LOTTO_AGENT_RECENT);
   try {
     const proposal = await runLottoEvolveAgent({
@@ -361,6 +402,10 @@ async function evolve(
     if (isLottoUsageLimit(err)) {
       log.warn(`로또 전략 갱신 토큰 한도 소진 — 4시간 뒤 재시도 (${err.message})`);
       return { strategy: null, usageLimited: true };
+    }
+    if (isLottoAuthFailure(err)) {
+      log.warn(`로또 전략 갱신 인증 실패 — 4시간 뒤 재시도 (${err.message})`);
+      return { strategy: null, usageLimited: false, authFailed: true };
     }
     log.error(`로또 전략 갱신 실패 → 직전 사양(v${current.version}) 유지: ${err.message}`);
     return { strategy: null, usageLimited: false, error: err.message };
