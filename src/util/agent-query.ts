@@ -1,4 +1,4 @@
-import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "./log.ts";
 import { isCodexModel, isCodexUnavailableError, runCodexQueryText } from "./codex-query.ts";
 import {
@@ -32,6 +32,10 @@ export const FALLBACK_TIMEOUT_MS = 20 * 60_000;
  * 죽은 채로 몇 달을 지나 정작 필요한 날(로그인 초기화·한도 소진·절전) 하루치를 통째로
  * 날린다. 실제로 그렇게 됐다. 회귀 테스트가 폴백 '진입'과 '실제 호출'을 검증하려면 하위
  * 실행기(Codex CLI·Claude SDK)와 상태 저장(model.json 쓰기)을 갈아끼울 수 있어야 한다.
+ *
+ * `sdkQuery` 는 한 층 더 아래 — Claude 경로가 SDK 스트림을 **어떻게 해석하는지**를 검증하는
+ * 지점이다. runClaude 를 통째로 갈면 is_error 결과·종료 오류 같은 스트림 해석 규칙이 테스트에서
+ * 빠진다(2026-10-04 사고가 정확히 그 해석 규칙의 구멍이었다).
  */
 export interface AgentQueryDeps {
   runCodex: (
@@ -48,11 +52,13 @@ export interface AgentQueryDeps {
   ) => Promise<string>;
   recordFallback: (fromModel: string, reason: string) => boolean;
   clearFallback: () => boolean;
+  sdkQuery: (params: { prompt: string; options: Options }) => AsyncIterable<SDKMessage>;
 }
 
 const defaultDeps: AgentQueryDeps = {
   runCodex: runCodexQueryText,
   runClaude: runClaudeAgentQueryText,
+  sdkQuery: query,
   recordFallback: recordCodexFallback,
   clearFallback: clearCodexFallback,
 };
@@ -99,9 +105,14 @@ export function preview(text: string, max = 400): string {
  * 그래서 라벨 자리를 낱말 2개까지 허용한다 — Codex 쪽 패턴과 같은 방식이다.
  * 이게 조용하면 한도 소진이 "JSON 미발견" 으로 둔갑해, 한도 기반 대기·전환 로직이 통째로
  * 발화하지 않는다(로또 실험의 4시간 자동 재개가 바로 이 경로에 걸려 있었다).
+ *
+ * `Failed to authenticate: OAuth session expired and could not be refreshed` 는 구독 OAuth
+ * 세션이 만료돼 갱신까지 실패했을 때의 통보다. 이 72자가 목록에 없어 로또 전략 갱신이
+ * "JSON 미발견" 으로 끝났다(2026-10-04 실측). 근본 원인은 is_error 결과를 성공으로 읽은
+ * 스트림 해석(runClaudeAgentQueryText)이고 거기서 막지만, 이 목록은 방어 심층으로 함께 둔다.
  */
 const FAILURE_SIGNALS =
-  /^\s*(API Error:|Claude AI usage limit reached|You'?ve hit your (?:\w+ ){0,2}limit|Credit balance is too low|Invalid API key|Not logged in|OAuth token has expired|Please run \/login|Execution error)/i;
+  /^\s*(API Error:|Claude AI usage limit reached|You'?ve hit your (?:\w+ ){0,2}limit|Credit balance is too low|Invalid API key|Not logged in|OAuth token has expired|Failed to authenticate|OAuth session expired|Please run \/login|Execution error)/i;
 
 /** 결과 텍스트가 '성공을 가장한 실패 통보'인지. */
 export function isFailureSignal(text: string): boolean {
@@ -198,7 +209,7 @@ async function runClaudeAgentQueryText(
   label = "agent"
 ): Promise<string> {
   const ac = new AbortController();
-  const q = query({ prompt, options: { ...options, abortController: ac } });
+  const q = deps.sdkQuery({ prompt, options: { ...options, abortController: ac } });
 
   let finalText = "";
   let timedOut = false;
@@ -223,6 +234,9 @@ async function runClaudeAgentQueryText(
   let turns = 0;
   let toolCalls = 0;
   let nonSuccessSubtype: string | null = null;
+  // is_error:true 로 끝난 success 결과의 본문(= 오류 문구). 아래 catch 의 '결과 살리기' 분기가
+  // 이것을 결과로 착각하지 않도록 finalText 와 따로 든다.
+  let errorResultText: string | null = null;
   const heartbeat = setInterval(
     () => {
       log.info(
@@ -242,7 +256,18 @@ async function runClaudeAgentQueryText(
         }
       }
       if (msg.type === "result") {
-        if (msg.subtype === "success") finalText = msg.result;
+        if (msg.subtype === "success" && msg.is_error) {
+          // ⚠️ subtype 이 success 여도 is_error:true 면 result 는 답이 아니라 **오류 문구**다(SDK
+          // 계약: "with is_error true, the error text when the turn ended on an API error").
+          // 예전엔 subtype 만 보고 finalText 에 담았고, 이어서 스트림이 "returned an error result"
+          // 로 터지자 catch 의 '결과가 손에 있으니 살린다' 분기가 그 오류 문구를 결과로 살렸다
+          // (2026-10-04 실측: `Failed to authenticate: OAuth session expired …` 72자가 로또 전략
+          // 갱신의 응답으로 넘어가 "JSON 미발견" 으로 둔갑 → 인증 장애가 모델 출력 문제로 보였다).
+          errorResultText = msg.result;
+          log.warn(
+            `${label}: 오류 결과 수신(is_error) — ${turns}턴, 도구 ${toolCalls}회: ${preview(msg.result)}`
+          );
+        } else if (msg.subtype === "success") finalText = msg.result;
         else {
           // success 가 아닌 종료(대표적으로 maxTurns 소진: "error_max_turns"). 결과 텍스트가
           // 없으므로 호출부에는 "결과가 비어 있습니다"로만 보여, 작업량이 상한을 넘었다는
@@ -254,6 +279,9 @@ async function runClaudeAgentQueryText(
     }
   } catch (e) {
     if (timedOut) throw agentTimeoutError(timeoutMs, deadline, turns, toolCalls);
+    // 오류 결과 뒤의 종료 오류는 '종료 단계 잡음'이 아니라 그 오류의 연장이다 — 하위 CLI 는 오류
+    // 결과를 내보낸 뒤 "returned an error result" 로 스트림을 끊는다. 살릴 결과가 애초에 없다.
+    if (errorResultText !== null) throw agentApiError(errorResultText);
     // 이미 success 결과를 받아둔 뒤에 스트림이 터지는 경우가 실제로 있다(하위 CLI 프로세스가
     // 결과를 내보내고 나서 종료 코드 1로 죽는 사례를 실측). 그대로 rethrow 하면 멀쩡히 받아온
     // 큐레이션 결과를 통째로 버리고 빈 스냅샷으로 저하되는데, 결과가 손에 있는 이상 그건 손해다.
@@ -269,6 +297,8 @@ async function runClaudeAgentQueryText(
 
   // abort 가 예외 없이 스트림을 끝낸 경우도 타임아웃으로 처리
   if (timedOut) throw agentTimeoutError(timeoutMs, deadline, turns, toolCalls);
+  // 스트림이 예외 없이 끝났어도 오류 결과는 실패다(종료 오류가 따라오는지는 CLI 판본에 달렸다).
+  if (errorResultText !== null) throw agentApiError(errorResultText);
 
   log.info(
     `${label}: 완료 — 유효 ${Math.round(deadline.elapsedMs() / 1000)}초` +
@@ -312,10 +342,19 @@ function agentTimeoutError(
   );
 }
 
+/**
+ * 실패 통보를 호출부가 받는 단일 형태로 만든다. 접두어를 한 곳에 묶는 이유: 호출부의 원인
+ * 분류(로또의 isLottoUsageLimit·isLottoAuthFailure 등)가 이 메시지에 실린 **원문**을 읽는다 —
+ * is_error 결과와 '성공을 가장한 실패'가 서로 다른 모양으로 올라가면 한쪽 분류가 조용히 빠진다.
+ */
+function agentApiError(text: string): Error {
+  return new Error(`Agent API 오류: ${preview(text, 300) || "(본문 없음)"}`);
+}
+
 /** 제공자와 무관하게 마지막 응답에 동일한 실패·JSON 진단 규칙을 적용한다. */
 function validateFinalText(finalText: string, label: string): string {
   if (isFailureSignal(finalText)) {
-    throw new Error(`Agent API 오류: ${preview(finalText, 300)}`);
+    throw agentApiError(finalText);
   }
   // 호출부는 대부분 JSON 을 기대한다. 중괄호조차 없으면 파싱은 반드시 "JSON 미발견" 으로 실패하는데,
   // 그 메시지만 로그에 남으면 무엇이 왔는지 알 길이 없다(실측: 원인 규명에 실패). 원문을 남긴다.

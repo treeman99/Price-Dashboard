@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   FALLBACK_TIMEOUT_MS,
   __setAgentQueryDepsForTest,
@@ -27,6 +27,13 @@ test("isFailureSignal — '성공을 가장한 실패 통보'를 잡아낸다", 
   assert.equal(isFailureSignal("You've hit your limit · resets 6pm (Asia/Seoul)"), true);
   // 앞쪽 공백/개행이 붙어도 잡아야 한다(스트림 조립 잔여물).
   assert.equal(isFailureSignal("\n  API Error: 500"), true);
+  // 구독 OAuth 세션 만료 통보. 목록에 없던 동안 로또 전략 갱신이 "JSON 미발견" 으로 둔갑했다
+  // (2026-10-04 실측 원문 그대로).
+  assert.equal(
+    isFailureSignal("Failed to authenticate: OAuth session expired and could not be refreshed"),
+    true
+  );
+  assert.equal(isFailureSignal("OAuth session expired and could not be refreshed"), true);
 });
 
 test("isFailureSignal — 정상 결과는 통과시킨다", () => {
@@ -273,5 +280,99 @@ test("Claude 모델을 고르면 Codex 경로를 아예 타지 않는다", async
     assert.equal(fake.claudeCalls[0].timeoutMs, 600_000, "직접 선택한 경로는 원 예산 그대로");
   } finally {
     fake.restore();
+  }
+});
+
+/* ------------------------------------------------------------------------- *
+ * Claude 스트림 해석 — is_error 결과
+ *
+ * 2026-10-04 사고: 하위 CLI 가 `{subtype:"success", is_error:true, result:"Failed to authenticate:
+ * …"}` 를 내보낸 뒤 "Claude Code returned an error result" 로 스트림을 끊었다. 예전 코드는 subtype
+ * 만 보고 오류 문구를 결과로 담았고, 종료 오류 catch 의 '결과가 손에 있으니 살린다' 분기가 그것을
+ * 그대로 살려 호출부에 "JSON 미발견" 만 남겼다. runClaude 를 통째로 갈면 이 해석 규칙이 빠지므로
+ * SDK query 층(sdkQuery)을 갈아끼워 실제 해석 경로를 태운다.
+ * ------------------------------------------------------------------------- */
+
+const AUTH_EXPIRED = "Failed to authenticate: OAuth session expired and could not be refreshed";
+const claudeOptions = { model: FALLBACK_AGENT_MODEL } as Omit<Options, "abortController">;
+
+/** SDK 결과 메시지. 해석에 쓰는 필드만 채운다(나머지는 해석 규칙과 무관). */
+function resultMsg(result: string, isError: boolean): SDKMessage {
+  return { type: "result", subtype: "success", is_error: isError, result } as unknown as SDKMessage;
+}
+
+/** 메시지들을 내보낸 뒤 endError 가 있으면 그것으로 스트림을 끊는 가짜 SDK query. */
+function fakeSdkStream(messages: SDKMessage[], endError?: Error): () => AsyncIterable<SDKMessage> {
+  return () =>
+    (async function* () {
+      for (const m of messages) yield m;
+      if (endError) throw endError;
+    })();
+}
+
+test("is_error:true 결과 + 스트림 종료 오류 → 오류 문구를 결과로 살리지 않고 인증 원문으로 실패한다", async () => {
+  const restore = __setAgentQueryDepsForTest({
+    sdkQuery: fakeSdkStream(
+      [resultMsg(AUTH_EXPIRED, true)],
+      new Error(`Claude Code returned an error result: ${AUTH_EXPIRED}`)
+    ),
+  });
+  try {
+    await assert.rejects(
+      () => runAgentQueryText("프롬프트", claudeOptions, 600_000, "로또"),
+      (e: Error) => {
+        // 호출부의 원인 분류(isLottoAuthFailure 등)가 읽는 형태: 접두어 + 원문.
+        assert.match(e.message, /^Agent API 오류: Failed to authenticate: OAuth session expired/);
+        return true;
+      }
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("is_error:true 결과는 FAILURE_SIGNALS 에 없는 문구여도 실패다(정규식에 기대지 않는다)", async () => {
+  // 목록은 늘 뒤처진다. 해석 규칙 자체가 is_error 를 보면 처음 보는 문구도 결과로 새지 않는다.
+  for (const endError of [new Error("Claude Code returned an error result: boom"), undefined]) {
+    const restore = __setAgentQueryDepsForTest({
+      sdkQuery: fakeSdkStream([resultMsg("Some brand-new upstream failure", true)], endError),
+    });
+    try {
+      await assert.rejects(
+        () => runAgentQueryText("프롬프트", claudeOptions, 600_000, "로또"),
+        /Agent API 오류: Some brand-new upstream failure/
+      );
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("정상 결과를 받은 뒤 프로세스가 code 1 로 죽으면 결과를 살린다(기존 구제 동작 유지)", async () => {
+  const restore = __setAgentQueryDepsForTest({
+    sdkQuery: fakeSdkStream(
+      [resultMsg('{"ok":true}', false)],
+      new Error("Claude Code process exited with code 1")
+    ),
+  });
+  try {
+    const out = await runAgentQueryText("프롬프트", claudeOptions, 600_000, "뉴스");
+    assert.equal(out, '{"ok":true}');
+  } finally {
+    restore();
+  }
+});
+
+test("결과 없이 스트림이 터지면 원래 오류를 그대로 올린다", async () => {
+  const restore = __setAgentQueryDepsForTest({
+    sdkQuery: fakeSdkStream([], new Error("Claude Code process exited with code 1")),
+  });
+  try {
+    await assert.rejects(
+      () => runAgentQueryText("프롬프트", claudeOptions, 600_000, "뉴스"),
+      /exited with code 1/
+    );
+  } finally {
+    restore();
   }
 });
