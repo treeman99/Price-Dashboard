@@ -79,16 +79,17 @@
   .dtable {
     @apply w-full border-collapse text-left text-sm;
   }
-  .dtable thead th {
+  /* :where() 로 특이도를 .dtable 하나(0,1,0)로 낮춰, 셀에 붙인 유틸리티(border-b-0, pt-0 …)가 ! 없이 이기게 한다. */
+  .dtable :where(thead th) {
     @apply whitespace-nowrap border-b border-foreground/80 px-3 pb-2 pt-1 text-[12px] font-medium text-muted-foreground;
   }
-  .dtable tbody td {
+  .dtable :where(tbody td) {
     @apply border-b px-3 py-2.5 align-top;
   }
-  .dtable tbody tr {
+  .dtable :where(tbody tr) {
     @apply transition-colors;
   }
-  .dtable tbody tr:hover {
+  .dtable :where(tbody tr):hover {
     @apply bg-muted/60;
   }
 }
