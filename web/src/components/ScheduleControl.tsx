@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
 import { Input, Label } from "@/components/ui/input";
+import { Notice } from "@/components/ui/page";
 import { api } from "@/lib/api";
 import type { ScheduleSettings } from "@shared/types";
 
@@ -35,6 +36,9 @@ const KIND_LABEL: Record<ScheduleKind, string> = {
 
 // <input type="time"> 는 항상 zero-pad "HH:mm" 을 준다.
 const HHMM = /^\d{2}:\d{2}$/;
+
+/** 툴바에 그대로 늘어놓는 시각 수. 이보다 많으면 '외 N개'로 접는다. */
+const VISIBLE_TIMES = 4;
 
 /** kind 별 patch 구성(타입 안전). */
 function patchFor(kind: ScheduleKind, times: string[]): Partial<ScheduleSettings> {
@@ -78,7 +82,12 @@ export function ScheduleControl({ kind }: { kind: ScheduleKind }) {
     load();
   }, [load]);
 
-  const display = schedule ? schedule[kind].join(", ") : loadErr ? "불러오기 실패" : "…";
+  const times = schedule?.[kind] ?? null;
+  // 실시간 취합처럼 시각이 많으면(기본 16~18개) 툴바 한 줄을 넘쳐 레이아웃을 깬다.
+  // 앞 몇 개만 보이고 나머지는 '외 N개'로 줄이되, 전체는 title 과 다이얼로그에 그대로 있다.
+  const shownTimes = times ? times.slice(0, VISIBLE_TIMES) : [];
+  const hiddenCount = times ? times.length - shownTimes.length : 0;
+  const fullList = times ? times.join(", ") : null;
 
   // 열릴 때 현재 값으로 rows 를 1회만 seed. ref 가드로 늦게 도착한 schedule 이나
   // 재렌더가 사용자가 편집 중인 입력을 덮어쓰지 않게 한다.
@@ -133,12 +142,25 @@ export function ScheduleControl({ kind }: { kind: ScheduleKind }) {
       <DialogTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted"
-          title="자동 수집 시간 변경"
+          className="group inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title={fullList ? `자동 수집 시간 변경 — ${fullList}` : "자동 수집 시간 변경"}
         >
-          <Clock className="h-3 w-3" />
-          <span>자동 수집 {display}</span>
-          <Pencil className="h-3 w-3 opacity-60" />
+          {/* hover 때 시계 자리에 연필을 겹쳐 보인다 — 뒤에 따로 두면 숨긴 아이콘이 툴바 간격을 벌린다. */}
+          <span aria-hidden className="relative h-3.5 w-3.5 shrink-0">
+            <Clock className="absolute inset-0 h-3.5 w-3.5 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0" />
+            <Pencil className="absolute inset-0 h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+          </span>
+          <span>자동 수집</span>
+          {times ? (
+            <span className="num font-mono text-[12.5px] text-foreground">
+              {shownTimes.join(", ")}
+              {hiddenCount > 0 && (
+                <span className="font-sans text-[13px] text-muted-foreground"> 외 {hiddenCount}개</span>
+              )}
+            </span>
+          ) : (
+            <span>{loadErr ? "불러오기 실패" : "…"}</span>
+          )}
         </button>
       </DialogTrigger>
       <DialogContent>
@@ -150,40 +172,55 @@ export function ScheduleControl({ kind }: { kind: ScheduleKind }) {
         </DialogHeader>
 
         {cannotEdit ? (
-          <div className="flex items-center justify-between gap-2 rounded-md border border-up/40 bg-up/10 px-3 py-2 text-sm text-up">
-            <span>스케줄을 불러오지 못했습니다.</span>
-            <Button variant="outline" size="sm" onClick={load}>
-              다시 시도
-            </Button>
-          </div>
+          <Notice
+            tone="error"
+            className="mb-0"
+            action={
+              <Button variant="outline" size="sm" onClick={load}>
+                다시 시도
+              </Button>
+            }
+          >
+            스케줄을 불러오지 못했습니다.
+          </Notice>
         ) : (
           <div className="space-y-2">
-            <Label>수집 시간</Label>
-            {rows.map((t, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Input
-                  type="time"
-                  value={t}
-                  onChange={(e) => setRow(i, e.target.value)}
-                  className="w-40"
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="group/tt relative"
-                  onClick={() => removeRow(i)}
-                  disabled={rows.length <= 1}
-                  aria-label="이 시간 삭제"
-                >
-                  <X className="h-4 w-4" />
-                  <Tip>이 시간 삭제</Tip>
-                </Button>
-              </div>
-            ))}
+            <Label>
+              수집 시간
+              {rows.length > 1 && (
+                <span className="num ml-1.5 font-mono text-[12px] font-normal text-muted-foreground">
+                  {rows.length}
+                </span>
+              )}
+            </Label>
+            {/* 실시간 취합은 시각이 16개 이상이라 한 줄씩 쌓으면 다이얼로그가 화면보다 길어진다 → 두 칸으로 흘린다. */}
+            <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+              {rows.map((t, i) => (
+                <div key={i} className="flex items-center gap-1">
+                  <Input
+                    type="time"
+                    value={t}
+                    onChange={(e) => setRow(i, e.target.value)}
+                    className="w-40"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="group/tt relative"
+                    onClick={() => removeRow(i)}
+                    disabled={rows.length <= 1}
+                    aria-label="이 시간 삭제"
+                  >
+                    <X className="h-4 w-4" />
+                    <Tip>이 시간 삭제</Tip>
+                  </Button>
+                </div>
+              ))}
+            </div>
             <Button variant="outline" size="sm" onClick={addRow}>
               <Plus className="h-4 w-4" /> 시간 추가
             </Button>
-            {err && <p className="text-sm text-up">{err}</p>}
+            {err && <p className="text-sm text-tone-error">{err}</p>}
           </div>
         )}
 

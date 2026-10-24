@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Check, Loader2, Mail } from "lucide-react";
+import { Check, ChevronDown, Loader2, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/page";
 
 /**
  * 메일 발송용 Google 계정 연결 상태 배너 — "알림이 조용히 죽어 있었다"를 두 번 겪지 않기 위한 화면.
@@ -13,9 +14,8 @@ import { Button } from "@/components/ui/button";
  * 즉시 알고, 클릭 두 번으로 되살리는 것**이다.
  *
  * ── 디자인 언어 ──
- * 새 언어를 만들지 않는다. 경고는 DowntimeBanner 와 똑같이
- * `border-amber-300 bg-amber-50 text-amber-800` + `AlertTriangle`,
- * 낮은 강도 안내는 SnapshotNotice 의 info 톤(`bg-muted/50 text-muted-foreground`),
+ * 새 언어를 만들지 않는다. 경고는 DowntimeBanner 와 똑같이 `Notice tone="warn"`,
+ * 낮은 강도 안내는 SnapshotNotice 의 회색 톤(`Notice tone="muted"`),
  * 자세한 오류는 두 파일 모두가 쓰는 `<details>` 접기다.
  *
  * ── ★ 정상일 때는 배너가 뜨지 않아야 한다 ──
@@ -240,13 +240,10 @@ export function MailAuthBanner() {
   }
 
   const okLine = callback?.kind === "ok" && (
-    <div className="mb-4 flex items-start gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-      <Check className="mt-0.5 h-4 w-4 shrink-0" />
-      <span>
-        Google 계정을 연결했습니다. 이제 알림 메일이 다시 발송됩니다
-        {status?.email ? ` (${status.email})` : ""}.
-      </span>
-    </div>
+    <Notice tone="success" icon={<Check className="text-tone-success" />}>
+      Google 계정을 연결했습니다. 이제 알림 메일이 다시 발송됩니다
+      {status?.email ? ` (${status.email})` : ""}.
+    </Notice>
   );
 
   // ── 어떤 상태를 크게 알릴 것인가 ────────────────────────────────────────────
@@ -261,58 +258,50 @@ export function MailAuthBanner() {
     return (
       <>
         {okLine}
-        <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold text-amber-900">
-                {callbackFailed
-                  ? "Google 재로그인이 완료되지 않았습니다"
-                  : "메일 알림이 멈춰 있습니다 — Google 재로그인이 필요합니다"}
-              </p>
-              <p className="mt-1 leading-relaxed">
-                {callbackFailed
-                  ? reasonText((callback as { kind: "error"; reason: string }).reason)
-                  : "인증이 만료되어 알림 메일이 나가지 않고 있습니다. 아래 버튼으로 다시 로그인하면 즉시 복구됩니다."}
-                {status?.email ? ` (연결했던 계정: ${status.email})` : ""}
-              </p>
+        <Notice
+          tone="warn"
+          title={
+            callbackFailed
+              ? "Google 재로그인이 완료되지 않았습니다"
+              : "메일 알림이 멈춰 있습니다 — Google 재로그인이 필요합니다"
+          }
+        >
+          <p className="mt-0.5">
+            {callbackFailed
+              ? reasonText((callback as { kind: "error"; reason: string }).reason)
+              : "인증이 만료되어 알림 메일이 나가지 않고 있습니다. 아래 버튼으로 다시 로그인하면 즉시 복구됩니다."}
+            {status?.email ? ` (연결했던 계정: ${status.email})` : ""}
+          </p>
 
-              {startErr && <p className="mt-2 leading-relaxed">{startErr}</p>}
+          {startErr && <p className="mt-1.5">{startErr}</p>}
 
-              <div className="mt-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
-                {/* 서버가 남긴 원문 오류. 평소엔 접어 둔다 — 조치에는 필요 없고, 의심할 때만 본다. */}
-                <div className="min-w-0 flex-1">
-                  {status?.lastError && (
-                    <details>
-                      <summary className="cursor-pointer select-none text-xs opacity-70 hover:opacity-100">
-                        자세한 오류
-                      </summary>
-                      <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed opacity-80">
-                        {status.lastError}
-                      </p>
-                    </details>
-                  )}
-                </div>
+          {/* 버튼은 action 슬롯(오른쪽 끝)이 아니라 본문 바로 아래에 둔다 — 문구가 "아래 버튼"이라 말한다. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void startAuth()}
+              disabled={starting}
+              className="bg-card"
+              title="Google 동의 화면으로 이동합니다."
+            >
+              {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              Google 재로그인
+            </Button>
 
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void startAuth()}
-                  disabled={starting}
-                  className="shrink-0 border-amber-300 bg-white/70 text-amber-900 hover:bg-white hover:text-amber-900"
-                  title="Google 동의 화면으로 이동합니다."
-                >
-                  {starting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Mail className="h-4 w-4" />
-                  )}
-                  Google 재로그인
-                </Button>
-              </div>
-            </div>
+            {/* 서버가 남긴 원문 오류. 평소엔 접어 둔다 — 조치에는 필요 없고, 의심할 때만 본다. */}
+            {status?.lastError && (
+              <details className="min-w-0 flex-1">
+                <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
+                  자세한 오류
+                </summary>
+                <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground">
+                  {status.lastError}
+                </p>
+              </details>
+            )}
           </div>
-        </div>
+        </Notice>
       </>
     );
   }
@@ -325,13 +314,10 @@ export function MailAuthBanner() {
     return (
       <>
         {okLine}
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-transparent bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
-          <Mail className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            메일 발송이 설정되지 않았습니다. 알림 메일이 나가지 않으며, 대시보드의 다른 기능은
-            그대로 동작합니다.
-          </span>
-        </div>
+        <Notice tone="muted" icon={<Mail className="text-muted-foreground" />}>
+          메일 발송이 설정되지 않았습니다. 알림 메일이 나가지 않으며, 대시보드의 다른 기능은
+          그대로 동작합니다.
+        </Notice>
       </>
     );
   }
@@ -345,25 +331,19 @@ export function MailAuthBanner() {
     return (
       <>
         {okLine}
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-md border border-transparent bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
-          <span className="flex min-w-0 items-start gap-2">
-            <Mail className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>
-              Google 계정이 연결되어 있지 않아 알림 메일이 나가지 않습니다.
-              {startErr ? ` ${startErr}` : ""}
-            </span>
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void startAuth()}
-            disabled={starting}
-            className="shrink-0"
-          >
-            {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-            Google 로그인
-          </Button>
-        </div>
+        <Notice
+          tone="muted"
+          icon={<Mail className="text-muted-foreground" />}
+          action={
+            <Button variant="outline" size="sm" onClick={() => void startAuth()} disabled={starting} className="bg-card">
+              {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              Google 로그인
+            </Button>
+          }
+        >
+          Google 계정이 연결되어 있지 않아 알림 메일이 나가지 않습니다.
+          {startErr ? ` ${startErr}` : ""}
+        </Notice>
       </>
     );
   }
@@ -377,19 +357,20 @@ export function MailAuthBanner() {
     return (
       <>
         {okLine}
-        <details className="mb-3 text-xs text-muted-foreground">
-          <summary className="inline-flex cursor-pointer select-none items-center gap-1.5 hover:text-foreground">
+        <details className="group/mail mb-2 text-[12.5px] leading-6 text-muted-foreground">
+          <summary className="inline-flex cursor-pointer select-none list-none items-center gap-1.5 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
             <Mail className="h-3.5 w-3.5" />
             메일 알림 연결됨{status.email ? ` · ${status.email}` : ""}
+            <ChevronDown className="h-3 w-3 opacity-50 transition-transform group-open/mail:rotate-180" />
           </summary>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 pl-5">
-            <span>마지막 발송 {last ?? "기록 없음"}</span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-5">
+            <span className="num">마지막 발송 {last ?? "기록 없음"}</span>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => void disconnect()}
               disabled={disconnecting}
-              className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+              className="h-6 px-2 text-[12.5px] text-muted-foreground hover:text-foreground"
             >
               {disconnecting && <Loader2 className="h-3 w-3 animate-spin" />}
               연결 해제

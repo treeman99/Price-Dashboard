@@ -1,6 +1,8 @@
 import { AlertTriangle, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/page";
 import { localDay } from "@/components/SnapshotNotice";
+import { cn } from "@/lib/utils";
 import {
   DOWNTIME_CAUSE_LABEL,
   DOWNTIME_MENTAL_MODEL_NOTE,
@@ -24,8 +26,7 @@ import {
  * 화면이 따로 조립하기 시작하면 셋이 조용히 갈라지고, 그때부터는 어느 쪽이 참인지 알 수 없다.
  *
  * ── 디자인 언어 ──
- * 저장소의 기존 경고 표현을 그대로 쓴다: `border-amber-300 bg-amber-50 text-amber-800` +
- * `AlertTriangle` (LottoBoard 의 `lastError` 호박색 박스, SnapshotNotice 와 동일). 판정근거를
+ * 새 표현을 만들지 않고 전 탭 공통 경고 띠 `Notice tone="warn"` 을 쓴다(SnapshotNotice 와 동일). 판정근거를
  * `<details>` 로 접어 두는 것도 SnapshotNotice 의 '자세히' 와 같은 전례를 따른 것이다 —
  * 평소엔 안 보이고, 판정을 의심하는 사람만 펼쳐서 반증할 수 있어야 한다.
  *
@@ -129,13 +130,16 @@ function MissedRow({ m }: { m: MissedSlot }) {
       : `→ ${m.note ?? "지난 날짜라 보충 대상이 아닙니다"}`;
 
   return (
-    <li className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-      <span aria-hidden className={m.recovered ? "text-emerald-700" : "opacity-50"}>
+    <li className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1">
+      <span
+        aria-hidden
+        className={`w-3 shrink-0 text-center ${m.recovered ? "font-semibold text-tone-success" : "text-muted-foreground"}`}
+      >
         {m.recovered ? "✓" : "·"}
       </span>
-      <span className="font-medium">{m.label}</span>
-      <span className="opacity-70">{m.slot}</span>
-      <span className={m.recovered ? "text-emerald-800" : "opacity-80"}>{tail}</span>
+      <span className="min-w-[5.5rem] font-medium">{m.label}</span>
+      <span className="num font-mono text-[12.5px] text-muted-foreground">{m.slot}</span>
+      <span className={m.recovered ? "text-tone-success" : "text-foreground/80"}>{tail}</span>
     </li>
   );
 }
@@ -143,7 +147,7 @@ function MissedRow({ m }: { m: MissedSlot }) {
 function MissedList({ missed }: { missed: MissedSlot[] }) {
   if (missed.length === 0) return null;
   return (
-    <ul className="mt-2 space-y-0.5 text-[13px] leading-relaxed">
+    <ul className="mt-2 max-w-2xl divide-y divide-tone-warn/15 border-y border-tone-warn/15 text-[13px] leading-relaxed">
       {missed.map((m) => (
         <MissedRow key={`${m.tab}|${m.date}|${m.slot}`} m={m} />
       ))}
@@ -174,69 +178,55 @@ export function DowntimeBanner({ event, onAck, acking, onOpenHistory }: Downtime
   const stillMissing = event.missed.some((m) => m.evaluated && !m.recovered);
 
   return (
-    <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <p className="font-semibold text-amber-900">{event.headline}</p>
-
-          {/* 서버가 완성한 본문. 절전 사고에는 "이 구간의 '응답 시간 초과' 오류는 LLM 장애가
-              아니라 위 절전 때문입니다" 한 줄이 들어 있는데, 이번 오진을 막는 문장이 바로 그것이다. */}
-          <p className="mt-1 whitespace-pre-line leading-relaxed">{event.body}</p>
-
-          <MissedList missed={event.missed} />
-
-          {/* 아직 보충 중이면 한 줄만 안심시킨다 — 목록이 전부 '아직 받아오지 못했습니다' 인
-              화면은 그 자체로 불안하고, 실제로는 몇 분 뒤 자동으로 채워진다(서버가 사건 직후
-              5·15·45분에 다시 확인한다). 그 밖의 상태는 위 ✓ 목록이 이미 다 말하고 있다. */}
-          {event.recoveryState === "복구중" && stillMissing && (
-            <p className="mt-2 flex items-center gap-1.5 text-[13px] opacity-80">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              자동으로 보충하는 중입니다 — 화면이 비어 있어도 잠시 뒤 채워집니다.
-            </p>
+    <Notice
+      tone="warn"
+      title={event.headline}
+      action={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {onOpenHistory && (
+            <Button variant="ghost" size="sm" onClick={onOpenHistory}>
+              지난 기록 보기
+            </Button>
           )}
-
-          <div className="mt-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
-            <details className="min-w-0 flex-1">
-              <summary className="cursor-pointer select-none text-xs opacity-70 hover:opacity-100">
-                판정근거
-              </summary>
-              <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed opacity-80">
-                {reasonBody(event.reasonLine)}
-              </p>
-            </details>
-
-            <div className="flex shrink-0 items-center gap-2">
-              {onOpenHistory && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={onOpenHistory}
-                  className="text-amber-800 hover:bg-amber-100 hover:text-amber-900"
-                >
-                  지난 기록 보기
-                </Button>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onAck}
-                disabled={acking}
-                className="border-amber-300 bg-white/70 text-amber-900 hover:bg-white hover:text-amber-900"
-                title="이 기록을 확인 처리합니다. 아직 안 보낸 알림도 함께 취소됩니다."
-              >
-                {acking ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Check className="h-4 w-4" />
-                )}
-                확인했어요
-              </Button>
-            </div>
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onAck}
+            disabled={acking}
+            className="bg-card"
+            title="이 기록을 확인 처리합니다. 아직 안 보낸 알림도 함께 취소됩니다."
+          >
+            {acking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            확인했어요
+          </Button>
         </div>
-      </div>
-    </div>
+      }
+    >
+      {/* 서버가 완성한 본문. 절전 사고에는 "이 구간의 '응답 시간 초과' 오류는 LLM 장애가
+          아니라 위 절전 때문입니다" 한 줄이 들어 있는데, 이번 오진을 막는 문장이 바로 그것이다. */}
+      <p className="mt-0.5 whitespace-pre-line">{event.body}</p>
+
+      <MissedList missed={event.missed} />
+
+      {/* 아직 보충 중이면 한 줄만 안심시킨다 — 목록이 전부 '아직 받아오지 못했습니다' 인
+          화면은 그 자체로 불안하고, 실제로는 몇 분 뒤 자동으로 채워진다(서버가 사건 직후
+          5·15·45분에 다시 확인한다). 그 밖의 상태는 위 ✓ 목록이 이미 다 말하고 있다. */}
+      {event.recoveryState === "복구중" && stillMissing && (
+        <p className="mt-2 flex items-center gap-1.5 text-[13px] text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          자동으로 보충하는 중입니다 — 화면이 비어 있어도 잠시 뒤 채워집니다.
+        </p>
+      )}
+
+      <details className="mt-2">
+        <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
+          판정근거
+        </summary>
+        <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground">
+          {reasonBody(event.reasonLine)}
+        </p>
+      </details>
+    </Notice>
   );
 }
 
@@ -282,8 +272,8 @@ export function DowntimeHistoryPanel({
   const shown = (events ?? []).filter((e) => e.severity !== "무시");
 
   return (
-    <div className="mb-4 rounded-md border bg-muted/40 px-4 py-3 text-sm">
-      <p className="font-semibold">가동이 멈췄던 기록</p>
+    <section className="mb-4 bg-muted/50 px-4 py-3 text-sm">
+      <h2 className="text-[13px] font-semibold tracking-[0.02em]">가동이 멈췄던 기록</h2>
 
       {loading && !events && (
         <p className="mt-2 flex items-center gap-1.5 text-muted-foreground">
@@ -298,60 +288,71 @@ export function DowntimeHistoryPanel({
       )}
 
       {shown.length > 0 && (
-        <ul className="mt-2 divide-y">
-          {shown.map((e) => {
-            const acked = e.ackedAt != null;
-            return (
-              <li key={e.id} className="py-2">
-                <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
-                  <div className="min-w-0 flex-1">
-                    <p className="flex flex-wrap items-baseline gap-x-1.5">
-                      <span className="text-xs text-muted-foreground">{korDay(e.date)}</span>
+        <div className="mt-2 overflow-x-auto">
+          <table className="dtable">
+            <thead>
+              <tr>
+                <th className="w-20">날짜</th>
+                <th className="w-44">원인</th>
+                <th>내용</th>
+                <th className="w-32 text-right">확인</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((e) => {
+                const acked = e.ackedAt != null;
+                return (
+                  <tr key={e.id}>
+                    <td className="num whitespace-nowrap text-[13px] text-muted-foreground">{korDay(e.date)}</td>
+                    <td>
                       <span className="font-medium">{DOWNTIME_CAUSE_LABEL[e.cause]}</span>
                       {e.confidence !== "확실" && (
-                        <span className="text-xs text-muted-foreground">({e.confidence})</span>
+                        <span className="ml-1.5 text-xs text-muted-foreground">({e.confidence})</span>
                       )}
-                    </p>
-                    <p
-                      className={`mt-0.5 leading-relaxed ${acked ? "text-muted-foreground" : ""} ${
-                        e.id === highlightedId ? "opacity-60" : ""
-                      }`}
-                    >
-                      {e.headline}
-                    </p>
-                    <details className="mt-1">
-                      <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
-                        판정근거
-                      </summary>
-                      <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground">
-                        {reasonBody(e.reasonLine)}
-                      </p>
-                    </details>
-                  </div>
-                  <div className="shrink-0">
-                    {acked ? (
-                      <span className="text-xs text-muted-foreground">확인함</span>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onAck(e.id)}
-                        disabled={ackingId === e.id}
+                    </td>
+                    <td>
+                      <p
+                        className={`leading-relaxed ${acked ? "text-muted-foreground" : ""} ${
+                          e.id === highlightedId ? "opacity-60" : ""
+                        }`}
                       >
-                        {ackingId === e.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Check className="h-4 w-4" />
-                        )}
-                        확인했어요
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                        {e.headline}
+                      </p>
+                      <details className="mt-1">
+                        <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
+                          판정근거
+                        </summary>
+                        <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground">
+                          {reasonBody(e.reasonLine)}
+                        </p>
+                      </details>
+                    </td>
+                    <td className="text-right">
+                      {acked ? (
+                        <span className="whitespace-nowrap text-xs text-muted-foreground">확인함</span>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onAck(e.id)}
+                          disabled={ackingId === e.id}
+                          className="bg-card"
+                        >
+                          {ackingId === e.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Check className="h-4 w-4" />
+                          )}
+                          확인했어요
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/*
@@ -360,10 +361,10 @@ export function DowntimeHistoryPanel({
         그대로 쓴다. 이 문장이 없으면 사용자는 영원히 안 뜨는 "전원 뽑힘" 배너를 기다린다 —
         실제로 이 맥에서 수집이 멈춘 원인은 14일 관측 내내 100% 절전이었다.
       */}
-      <p className="mt-3 whitespace-pre-line border-t pt-3 text-xs leading-relaxed text-muted-foreground">
+      <p className="mt-3 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
         {DOWNTIME_MENTAL_MODEL_NOTE}
       </p>
-    </div>
+    </section>
   );
 }
 
@@ -372,7 +373,7 @@ export function DowntimeHistoryPanel({
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * 헤더의 호박색 pill. **0건이면 아무것도 렌더링하지 않는다** — 평상시 헤더는 지금과 100% 동일해야 한다.
+ * 헤더의 경고 톤 작은 버튼. **0건이면 아무것도 렌더링하지 않는다** — 평상시 헤더는 지금과 100% 동일해야 한다.
  *
  * 누르면 지난 기록이 펼쳐진다. 배너를 "하루 1회" 로 제한한 대가로 오늘 두 번째 사건은 배지
  * 숫자로만 나타나는데, 그때 사용자가 내용을 볼 통로가 여기 말고는 없다.
@@ -393,10 +394,15 @@ export function DowntimeBadge({
       onClick={onToggle}
       aria-expanded={open}
       title="자동 수집이 멈췄던 기록 보기"
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 transition-colors hover:bg-amber-100"
+      className={cn(
+        "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-tone-warn/40 px-2.5 text-[13px] font-semibold text-tone-warn transition-colors hover:bg-tone-warn/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        open && "bg-tone-warn/[0.08]"
+      )}
     >
       <AlertTriangle className="h-3.5 w-3.5" />
-      중단 {count}건
+      <span>
+        중단 <span className="num">{count}</span>건
+      </span>
     </button>
   );
 }

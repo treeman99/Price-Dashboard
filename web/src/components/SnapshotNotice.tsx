@@ -1,4 +1,5 @@
-import { AlertTriangle, CalendarDays } from "lucide-react";
+import { CalendarDays } from "lucide-react";
+import { Notice } from "@/components/ui/page";
 import type { CollectAttempt } from "@/lib/api";
 
 /**
@@ -122,7 +123,7 @@ export function snapshotHealth(
 }
 
 /**
- * 안내 배너. LottoBoard 의 `state.lastError` 호박색 박스와 같은 디자인 언어를 쓴다.
+ * 안내 띠. 전 탭 공통 `Notice` 를 쓴다 — warn 은 경고 톤, info 는 회색(muted) 톤에 달력 아이콘.
  * `notes` 를 주면 원문을 '자세히'로 접어 둔다 — 평소엔 안 보이지만, 이유를 더 알고 싶은
  * 사람이 펼쳐 볼 수 있다(수집기가 남긴 메모라 문장이 기술적일 수 있어 접어 둔다).
  */
@@ -136,29 +137,21 @@ export function SnapshotNotice({
   if (!health) return null;
   const warn = health.tone === "warn";
   return (
-    <div
-      className={`mb-4 flex items-start gap-2 rounded-md border px-4 py-3 text-sm ${
-        warn
-          ? "border-amber-300 bg-amber-50 text-amber-800"
-          : "border-transparent bg-muted/50 text-muted-foreground"
-      }`}
+    <Notice
+      tone={warn ? "warn" : "muted"}
+      icon={warn ? undefined : <CalendarDays className="text-muted-foreground" />}
     >
-      {warn ? (
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-      ) : (
-        <CalendarDays className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>{health.message}</span>
+      {notes && (
+        <details className="mt-1">
+          <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
+            자세히
+          </summary>
+          <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground">
+            {notes}
+          </p>
+        </details>
       )}
-      <div className="min-w-0">
-        <span>{health.message}</span>
-        {notes && (
-          <details className="mt-1">
-            <summary className="cursor-pointer select-none text-xs opacity-70 hover:opacity-100">
-              자세히
-            </summary>
-            <p className="mt-1 whitespace-pre-line break-words text-xs opacity-80">{notes}</p>
-          </details>
-        )}
-      </div>
-    </div>
+    </Notice>
   );
 }

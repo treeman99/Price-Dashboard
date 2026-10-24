@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 /**
  * 아래로 스크롤하면 우하단에 나타나는 '맨 위로' 플로팅 버튼(모든 탭 공통).
  * App 최상위에 1개만 렌더한다(fixed 라 뷰포트 기준). 스크롤은 window(문서) 기준.
- * color: 활성 탭 고유색 — 탭을 바꾸면 버튼 색도 따라 바뀐다.
+ * color: 활성 탭 고유색 — 버튼 몸통은 잉크로 두고, 헤더 띠처럼 아래 가장자리 띠만 탭색을 따른다.
  */
 export function ScrollToTop({ color }: { color: string }) {
   const [visible, setVisible] = useState(false);
@@ -32,12 +32,16 @@ export function ScrollToTop({ color }: { color: string }) {
       aria-label="맨 위로 스크롤"
       title="맨 위로"
       className={cn(
-        "fixed bottom-6 right-6 z-50 inline-flex h-11 w-11 items-center justify-center rounded-full text-white shadow-lg ring-1 ring-black/10 transition-all duration-200 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
+        "fixed bottom-6 right-6 z-50 inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-md bg-foreground text-background transition-all duration-200 hover:bg-foreground/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         visible ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-3 opacity-0"
       )}
-      style={{ backgroundColor: color }}
     >
-      <ArrowUp className="h-5 w-5" />
+      <ArrowUp className="h-[18px] w-[18px]" />
+      <span
+        aria-hidden
+        className="absolute inset-x-0 bottom-0 h-[3px] transition-colors duration-300"
+        style={{ backgroundColor: color }}
+      />
     </button>
   );
 }

@@ -9,6 +9,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Notice, StatusTag } from "@/components/ui/page";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { AgentModelSettings } from "@shared/types";
@@ -82,17 +83,20 @@ export function ModelControl() {
       <DialogTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+          className={cn(
+            "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] text-muted-foreground transition-colors hover:border-foreground/40 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            fallback ? "border-tone-warn/40" : "border-foreground/15"
+          )}
           title="수집·큐레이션 AI 모델 변경"
         >
           {fallback ? (
-            <AlertTriangle className="h-3.5 w-3.5 text-up" />
+            <AlertTriangle className="h-3.5 w-3.5 text-tone-warn" />
           ) : (
             <Cpu className="h-3.5 w-3.5" />
           )}
           <span>
-            AI 모델: <span className="text-foreground">{label}</span>
-            {fallback && <span className="ml-1 text-up">→ {fallbackLabel} 임시 대체</span>}
+            AI 모델 <span className="font-semibold text-foreground">{label}</span>
+            {fallback && <span className="ml-1 font-medium text-tone-warn">→ {fallbackLabel} 임시 대체</span>}
           </span>
         </button>
       </DialogTrigger>
@@ -106,12 +110,17 @@ export function ModelControl() {
         </DialogHeader>
 
         {fallback && settings && (
-          <div className="rounded-md border border-up/40 bg-up/10 px-3 py-2 text-xs text-up">
-            <p className="font-medium">
-              {fromLabel} 사용 불가({shortTime(fallback.at)}부터) → 지금은 {fallbackLabel}(으)로
-              임시 대체 실행 중
-            </p>
-            <p className="mt-1 text-muted-foreground">
+          <Notice
+            tone="warn"
+            className="mb-0"
+            title={
+              <>
+                {fromLabel} 사용 불가({shortTime(fallback.at)}부터) → 지금은 {fallbackLabel}(으)로
+                임시 대체 실행 중
+              </>
+            }
+          >
+            <p className="mt-1 text-[13px] text-muted-foreground">
               선택은 {fromLabel} 그대로입니다. 수집을 실행할 때마다 {fromLabel}를 먼저 확인해,
               다시 응답하는 순간 별도 조작 없이 되돌아갑니다.
             </p>
@@ -120,63 +129,71 @@ export function ModelControl() {
                 {fallback.reason}
               </p>
             )}
-          </div>
+          </Notice>
         )}
 
         {loadErr && !settings ? (
-          <div className="flex items-center justify-between gap-2 rounded-md border border-up/40 bg-up/10 px-3 py-2 text-sm text-up">
-            <span>모델 설정을 불러오지 못했습니다.</span>
-            <Button variant="outline" size="sm" onClick={load}>
-              다시 시도
-            </Button>
-          </div>
+          <Notice
+            tone="error"
+            className="mb-0"
+            action={
+              <Button variant="outline" size="sm" onClick={load}>
+                다시 시도
+              </Button>
+            }
+          >
+            모델 설정을 불러오지 못했습니다.
+          </Notice>
         ) : (
-          <div className="space-y-2">
-            {settings?.options.map((o) => {
-              const selected = o.id === settings.model;
-              const saving = busy === o.id;
-              return (
-                <button
-                  key={o.id}
-                  type="button"
-                  onClick={() => pick(o.id)}
-                  disabled={busy != null}
-                  className={cn(
-                    "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors",
-                    selected ? "border-primary bg-primary/5" : "hover:bg-muted",
-                    busy != null && !saving && "opacity-60"
-                  )}
-                >
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
-                    {saving ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : selected ? (
-                      <Check className="h-4 w-4 text-primary" />
-                    ) : (
-                      <span className="h-3.5 w-3.5 rounded-full border" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                      <span className="font-semibold">{o.label}</span>
-                      {selected && <span className="text-xs text-primary">현재</span>}
-                      {o.id === settings.primary && (
-                        <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                          기본 · 사용 불가 시 {fallbackLabel} 임시 대체
-                        </span>
+          <div>
+            <ul className="divide-y border-y">
+              {settings?.options.map((o) => {
+                const selected = o.id === settings.model;
+                const saving = busy === o.id;
+                return (
+                  <li key={o.id}>
+                    <button
+                      type="button"
+                      onClick={() => pick(o.id)}
+                      disabled={busy != null}
+                      aria-pressed={selected}
+                      className={cn(
+                        "flex w-full items-start gap-3 px-2 py-3 text-left transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none",
+                        busy != null && !saving && "opacity-60"
                       )}
-                      <span className="font-mono text-[11px] text-muted-foreground">{o.id}</span>
-                    </span>
-                    {o.description && (
-                      <span className="mt-0.5 block text-xs text-muted-foreground">
-                        {o.description}
+                    >
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
+                        {saving ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : selected ? (
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-background">
+                            <Check className="h-3 w-3" strokeWidth={3} />
+                          </span>
+                        ) : (
+                          <span className="h-4 w-4 rounded-full border border-foreground/30" />
+                        )}
                       </span>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-            {err && <p className="text-sm text-up">{err}</p>}
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-semibold">{o.label}</span>
+                          {selected && <span className="text-xs font-semibold text-foreground">현재</span>}
+                          {o.id === settings.primary && (
+                            <StatusTag tone="neutral">기본 · 사용 불가 시 {fallbackLabel} 임시 대체</StatusTag>
+                          )}
+                          <span className="font-mono text-[11px] text-muted-foreground">{o.id}</span>
+                        </span>
+                        {o.description && (
+                          <span className="mt-0.5 block text-[13px] text-muted-foreground">
+                            {o.description}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {err && <p className="mt-2 text-sm text-tone-error">{err}</p>}
           </div>
         )}
       </DialogContent>
