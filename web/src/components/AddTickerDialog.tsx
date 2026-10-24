@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { Notice } from "@/components/ui/page";
 import { api } from "@/lib/api";
 import { marketLabel } from "@shared/stock";
 import type { StockMarket, StockSearchCandidate } from "@shared/types";
@@ -81,7 +82,7 @@ export function AddTickerDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button>
+        <Button variant="outline">
           <Plus className="h-4 w-4" /> 종목 추가
         </Button>
       </DialogTrigger>
@@ -123,23 +124,24 @@ export function AddTickerDialog({
           )}
 
           {!searching && candidates && candidates.length > 0 && (
-            <ul className="max-h-60 space-y-1.5 overflow-y-auto">
+            <ul className="max-h-60 divide-y overflow-y-auto border-y">
               {candidates.map((c) => (
                 <li
                   key={`${c.market}:${c.symbol}`}
-                  className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
+                  className="flex items-center justify-between gap-2 py-2 text-sm"
                 >
                   <div className="min-w-0">
                     <div className="truncate font-medium" title={c.name}>
                       {c.name}
                     </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[12px] text-muted-foreground">
                       <span>{c.symbol}</span>
                       {c.exchange && <span>· {c.exchange}</span>}
                     </div>
                   </div>
                   <Button
                     size="sm"
+                    variant="outline"
                     disabled={addingSymbol !== null}
                     onClick={() => add(c)}
                     title="이 종목으로 추가"
@@ -160,7 +162,11 @@ export function AddTickerDialog({
             <p className="text-sm text-muted-foreground">검색 결과가 없습니다. 다른 표기로 찾아보세요.</p>
           )}
 
-          {err && <p className="text-sm text-up">{err}</p>}
+          {err && (
+            <Notice tone="error" className="mb-0">
+              {err}
+            </Notice>
+          )}
         </div>
 
         <div className="flex justify-end gap-2">

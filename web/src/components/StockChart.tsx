@@ -26,14 +26,18 @@ function formatTick(v: number, currency: string): string {
   return v.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
+const MONO = '"IBM Plex Mono", ui-monospace, SFMono-Regular, monospace';
+const AXIS_TICK = { fontSize: 11, fill: "hsl(var(--muted-foreground))", fontFamily: MONO };
+
 /**
  * 종목 20거래일 종가 추이.
- * 선 색은 구간 등락(첫 종가 → 마지막 종가)을 한국 증시 관례로 칠한다: 상승 빨강 / 하락 파랑 / 보합 회색.
+ * 선은 잉크색 한 가지로 그리고, 구간 등락(첫 종가 → 마지막 종가)은 마지막 점 하나에만
+ * 한국 증시 관례로 칠한다: 상승 빨강 / 하락 파랑 / 보합 회색.
  */
-export function StockChart({ points }: { points: StockPoint[] }) {
+export function StockChart({ points, height = 220 }: { points: StockPoint[]; height?: number }) {
   if (!points || points.length === 0) {
     return (
-      <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+      <div className="flex items-center justify-center text-sm text-muted-foreground" style={{ height }}>
         아직 시세 데이터가 없습니다
       </div>
     );
@@ -50,35 +54,69 @@ export function StockChart({ points }: { points: StockPoint[] }) {
     first != null && last != null && closes.length > 1 && first !== 0
       ? changeTone(((last - first) / first) * 100)
       : "flat";
-  const stroke = tone === "up" ? "#e74c3c" : tone === "down" ? "#2563eb" : "#94a3b8";
+  const endFill = tone === "up" ? "fill-up" : tone === "down" ? "fill-stock-down" : "fill-muted-foreground";
 
   const data = points.map((p) => ({
     date: p.date.slice(5), // MM-DD
     close: p.close,
   }));
+  // 눈금 글씨(mono 11px)가 잘리지 않게 Y축 폭을 가장 긴 눈금에 맞춘다. 자동 눈금이 최댓값보다
+  // 한 자리 길어질 수 있어(99,800 → 100,000) 한 글자를 여유로 둔다.
+  const longest = closes.reduce((n, c) => Math.max(n, formatTick(c, currency).length), 0);
+  const yWidth = Math.max(48, Math.ceil((longest + 1) * 6.7) + 6);
+  // 마지막으로 값이 있는 점 — 빈 점이 끝에 붙어 있으면 그 앞 점이 '현재'다.
+  let lastIdx = -1;
+  data.forEach((d, i) => {
+    if (d.close != null) lastIdx = i;
+  });
 
   return (
-    <ResponsiveContainer width="100%" height={220}>
+    <ResponsiveContainer width="100%" height={height}>
       <LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-        <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+        <CartesianGrid vertical={false} stroke="hsl(var(--border))" />
+        <XAxis
+          dataKey="date"
+          tick={AXIS_TICK}
+          tickLine={false}
+          axisLine={{ stroke: "hsl(var(--border))" }}
+          minTickGap={16}
+        />
         <YAxis
-          tick={{ fontSize: 11 }}
-          stroke="hsl(var(--muted-foreground))"
-          width={60}
+          tick={AXIS_TICK}
+          tickLine={false}
+          axisLine={false}
+          width={yWidth}
           tickFormatter={(v) => (typeof v === "number" ? formatTick(v, currency) : "")}
           domain={["auto", "auto"]}
         />
         <Tooltip
           formatter={(v) => [formatPrice(typeof v === "number" ? v : null, currency), "종가"]}
-          contentStyle={{ fontSize: 12, borderRadius: 8 }}
+          cursor={{ stroke: "hsl(var(--foreground) / 0.25)" }}
+          contentStyle={{
+            fontSize: 12,
+            borderRadius: 4,
+            padding: "6px 10px",
+            background: "hsl(var(--card))",
+            border: "1px solid hsl(var(--border))",
+            boxShadow: "none",
+            color: "hsl(var(--foreground))",
+          }}
+          labelStyle={{ color: "hsl(var(--muted-foreground))", fontFamily: MONO, marginBottom: 2 }}
+          itemStyle={{ color: "hsl(var(--foreground))", padding: 0 }}
         />
         <Line
           type="monotone"
           dataKey="close"
-          stroke={stroke}
-          strokeWidth={2}
-          dot={{ r: 2 }}
+          stroke="hsl(var(--foreground))"
+          strokeWidth={1.5}
+          dot={(props: { cx?: number; cy?: number; index?: number }) =>
+            props.index === lastIdx && props.cx != null && props.cy != null ? (
+              <circle key="end" cx={props.cx} cy={props.cy} r={3} className={endFill} stroke="none" />
+            ) : (
+              <g key={`d${props.index}`} />
+            )
+          }
+          activeDot={{ r: 3, fill: "hsl(var(--foreground))", stroke: "hsl(var(--background))" }}
           connectNulls
         />
       </LineChart>

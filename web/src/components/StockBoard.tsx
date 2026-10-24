@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import {
   RefreshCw,
   Loader2,
-  CalendarDays,
   Link as LinkIcon,
   LineChart as LineChartIcon,
-  Info,
 } from "lucide-react";
 import type {
   StockMarket,
@@ -32,8 +30,19 @@ import {
 } from "@shared/stock";
 import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  PageToolbar,
+  Meta,
+  MetaDot,
+  Notice,
+  SectionHeader,
+  Segmented,
+  StatusTag,
+  TextLink,
+  EmptyState,
+  LoadingState,
+} from "@/components/ui/page";
 import { cn } from "@/lib/utils";
 import { StockCard } from "@/components/StockCard";
 import { StockChart } from "@/components/StockChart";
@@ -73,157 +82,138 @@ function indexAsOf(idx: StockIndex): string | null {
   return idx.history.length ? (idx.history[idx.history.length - 1]?.date ?? null) : null;
 }
 
-/** asOf: 휴장일에만 넘긴다 — 값이 '오늘'이 아니라 최종 거래일 종가임을 카드 단위로 못박는다. */
-function IndexCard({ idx, asOf }: { idx: StockIndex; asOf?: string | null }) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-end justify-between gap-2">
-        <div>
-          <div className="text-xs text-muted-foreground">
-            {idx.name}
-            {asOf && <span className="ml-1.5 opacity-70">· {asOf} 종가</span>}
-          </div>
-          <div className="text-2xl font-bold">
-            {idx.value != null ? idx.value.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : "-"}
-          </div>
-        </div>
-        <div className={cn("text-sm font-semibold", toneClass(idx.changePct))}>
-          {idx.changePct != null
-            ? `${idx.changePct > 0 ? "+" : ""}${idx.changePct.toFixed(2)}%`
-            : "-"}
-        </div>
-      </div>
-      <div className="mt-2">
-        <StockChart points={idx.history} />
-      </div>
-      <div className="mt-2 space-y-2">
-        {idx.comment && (
-          <p className="whitespace-pre-line text-sm leading-relaxed text-foreground/80">
-            {idx.comment}
-          </p>
-        )}
-        {/* 근거(rationale) 없는 전망은 표시하지 않는다 — 타입 주석의 규칙. */}
-        {idx.outlook && idx.rationale && (
-          <div className="rounded-md bg-muted/50 px-3 py-2">
-            <div className="text-xs font-semibold text-muted-foreground">전망</div>
-            <p className="whitespace-pre-line text-sm leading-relaxed">{idx.outlook}</p>
-            <div className="mt-1.5 text-xs font-semibold text-muted-foreground">근거</div>
-            <p className="whitespace-pre-line text-sm leading-relaxed text-foreground/80">
-              {idx.rationale}
-            </p>
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
+/** 섹션 머리 앞 색 사각형. 기본은 탭 고유색, '해외 참고'는 슬레이트로 낮춰 부차 정보임을 보인다. */
+const ACCENT = "var(--tab)";
+const FOREIGN_ACCENT = "#64748b";
 
-function NewsCard({ item }: { item: StockNewsItem }) {
-  const href = safeHref(item.link);
+/** 차트 위·아래 서술 한 덩어리(지수 전망·근거). */
+function Prose({ label, children }: { label?: string; children: string }) {
   return (
-    <Card className="flex h-[18rem] flex-col border-l-4 p-4" style={{ borderLeftColor: "#059669" }}>
-      <h4 className="line-clamp-2 min-h-[2.6em] font-semibold leading-snug">{item.title}</h4>
-      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-        <span>{item.source}</span>
-        <span className="inline-flex items-center gap-1">
-          <CalendarDays className="h-3 w-3" /> {item.date}
-        </span>
-      </p>
-      <p className="mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-line pr-1 text-sm leading-relaxed text-foreground/80">
-        {item.summary}
-      </p>
-      {href && (
-        <div className="mt-3 flex items-center gap-3 border-t pt-2 text-xs">
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-[#4361ee] hover:underline"
-          >
-            <LinkIcon className="h-3 w-3" /> 원문 보기
-          </a>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-/** tone: 섹션 강조색. 기본은 보드 브랜드 초록, '해외 참고'는 슬레이트로 낮춰 부차 정보임을 보인다. */
-function SectionTitle({
-  children,
-  count,
-  tone = "#059669",
-}: {
-  children: ReactNode;
-  count?: number;
-  tone?: string;
-}) {
-  return (
-    <div className="mb-3 flex items-center gap-2 border-b pb-2" style={{ borderColor: tone }}>
-      <h2 className="flex items-center gap-2 text-lg font-bold" style={{ color: tone }}>
-        {children}
-        {count != null && (
-          <span className="text-sm font-normal text-muted-foreground">({count})</span>
-        )}
-      </h2>
+    <div>
+      {label && <div className="mb-0.5 text-[12px] font-semibold text-muted-foreground">{label}</div>}
+      <p className="whitespace-pre-line text-sm leading-relaxed text-foreground/80">{children}</p>
     </div>
   );
 }
 
 /**
- * 내 포지션 점검 카드.
+ * 지수 띠의 한 칸. 띠는 지수 수만큼 열을 두고 열 사이를 세로 헤어라인으로 나눈다.
+ * asOf: 휴장일에만 넘긴다 — 값이 '오늘'이 아니라 최종 거래일 종가임을 칸 단위로 못박는다.
+ */
+function IndexCell({ idx, asOf }: { idx: StockIndex; asOf?: string | null }) {
+  return (
+    <div className="min-w-0 py-4 first:pt-1 lg:px-6 lg:pt-1 lg:first:pl-0 lg:last:pr-0">
+      <div className="text-[13px] font-medium">
+        {idx.name}
+        {asOf && (
+          <span className="ml-1.5 font-mono text-[12px] font-normal text-muted-foreground">· {asOf} 종가</span>
+        )}
+      </div>
+      <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3">
+        <span className="num font-serif text-[2rem] font-semibold leading-tight tracking-[-0.01em]">
+          {idx.value != null ? idx.value.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : "-"}
+        </span>
+        <span className={cn("num text-[15px] font-semibold", toneClass(idx.changePct))}>
+          {idx.changePct != null
+            ? `${idx.changePct > 0 ? "+" : ""}${idx.changePct.toFixed(2)}%`
+            : "-"}
+        </span>
+      </div>
+      <div className="mt-2">
+        <StockChart points={idx.history} height={140} />
+      </div>
+      {(idx.comment || (idx.outlook && idx.rationale)) && (
+        <div className="mt-3 space-y-2">
+          {idx.comment && <Prose>{idx.comment}</Prose>}
+          {/* 근거(rationale) 없는 전망은 표시하지 않는다 — 타입 주석의 규칙. */}
+          {idx.outlook && idx.rationale && (
+            <>
+              <Prose label="전망">{idx.outlook}</Prose>
+              <Prose label="근거">{idx.rationale}</Prose>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 뉴스 한 줄(가이드 §4-B 행 문법): 제목 · 출처·날짜·원문 · 요약. */
+function NewsRow({ item }: { item: StockNewsItem }) {
+  const href = safeHref(item.link);
+  return (
+    <li className="py-3">
+      <h4 className="text-[15px] font-semibold leading-snug">{item.title}</h4>
+      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px] text-muted-foreground">
+        <span>{item.source}</span>
+        <MetaDot />
+        <span className="num font-mono">{item.date}</span>
+        {href && (
+          <>
+            <MetaDot />
+            <TextLink href={href} icon={<LinkIcon />}>
+              원문 보기
+            </TextLink>
+          </>
+        )}
+      </p>
+      <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-foreground/80">{item.summary}</p>
+    </li>
+  );
+}
+
+/** 목표가·손절가 칸: 가격 + 현재가 대비 거리. 값이 없으면 '-'. */
+function LevelCell({ price, pct, currency }: { price: number | null; pct: number | null; currency: string }) {
+  if (price == null) return <td className="num text-right text-muted-foreground">-</td>;
+  return (
+    <td className="num whitespace-nowrap text-right">
+      {formatPrice(price, currency)}
+      <div className="text-[12px] text-muted-foreground">({formatPnlPct(pct)})</div>
+    </td>
+  );
+}
+
+/**
+ * 내 포지션 점검 표의 한 행.
  *
- * `pulseSummary` 가 이 카드에서 가장 중요한 블록이다 — 시간당 취합은 화면에 피드를 남기지
+ * `pulseSummary` 가 이 행에서 가장 중요한 블록이다 — 시간당 취합은 화면에 피드를 남기지
  * 않으므로(인터뷰 결정), 문자 문턱을 넘지 못한 판정이 사용자에게 도달하는 **유일한 경로**다.
  */
-function PositionCard({ p }: { p: StockPositionReview }) {
-  const tone = changeTone(p.pnlPct);
-  const toneCls =
-    tone === "up" ? "text-red-600" : tone === "down" ? "text-blue-600" : "text-muted-foreground";
+function PositionRow({ p }: { p: StockPositionReview }) {
   return (
-    <Card className="p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div className="flex items-baseline gap-2">
-          <span className="font-semibold">{p.name}</span>
-          <span className="text-xs text-muted-foreground">
-            {p.symbol} · {horizonLabel(p.horizon)}
-          </span>
+    <tr>
+      <td className="whitespace-nowrap">
+        <div className="font-semibold">{p.name}</div>
+        <div className="font-mono text-[12px] text-muted-foreground">
+          {p.symbol} · {horizonLabel(p.horizon)}
         </div>
-        <span className={cn("text-lg font-bold", toneCls)}>{formatPnlPct(p.pnlPct)}</span>
-      </div>
-
-      <div className="mt-2 text-[13px] text-muted-foreground">
-        현재가 <span className="font-medium text-foreground">{formatPrice(p.close, p.currency)}</span>
-        {" · "}평단 {formatPrice(p.avgPrice, p.currency)}
-        {" · "}
-        {p.quantity}주
-      </div>
-
-      {(p.targetPrice != null || p.stopPrice != null) && (
-        <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
-          {p.targetPrice != null && (
-            <span>
-              🎯 {formatPrice(p.targetPrice, p.currency)} ({formatPnlPct(p.toTargetPct)})
-            </span>
-          )}
-          {p.stopPrice != null && (
-            <span>
-              🛡 {formatPrice(p.stopPrice, p.currency)} ({formatPnlPct(p.toStopPct)})
-            </span>
-          )}
-        </div>
-      )}
-
-      {p.factors && <p className="mt-3 text-sm leading-relaxed">{p.factors}</p>}
-
-      {p.pulseSummary && (
-        <div className="mt-3 rounded-md bg-muted/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-          <strong className="text-foreground">⏱ 지난 24시간 실시간 취합</strong>
-          <br />
-          {p.pulseSummary}
-        </div>
-      )}
-    </Card>
+      </td>
+      <td className={cn("num whitespace-nowrap text-right text-[15px] font-semibold", toneClass(p.pnlPct))}>
+        {formatPnlPct(p.pnlPct)}
+      </td>
+      <td className="num whitespace-nowrap text-right font-medium">{formatPrice(p.close, p.currency)}</td>
+      <td className="num whitespace-nowrap text-right text-muted-foreground">
+        {formatPrice(p.avgPrice, p.currency)}
+      </td>
+      <td className="num whitespace-nowrap text-right text-muted-foreground">{p.quantity}주</td>
+      <LevelCell price={p.targetPrice} pct={p.toTargetPct} currency={p.currency} />
+      <LevelCell price={p.stopPrice} pct={p.toStopPct} currency={p.currency} />
+      <td className="min-w-[320px]">
+        {p.factors && <p className="leading-relaxed">{p.factors}</p>}
+        {p.pulseSummary && (
+          <div
+            className={cn(
+              "border-l-2 border-foreground/25 pl-2.5 text-[13px] leading-relaxed text-muted-foreground",
+              p.factors && "mt-2"
+            )}
+          >
+            <strong className="font-semibold text-foreground">지난 24시간 실시간 취합</strong>
+            <br />
+            {p.pulseSummary}
+          </div>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -349,7 +339,7 @@ export function StockBoard() {
    */
   async function addWatchToTickers(symbol: string) {
     await api.addTicker(market, { query: symbol });
-    await load(); // 원장을 다시 읽어 '⭐ 등록 종목' 섹션과 '등록됨' 표시에 즉시 반영
+    await load(); // 원장을 다시 읽어 '등록 종목' 섹션과 '등록됨' 표시에 즉시 반영
   }
 
   // 서브탭 선택에 따라 실제로 그릴 스냅샷을 고른다. 선택한 역할 브리핑이 아직 없으면 null
@@ -404,143 +394,159 @@ export function StockBoard() {
 
   return (
     <div>
-      {/* 시장 토글 — shadcn Tabs 컴포넌트가 없어 Button 2개로 구성한다. */}
-      <div className="mb-4 flex items-center gap-1">
-        {MARKETS.map((m) => (
-          <Button
-            key={m}
-            variant={m === market ? "default" : "outline"}
-            size="sm"
-            onClick={() => setMarket(m)}
-            style={m === market ? { backgroundColor: "#059669" } : undefined}
-          >
-            {marketLabel(m)}
-          </Button>
-        ))}
-      </div>
-
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <ScheduleControl kind={market === "kr" ? "stockKr" : "stockUs"} />
-          <span>
-            · 수집 시 이메일 발송(지금 갱신 포함)
-            {snap && ` · ${snap.date}`}
-            {sessionText && ` · ${sessionText}`}
-            {updated && ` · 최종 갱신 ${updated}`}
-          </span>
-          {badge && (
-            // title 에 판정 근거를 실어, 스케줄을 바꿨을 때 왜 이 역할이 됐는지 화면에서 바로 보이게 한다.
-            <span
-              className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-foreground/80"
-              title={snap?.roleReason ?? undefined}
-            >
-              {badge}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <AddTickerDialog market={market} onAdded={load} />
-          <Button variant="outline" onClick={refresh} disabled={collecting}>
-            {collecting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-            {collecting ? "수집 중…" : "지금 갱신"}
-          </Button>
-        </div>
-      </div>
+      <PageToolbar
+        actions={
+          <>
+            <AddTickerDialog market={market} onAdded={load} />
+            <Button variant="outline" onClick={refresh} disabled={collecting}>
+              {collecting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {collecting ? "수집 중…" : "지금 갱신"}
+            </Button>
+          </>
+        }
+      >
+        <Segmented
+          aria-label="시장"
+          className="mr-1.5"
+          value={market}
+          onChange={setMarket}
+          options={MARKETS.map((m) => ({ value: m, label: marketLabel(m) }))}
+        />
+        <ScheduleControl kind={market === "kr" ? "stockKr" : "stockUs"} />
+        <MetaDot />
+        <Meta>수집 시 이메일 발송(지금 갱신 포함)</Meta>
+        {snap && (
+          <>
+            <MetaDot />
+            <Meta>{snap.date}</Meta>
+          </>
+        )}
+        {sessionText && (
+          <>
+            <MetaDot />
+            <Meta>{sessionText}</Meta>
+          </>
+        )}
+        {updated && (
+          <>
+            <MetaDot />
+            <Meta>
+              최종 갱신 <strong>{updated}</strong>
+            </Meta>
+          </>
+        )}
+        {badge && (
+          // title 에 판정 근거를 실어, 스케줄을 바꿨을 때 왜 이 역할이 됐는지 화면에서 바로 보이게 한다.
+          <StatusTag className="ml-1" title={snap?.roleReason ?? undefined}>
+            {badge}
+          </StatusTag>
+        )}
+      </PageToolbar>
 
       {/* 역할 서브탭 — 아침 결산과 오늘 밤 프리뷰를 나란히 볼 수 있게 한다.
           역할 분리가 비활성이면 variants 가 비어 탭 자체가 나타나지 않는다(현행 화면 그대로). */}
       {roleViews.length > 0 && (
-        <div className="mb-4 flex items-center gap-1">
-          {(["latest", ...roleViews] as SnapshotView[]).map((v) => (
-            <Button
-              key={v}
-              variant={v === view ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setView(v)}
-            >
-              {/* 프리뷰 탭 라벨도 본문과 같은 술어로 시제를 맞춘다. 탭만 미래형으로 남으면
-                  본문이 '종료된 세션'이라 해도 사용자는 탭 이름을 먼저 믿는다. */}
-              {v === "latest"
-                ? "최신"
-                : v === "close"
-                  ? "간밤 결산"
-                  : resp?.variants?.preview && isPreviewUpcoming(resp.variants.preview)
-                    ? "오늘 밤 프리뷰"
-                    : "지난 프리뷰"}
-            </Button>
-          ))}
+        <div className="mb-4">
+          <Segmented
+            aria-label="브리핑"
+            value={view}
+            onChange={setView}
+            options={(["latest", ...roleViews] as SnapshotView[]).map((v) => ({
+              value: v,
+              // 프리뷰 탭 라벨도 본문과 같은 술어로 시제를 맞춘다. 탭만 미래형으로 남으면
+              // 본문이 '종료된 세션'이라 해도 사용자는 탭 이름을 먼저 믿는다.
+              label:
+                v === "latest"
+                  ? "최신"
+                  : v === "close"
+                    ? "간밤 결산"
+                    : resp?.variants?.preview && isPreviewUpcoming(resp.variants.preview)
+                      ? "오늘 밤 프리뷰"
+                      : "지난 프리뷰",
+            }))}
+          />
         </div>
       )}
 
-      {err && (
-        <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">
-          {err}
-        </div>
-      )}
+      {err && <Notice tone="error">{err}</Notice>}
 
       {collecting && (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+        <Notice tone="info" progress>
           {marketLabel(market)} 브리핑을 수집하는 중입니다… 1~3분 걸릴 수 있고, 완료되면 자동으로
           반영됩니다.
-        </div>
+        </Notice>
       )}
 
       {/* 휴장은 실패가 아니다 — 에러(빨강)와 구분되게 회색 안내로 표시한다. */}
       {snap?.closed && (
-        <div className="mb-4 flex items-start gap-2 rounded-md border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            {snap.date}
-            {snap.closedReason ? ` ${snap.closedReason}` : ""} 휴장 —{" "}
-            {role === "preview"
-              ? "오늘 밤 뉴욕장이 열리지 않습니다. 다음 거래일 프리뷰를 기다립니다."
-              : role === "close"
-                ? `직전 마감(${snap.sessionDate ?? "미상"}) 결산은 다음 거래일 아침 브리핑이 이어받습니다.`
-                : "다음 거래일 브리핑을 기다립니다."}
-          </span>
-        </div>
+        <Notice tone="muted">
+          {snap.date}
+          {snap.closedReason ? ` ${snap.closedReason}` : ""} 휴장 —{" "}
+          {role === "preview"
+            ? "오늘 밤 뉴욕장이 열리지 않습니다. 다음 거래일 프리뷰를 기다립니다."
+            : role === "close"
+              ? `직전 마감(${snap.sessionDate ?? "미상"}) 결산은 다음 거래일 아침 브리핑이 이어받습니다.`
+              : "다음 거래일 브리핑을 기다립니다."}
+        </Notice>
       )}
 
       {loading ? (
-        <div className="flex h-64 items-center justify-center text-muted-foreground">
-          <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 불러오는 중…
-        </div>
+        <LoadingState />
       ) : (
-        <>
+        <div className="[&>*+*]:mt-10">
           {/* 내 포지션 점검 — 브리핑 맨 앞. 보유 종목이 없으면 섹션 자체를 렌더하지 않는다
               (비어 있는 섹션이 매일 뜨면 노이즈다 — 해외 참고 섹션과 같은 판단). */}
           {!!snap?.positions?.length && (
-            <section className="mt-8">
-              <SectionTitle count={snap.positions.length}>💼 내 포지션 점검</SectionTitle>
-              <p className="mb-3 rounded-md bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
+            <section>
+              <SectionHeader title="내 포지션 점검" count={snap.positions.length} accent={ACCENT} />
+              <Notice tone="muted" icon={null} className="mb-2">
                 손익·거리 수치는 서버가 계산한 값이고 서술은 AI 영향도 판정입니다. 매매 권유가 아닙니다.
-              </p>
-              <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
-                {snap.positions.map((p) => (
-                  <PositionCard key={`${p.market}-${p.symbol}`} p={p} />
-                ))}
+              </Notice>
+              <div className="overflow-x-auto">
+                <table className="dtable">
+                  <thead>
+                    <tr>
+                      <th>종목</th>
+                      <th className="text-right">손익률</th>
+                      <th className="text-right">현재가</th>
+                      <th className="text-right">평단</th>
+                      <th className="text-right">수량</th>
+                      <th className="text-right">목표가</th>
+                      <th className="text-right">손절가</th>
+                      <th>오늘의 요인</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {snap.positions.map((p) => (
+                      <PositionRow key={`${p.market}-${p.symbol}`} p={p} />
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </section>
           )}
 
           {/* 지수 — 휴장일에도 최종 거래일 종가로 계속 보인다(서술만 비어 있다). */}
           {!!snap?.indices.length && (
-            <section className="mt-8">
-              <SectionTitle count={snap.indices.length}>📊 지수</SectionTitle>
+            <section>
+              <SectionHeader title="지수" count={snap.indices.length} accent={ACCENT} />
               {snap.closed && (
-                <p className="mb-3 rounded-md bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
+                <Notice tone="muted" icon={null} className="mb-2">
                   휴장 중이라 {indexAsOf(snap.indices[0]) ?? "최종 거래일"} 종가 기준입니다. 값과
                   추이는 그대로 보이고, 시황 서술은 다음 거래일 브리핑에서 붙습니다.
-                </p>
+                </Notice>
               )}
-              <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
+              {/* 지수 띠 — 지수 수만큼 열을 두고 세로 헤어라인으로 나눈다(lg 미만은 세로로 쌓는다). */}
+              <div
+                className="grid divide-y lg:grid-cols-[repeat(var(--n),minmax(0,1fr))] lg:divide-x lg:divide-y-0"
+                style={{ "--n": snap.indices.length } as CSSProperties}
+              >
                 {snap.indices.map((idx, i) => (
-                  <IndexCard
+                  <IndexCell
                     key={`${idx.name}-${i}`}
                     idx={idx}
                     asOf={snap.closed ? indexAsOf(idx) : null}
@@ -551,10 +557,10 @@ export function StockBoard() {
           )}
 
           {/* 등록 종목 */}
-          <section className="mt-8">
-            <SectionTitle count={tickers.length}>⭐ 등록 종목</SectionTitle>
+          <section>
+            <SectionHeader title="등록 종목" count={tickers.length} accent={ACCENT} />
             {tickers.length ? (
-              <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
+              <div className="divide-y">
                 {tickers.map((t, i) => (
                   <StockCard
                     key={t.id}
@@ -569,22 +575,20 @@ export function StockBoard() {
                 ))}
               </div>
             ) : (
-              <div className="flex h-48 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
-                <LineChartIcon className="h-10 w-10" />
-                <p>등록된 종목이 없습니다.</p>
-                <AddTickerDialog market={market} onAdded={load} />
-              </div>
+              <EmptyState icon={<LineChartIcon />} action={<AddTickerDialog market={market} onAdded={load} />}>
+                등록된 종목이 없습니다.
+              </EmptyState>
             )}
           </section>
 
           {/* 오늘의 관심 종목 — 이 시장 상장 종목만 */}
           {!!domestic.length && (
-            <section className="mt-8">
-              <SectionTitle count={domestic.length}>🔍 오늘의 관심 종목</SectionTitle>
-              <p className="mb-3 rounded-md bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
+            <section>
+              <SectionHeader title="오늘의 관심 종목" count={domestic.length} accent={ACCENT} />
+              <Notice tone="muted" icon={null} className="mb-0">
                 시장에서 거론되는 사실을 정리한 것으로 매수 추천이 아닙니다.
-              </p>
-              <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
+              </Notice>
+              <div className="divide-y">
                 {domestic.map((w, i) => (
                   <StockCard
                     key={`${w.symbol}-${i}`}
@@ -600,17 +604,19 @@ export function StockBoard() {
           )}
 
           {/* 해외 참고 — 이 브리핑 시장에 상장되지 않은 종목.
-              점선 테두리 + 음영으로 관심 종목 그리드와 구조적으로 끊는다. */}
+              슬레이트 색 사각형 + 별도 괘선 섹션으로 관심 종목 목록과 구조적으로 끊는다. */}
           {!!foreign.length && snap && (
-            <section className="mt-8 rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-4">
-              <SectionTitle count={foreign.length} tone="#64748b">
-                {foreignSectionTitle(snap.market)}
-              </SectionTitle>
-              <p className="mb-3 text-sm text-muted-foreground">
+            <section>
+              <SectionHeader
+                title={foreignSectionTitle(snap.market)}
+                count={foreign.length}
+                accent={FOREIGN_ACCENT}
+              />
+              <p className="text-[13px] text-muted-foreground">
                 {marketLabel(snap.market)}에 상장되지 않은 종목입니다. 오늘 이 장에서 직접 거래되지
                 않으며, 시세·통화는 해당 종목의 상장 시장 기준입니다.
               </p>
-              <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(340px,1fr))]">
+              <div className="divide-y">
                 {foreign.map((w, i) => (
                   <StockCard
                     key={`${w.symbol}-${i}`}
@@ -622,27 +628,34 @@ export function StockBoard() {
             </section>
           )}
 
-          {/* 뉴스 */}
-          {newsBuckets.map((g) => (
-            <section key={g.bucket} className="mt-8">
-              <SectionTitle count={g.items.length}>📰 {g.bucket}</SectionTitle>
-              <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
-                {g.items.map((n, i) => (
-                  <NewsCard key={`${n.title}-${i}`} item={n} />
-                ))}
-              </div>
-            </section>
-          ))}
-
-          {snap?.notes && (
-            <p className="mt-6 whitespace-pre-line text-sm text-muted-foreground">{snap.notes}</p>
+          {/* 뉴스 — 분류(bucket)별 블록을 신문 다단에 흘려 넣는다(가이드 §4-B). */}
+          {newsBuckets.length > 0 && (
+            <div className="col-rule columns-1 gap-10 lg:columns-2 2xl:columns-3 min-[2200px]:columns-4">
+              {newsBuckets.map((g) => (
+                // break-inside-avoid: 분류 블록이 두 단에 걸쳐 쪼개지지 않게 한다.
+                <section key={g.bucket} className="mb-8 break-inside-avoid">
+                  <SectionHeader className="mt-0" title={g.bucket} count={g.items.length} accent={ACCENT} />
+                  <ul className="divide-y">
+                    {g.items.map((n, i) => (
+                      <NewsRow key={`${n.title}-${i}`} item={n} />
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
           )}
 
-          {/* 면책 — 보드 하단에 상시 노출 */}
-          {snap?.disclaimer && (
-            <p className="mt-6 border-t pt-4 text-xs text-muted-foreground">{snap.disclaimer}</p>
+          {(snap?.notes || snap?.disclaimer) && (
+            <footer className="space-y-6">
+              {snap?.notes && <p className="whitespace-pre-line text-sm text-muted-foreground">{snap.notes}</p>}
+
+              {/* 면책 — 보드 하단에 상시 노출 */}
+              {snap?.disclaimer && (
+                <p className="border-t pt-4 text-[12px] leading-relaxed text-muted-foreground">{snap.disclaimer}</p>
+              )}
+            </footer>
           )}
-        </>
+        </div>
       )}
     </div>
   );

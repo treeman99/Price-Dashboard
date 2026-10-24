@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -13,36 +13,46 @@ import {
 } from "lucide-react";
 import type { StockAnalysis, StockWatchItem, StockTicker, StockPoint } from "@shared/types";
 import { formatPrice, changeTone } from "@shared/stock";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Tip } from "@/components/ui/tooltip";
+import { IconAction, StatusTag } from "@/components/ui/page";
 import { StockChart } from "./StockChart";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
- * 등락 배지 — 한국 증시 관례(상승 빨강 / 하락 파랑 / 보합 회색).
+ * 등락 표시 — 한국 증시 관례(상승 빨강 / 하락 파랑 / 보합 회색). 채운 알약 대신 색 글씨로 쓴다.
  * ⚠️ 쇼핑 관점의 배색(하락=싸짐=초록)을 그대로 가져오면 안 된다. 증시는 한국 관례를 따른다.
  */
-function ChangeBadge({ pct }: { pct: number | null }) {
+function ChangeMark({ pct }: { pct: number | null }) {
   const tone = changeTone(pct);
   if (tone === "flat" || pct == null) {
     return (
-      <Badge className="border-transparent bg-muted text-muted-foreground gap-1">
-        <Minus className="h-3 w-3" /> 보합
-      </Badge>
+      <span className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground">
+        <Minus className="h-3.5 w-3.5" /> 보합
+      </span>
     );
   }
   const isUp = tone === "up";
   return (
-    <Badge
-      className="border-transparent gap-1 text-white"
-      style={{ backgroundColor: isUp ? "#e74c3c" : "#2563eb" }}
+    <span
+      className={cn(
+        "num inline-flex items-center gap-0.5 text-[15px] font-semibold",
+        isUp ? "text-up" : "text-stock-down"
+      )}
     >
-      {isUp ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+      {isUp ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />}
       {Math.abs(pct).toFixed(2)}%
-    </Badge>
+    </span>
+  );
+}
+
+/** 왼쪽 열 아래의 작은 키-값 한 칸(5일 등락·5일선·20일선). */
+function Stat({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11.5px] text-muted-foreground">{label}</div>
+      <div className={cn("num whitespace-nowrap text-[13px] font-medium", className)}>{children}</div>
+    </div>
   );
 }
 
@@ -51,7 +61,7 @@ function Field({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
   return (
     <div>
-      <div className="mb-0.5 text-xs font-semibold text-muted-foreground">{label}</div>
+      <div className="mb-0.5 text-[12px] font-semibold text-muted-foreground">{label}</div>
       <p className="whitespace-pre-line text-sm leading-relaxed text-foreground/80">{value}</p>
     </div>
   );
@@ -186,109 +196,107 @@ export function StockCard({
   }
 
   return (
-    <Card>
-      <CardHeader>
+    // 가로 띠(가이드 §4-D): 왼쪽 이름·시세, 가운데 차트, 오른쪽 서술. lg 미만에서는 세로로 쌓는다.
+    <article className="grid gap-x-8 gap-y-4 py-5 lg:grid-cols-[260px_minmax(0,1fr)_360px] xl:grid-cols-[280px_minmax(0,1fr)_400px] 2xl:grid-cols-[300px_minmax(0,1fr)_420px]">
+      <div className="min-w-0">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <CardTitle className="flex items-center gap-1.5">
-              <span className="truncate">{analysis.name}</span>
+            <h3 className="flex items-center gap-1.5 text-base font-semibold leading-snug">
+              <span className="min-w-0 break-words">{analysis.name}</span>
               {analysis.verdict && <span className="shrink-0">{analysis.verdict}</span>}
-            </CardTitle>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            </h3>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 font-mono text-[12px] text-muted-foreground">
               <span>{analysis.symbol}</span>
               {ticker?.exchange && <span>· {ticker.exchange}</span>}
-              {watch && (
-                <Badge className="border-transparent bg-muted px-1.5 py-0 text-[10px] font-normal text-muted-foreground">
-                  {watch.attention}
-                </Badge>
-              )}
+              {watch && <StatusTag className="font-sans">{watch.attention}</StatusTag>}
               {/* 해외 참고 항목의 실제 시장. "attention" in analysis 만으로는 관심/해외참고를
                   구별할 수 없어(둘 다 StockWatchItem) 섹션이 명시적으로 내려준다. */}
-              {marketNote && (
-                <Badge className="border-slate-200 bg-slate-100 px-1.5 py-0 text-[10px] font-normal text-slate-600">
-                  {marketNote}
-                </Badge>
-              )}
+              {marketNote && <StatusTag className="font-sans">{marketNote}</StatusTag>}
               {/* ⚠️ 이 배지는 **등록 종목(analyses) 전용**이다 — curate.ts 가 `verified: q.close != null`
                   로 여전히 false 를 만든다. 관심 종목·해외 참고는 드롭 정책상 verified=false 가
                   도달하지 않을 뿐이므로 데드코드로 오인해 지우지 말 것. */}
               {analysis.verified === false && (
-                <Badge
-                  className="border-amber-200 bg-amber-100 px-1.5 py-0 text-[10px] font-normal text-amber-700"
+                <StatusTag
+                  tone="warn"
+                  className="font-sans"
                   title="결정론적 시세 소스로 검증하지 못한 값입니다"
                 >
                   시세 미검증
-                </Badge>
+                </StatusTag>
               )}
             </div>
           </div>
           {ticker && (
-            <div className="flex shrink-0 items-center">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="group/tt relative"
+            <div className="-mr-1.5 flex shrink-0 items-center">
+              <IconAction
+                label="순서 앞으로"
                 onClick={() => onMove?.(ticker, "up")}
                 disabled={!canUp || disabled}
-                aria-label="순서 앞으로"
               >
-                <ChevronUp className="h-4 w-4" />
-                <Tip>순서 앞으로</Tip>
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="group/tt relative"
+                <ChevronUp />
+              </IconAction>
+              <IconAction
+                label="순서 뒤로"
                 onClick={() => onMove?.(ticker, "down")}
                 disabled={!canDown || disabled}
-                aria-label="순서 뒤로"
               >
-                <ChevronDown className="h-4 w-4" />
-                <Tip>순서 뒤로</Tip>
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="group/tt relative"
+                <ChevronDown />
+              </IconAction>
+              <IconAction
+                label={ticker.pinned ? "고정 해제" : "고정(브리핑에 상세 분석 첨부)"}
+                active={ticker.pinned}
                 onClick={togglePin}
                 disabled={busy || disabled}
-                aria-label={ticker.pinned ? "고정 해제" : "고정"}
               >
                 {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="animate-spin" />
                 ) : (
-                  <Pin
-                    className={cn("h-4 w-4", ticker.pinned && "fill-current text-[#059669]")}
-                  />
+                  <Pin className={cn(ticker.pinned && "fill-current")} />
                 )}
-                <Tip>{ticker.pinned ? "고정 해제" : "고정(브리핑에 상세 분석 첨부)"}</Tip>
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="group/tt relative"
-                onClick={handleDelete}
-                disabled={busy || disabled}
-                aria-label="종목 삭제"
-              >
-                <Trash2 className="h-4 w-4" />
-                <Tip>종목 삭제</Tip>
-              </Button>
+              </IconAction>
+              <IconAction label="종목 삭제" danger onClick={handleDelete} disabled={busy || disabled}>
+                <Trash2 />
+              </IconAction>
             </div>
           )}
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+
+        {/* 시세 요약 */}
+        <div className="mt-4">
+          <div className="text-[12px] text-muted-foreground">종가</div>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="num font-serif text-[1.75rem] font-semibold leading-tight tracking-[-0.01em]">
+              {formatPrice(close, analysis.currency)}
+            </span>
+            <ChangeMark pct={changePct} />
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-3 gap-3 border-t pt-2.5">
+          <Stat
+            label="5일 등락"
+            className={cn(
+              changeTone(analysis.weekChangePct) === "up" && "text-up",
+              changeTone(analysis.weekChangePct) === "down" && "text-stock-down",
+              changeTone(analysis.weekChangePct) === "flat" && "text-muted-foreground"
+            )}
+          >
+            {analysis.weekChangePct != null ? `${analysis.weekChangePct.toFixed(2)}%` : "-"}
+          </Stat>
+          <Stat label="5일선">{formatPrice(analysis.ma5, analysis.currency)}</Stat>
+          <Stat label="20일선">{formatPrice(analysis.ma20, analysis.currency)}</Stat>
+        </div>
+
         {/* 등록 종목에 추가 — onAdd 를 넘긴 섹션('오늘의 관심 종목')에서만 뜬다. */}
         {onAdd && (
-          <div className="space-y-1.5">
+          <div className="mt-4 space-y-1.5">
             {registered ? (
-              <div className="flex items-center justify-center gap-1.5 rounded-md bg-muted/50 py-1.5 text-xs text-muted-foreground">
+              <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
                 <CheckCircle2 className="h-3.5 w-3.5" /> 등록됨
-              </div>
+              </p>
             ) : (
-              /* ⚠️ 실패 메시지는 반드시 이 가지 안에 둔다. 밖에 두면 '등록됨' 배지와 '추가 실패'가
-                 한 카드에 같이 떠서(추가 실패로 addErr 이 남은 뒤 다른 경로의 load() 가 원장을
+              /* ⚠️ 실패 메시지는 반드시 이 가지 안에 둔다. 밖에 두면 '등록됨' 표시와 '추가 실패'가
+                 한 종목에 같이 떠서(추가 실패로 addErr 이 남은 뒤 다른 경로의 load() 가 원장을
                  새로 읽어 registered 가 true 가 되는 경우) 등록이 된 건지 알 수 없게 된다.
                  실패를 숨기는 게 아니다 — 아직 등록되지 않은 동안에는 그대로 보인다. */
               <>
@@ -307,7 +315,7 @@ export function StockCard({
                   등록 종목에 추가
                 </Button>
                 {addErr && (
-                  <p className="text-xs text-up" role="alert">
+                  <p className="text-[12.5px] text-tone-error" role="alert">
                     추가 실패: {addErr}
                   </p>
                 )}
@@ -315,53 +323,20 @@ export function StockCard({
             )}
           </div>
         )}
+      </div>
 
-        {/* 시세 요약 */}
-        <div className="flex flex-wrap items-end justify-between gap-2">
-          <div>
-            <div className="text-xs text-muted-foreground">종가</div>
-            <div className="text-2xl font-bold">
-              {formatPrice(close, analysis.currency)}
-            </div>
-          </div>
-          <ChangeBadge pct={changePct} />
-        </div>
+      <div className="min-w-0">
+        <StockChart points={points} height={170} />
+      </div>
 
-        <div className="grid grid-cols-3 gap-2 text-sm">
-          <div className="rounded-md bg-muted/50 px-3 py-2">
-            <div className="text-xs text-muted-foreground">5일 등락</div>
-            <div
-              className={cn(
-                "font-medium",
-                changeTone(analysis.weekChangePct) === "up" && "text-up",
-                changeTone(analysis.weekChangePct) === "down" && "text-stock-down",
-                changeTone(analysis.weekChangePct) === "flat" && "text-muted-foreground"
-              )}
-            >
-              {analysis.weekChangePct != null ? `${analysis.weekChangePct.toFixed(2)}%` : "-"}
-            </div>
-          </div>
-          <div className="rounded-md bg-muted/50 px-3 py-2">
-            <div className="text-xs text-muted-foreground">5일선</div>
-            <div className="font-medium">{formatPrice(analysis.ma5, analysis.currency)}</div>
-          </div>
-          <div className="rounded-md bg-muted/50 px-3 py-2">
-            <div className="text-xs text-muted-foreground">20일선</div>
-            <div className="font-medium">{formatPrice(analysis.ma20, analysis.currency)}</div>
-          </div>
-        </div>
-
-        <StockChart points={points} />
-
-        <div className="space-y-3 border-t pt-3">
-          <Field label="요약" value={analysis.summary} />
-          <Field label="전망" value={analysis.outlook} />
-          {/* rationale · risks 는 필수 노출 — 근거 없는 전망만 남기지 않는다. */}
-          <Field label="근거" value={analysis.rationale} />
-          <Field label="리스크" value={analysis.risks} />
-          {watch && <Field label="주목 가격대" value={watch.levels} />}
-        </div>
-      </CardContent>
-    </Card>
+      <div className="min-w-0 space-y-3">
+        <Field label="요약" value={analysis.summary} />
+        <Field label="전망" value={analysis.outlook} />
+        {/* rationale · risks 는 필수 노출 — 근거 없는 전망만 남기지 않는다. */}
+        <Field label="근거" value={analysis.rationale} />
+        <Field label="리스크" value={analysis.risks} />
+        {watch && <Field label="주목 가격대" value={watch.levels} />}
+      </div>
+    </article>
   );
 }
