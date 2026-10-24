@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   RefreshCw,
   Loader2,
@@ -69,6 +69,12 @@ function NewsRow({ item }: { item: NewsItem }) {
   );
 }
 
+/**
+ * 카테고리마다 처음에 보이는 기사 수. 평소엔 카테고리당 1~3건이라 버튼이 안 뜨고,
+ * 많은 날(실측 최대 총 76건·한 카테고리 12건)에도 카테고리 한 줄이 화면 한 장 남짓에 머문다.
+ */
+const PREVIEW_COUNT = 4;
+
 function Section({
   def,
   items,
@@ -88,9 +94,21 @@ function Section({
   onEdit: (def: NewsCategoryDef) => void;
   onDelete: (def: NewsCategoryDef) => void;
 }) {
+  const ref = useRef<HTMLElement>(null);
+  const [open, setOpen] = useState(false);
+  const hidden = items.length - PREVIEW_COUNT;
+  const shown = open || hidden <= 0 ? items : items.slice(0, PREVIEW_COUNT);
+
+  function collapse() {
+    setOpen(false);
+    // 긴 목록 아래에서 접으면 카테고리 머리가 화면 위로 사라지므로 머리로 되돌아간다.
+    const el = ref.current;
+    if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: "start" });
+  }
+
   return (
-    // break-inside-avoid: 카테고리 블록이 두 단에 걸쳐 쪼개지지 않게 한다.
-    <section className="group/cat mb-8 break-inside-avoid">
+    // scroll-mt: 상단 고정 헤더에 카테고리 머리가 가려지지 않게.
+    <section ref={ref} className="group/cat scroll-mt-32">
       <SectionHeader
         className="mt-0"
         title={`${def.emoji} ${def.label}`}
@@ -117,11 +135,31 @@ function Section({
         }
       />
       {items.length ? (
-        <ul className="divide-y">
-          {items.map((it, i) => (
-            <NewsRow key={i} item={it} />
-          ))}
-        </ul>
+        <>
+          <ul className="divide-y">
+            {shown.map((it, i) => (
+              <NewsRow key={i} item={it} />
+            ))}
+          </ul>
+          {hidden > 0 && (
+            <button
+              type="button"
+              onClick={open ? collapse : () => setOpen(true)}
+              aria-expanded={open}
+              className="flex w-full items-center gap-1 border-t py-2.5 text-left text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {open ? (
+                <>
+                  <ChevronUp className="h-3.5 w-3.5" /> 접기
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="h-3.5 w-3.5" /> {hidden}건 더 보기
+                </>
+              )}
+            </button>
+          )}
+        </>
       ) : (
         <EmptyLine>오늘은 해당 카테고리의 최신 뉴스가 없습니다.</EmptyLine>
       )}
@@ -301,9 +339,10 @@ export function NewsBoard() {
           카테고리가 없습니다. 카테고리를 추가하세요.
         </EmptyState>
       ) : (
-        // 신문 다단: 카테고리마다 기사가 1~3건뿐이라 그리드로 깔면 오른쪽이 빈다.
-        // 블록째 단에 흘려 넣어 짧은 카테고리도 빈칸 없이 화면 폭을 채운다.
-        <div className="col-rule columns-1 gap-10 lg:columns-2 2xl:columns-3 min-[2200px]:columns-4">
+        // 카테고리를 가로로 줄 세운다(왼→오, 위→아래 = 카테고리 순서). 세로 다단(columns)은 기사가 많은 날
+        // 한 단이 화면 대여섯 장 길이가 되어, 끝까지 내려 읽고 다시 맨 위로 올라가 다음 단을 읽어야 했다.
+        // 줄마다 높이는 PREVIEW_COUNT 가 묶어 둔다.
+        <div className="grid grid-cols-1 items-start gap-x-10 gap-y-10 lg:grid-cols-2 2xl:grid-cols-3 min-[2200px]:grid-cols-4">
           {defs.map((def, i) => (
             <Section
               key={def.key}
