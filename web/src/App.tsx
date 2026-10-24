@@ -3,6 +3,7 @@ import { Loader2, PowerOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/page";
 import { EventsBoard } from "@/components/EventsBoard";
 import { NewsBoard } from "@/components/NewsBoard";
 import { YoutubeBoard } from "@/components/YoutubeBoard";
@@ -26,7 +27,7 @@ import type { DowntimeEvent, DowntimeView } from "@shared/uptime";
 interface TabDef {
   id: string;
   label: string;
-  /** 탭 고유색(HEX). 선택 시 배경, 비선택 시 글자/연한 배경에 사용 */
+  /** 탭 고유색(HEX). 헤더 상단 띠·탭 밑줄·색 사각형, 그리고 CSS 변수 --tab 으로 탭 내부 강조색에 쓴다 */
   color: string;
   content: ReactNode;
 }
@@ -54,6 +55,13 @@ const DOWNTIME_POLL_MS = 60_000;
 export default function App() {
   const [active, setActive] = useState(TABS[0].id);
   const activeTab = TABS.find((t) => t.id === active) ?? TABS[0];
+  const today = new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" });
+
+  // 활성 탭 고유색을 CSS 변수로 노출한다(text-tab / bg-tab / border-tab). 다이얼로그는 body 포털이라
+  // 래퍼 div 가 아니라 문서 루트에 걸어야 거기서도 같은 색을 쓴다.
+  useEffect(() => {
+    document.documentElement.style.setProperty("--tab", activeTab.color);
+  }, [activeTab.color]);
 
   // 서비스 제거는 특정 탭이 아닌 전역 기능 → 헤더에 배치
   const [serviceInstalled, setServiceInstalled] = useState(false);
@@ -183,40 +191,21 @@ export default function App() {
   }
 
   return (
-    <div
-      className="min-h-screen bg-background transition-colors duration-300"
-      // 선택된 탭 고유색을 아주 옅게(약 7%) 깔아 내용 영역 배경에 반영
-      style={{ backgroundColor: `${activeTab.color}12` }}
-    >
-      <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto max-w-[1920px] px-4">
-          <div className="flex items-center justify-between gap-6 pt-3">
-            <h1 className="shrink-0 text-lg font-bold">📷 Daily Dashboard</h1>
-            <div className="flex items-center gap-3">
-              {/* 확인하지 않은 가동 중단 기록. 0건이면 아예 렌더링되지 않는다(평상시 헤더 = 지금 그대로). */}
-              <DowntimeBadge
-                count={downtime?.unackedCount ?? 0}
-                open={historyOpen}
-                onToggle={toggleHistory}
-              />
-              {/* 수집·큐레이션 AI 모델 선택은 특정 탭이 아닌 전역 설정 → 헤더에 배치 */}
-              <ModelControl />
-              {serviceInstalled && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={uninstallService}
-                  disabled={uninstalling}
-                  title="launchd 자동 수집 서비스 제거"
-                >
-                  {uninstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <PowerOff className="h-4 w-4" />}
-                  서비스 제거
-                </Button>
-              )}
-            </div>
+    <div className="min-h-screen bg-background">
+      <header className="sticky top-0 z-20 border-b border-foreground/15 bg-background/95 backdrop-blur-sm">
+        {/* 활성 탭 고유색 띠. 탭 정체성은 이 띠·탭 밑줄·색 사각형으로만 드러내고 배경은 종이색 그대로 둔다. */}
+        <div aria-hidden className="h-[3px] bg-tab transition-colors duration-300" />
+        <div className="mx-auto flex max-w-[2400px] flex-wrap items-stretch gap-x-8 px-5 lg:px-8">
+          <div className="flex shrink-0 items-baseline gap-3 py-3">
+            <h1 className="font-serif text-[1.35rem] font-bold leading-none tracking-[-0.02em]">Daily Dashboard</h1>
+            <span className="num hidden text-[13px] text-muted-foreground sm:inline">{today}</span>
           </div>
-          {/* 게시판 탭 메뉴 — 전체폭, 탭 갯수만큼 균등분할, 탭별 고유색 */}
-          <nav className="-mb-px flex w-full gap-2 pt-3" role="tablist">
+
+          {/* 게시판 탭 — 넓은 화면에선 제목 옆 한 줄, 좁으면 아래 줄로 내려가 가로 스크롤 */}
+          <nav
+            className="order-last -mx-5 flex w-[calc(100%+2.5rem)] items-stretch gap-1 overflow-x-auto overflow-y-hidden px-5 [scrollbar-width:none] xl:order-none xl:mx-0 xl:w-auto xl:flex-1 xl:px-0 [&::-webkit-scrollbar]:hidden"
+            role="tablist"
+          >
             {TABS.map((t) => {
               const selected = active === t.id;
               return (
@@ -225,33 +214,58 @@ export default function App() {
                   role="tab"
                   aria-selected={selected}
                   onClick={() => setActive(t.id)}
-                  style={
-                    selected
-                      ? { backgroundColor: t.color, borderColor: t.color, color: "#fff" }
-                      : { backgroundColor: `${t.color}14`, borderColor: `${t.color}33`, color: t.color }
-                  }
                   className={cn(
-                    "flex-1 rounded-t-lg border border-b-0 px-4 py-3 text-center text-[15px] font-semibold transition-all",
-                    selected ? "shadow-sm" : "hover:brightness-95"
+                    "relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-3 text-[15px] transition-colors",
+                    selected ? "font-semibold text-foreground" : "font-medium text-muted-foreground hover:text-foreground"
                   )}
                 >
+                  <span
+                    aria-hidden
+                    className={cn("h-2 w-2 rounded-[2px] transition-opacity", selected ? "opacity-100" : "opacity-40")}
+                    style={{ backgroundColor: t.color }}
+                  />
                   {t.label}
+                  {selected && (
+                    <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px]" style={{ backgroundColor: t.color }} />
+                  )}
                 </button>
               );
             })}
           </nav>
+
+          <div className="ml-auto flex shrink-0 items-center gap-2 py-2.5">
+            {/* 확인하지 않은 가동 중단 기록. 0건이면 아예 렌더링되지 않는다(평상시 헤더 = 지금 그대로). */}
+            <DowntimeBadge
+              count={downtime?.unackedCount ?? 0}
+              open={historyOpen}
+              onToggle={toggleHistory}
+            />
+            {/* 수집·큐레이션 AI 모델 선택은 특정 탭이 아닌 전역 설정 → 헤더에 배치 */}
+            <ModelControl />
+            {serviceInstalled && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={uninstallService}
+                disabled={uninstalling}
+                title="launchd 자동 수집 서비스 제거"
+                className="hover:bg-tone-error/10 hover:text-tone-error"
+              >
+                {uninstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <PowerOff className="h-4 w-4" />}
+                서비스 제거
+              </Button>
+            )}
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1920px] px-4 py-6">
+      <main className="mx-auto max-w-[2400px] px-5 pb-16 pt-5 lg:px-8">
         {notice && (
-          <div className="mb-4 whitespace-pre-line rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <Notice tone="info" className="whitespace-pre-line">
             {notice}
-          </div>
+          </Notice>
         )}
-        {err && (
-          <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
-        )}
+        {err && <Notice tone="error">{err}</Notice>}
         {/*
           메일 알림(Google) 연결 배너 — 전역 배너 중 **맨 위**다.
 

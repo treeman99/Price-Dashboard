@@ -23,12 +23,11 @@ export function Tip({ children, className }: { children: ReactNode; className?: 
       role="tooltip"
       className={cn(
         "pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2",
-        "translate-y-0.5 whitespace-nowrap rounded-md bg-neutral-900 px-2 py-1 text-xs",
-        "font-normal leading-none text-white opacity-0 shadow-md transition-all duration-150",
+        "translate-y-0.5 whitespace-nowrap rounded-sm bg-foreground px-2 py-1 text-xs",
+        "font-normal leading-none text-background opacity-0 shadow-md transition-all duration-150",
         "group-hover/tt:translate-y-0 group-hover/tt:opacity-100",
         "group-focus-within/tt:translate-y-0 group-focus-within/tt:opacity-100",
-        "dark:bg-neutral-100 dark:text-neutral-900",
-        className
+                className
       )}
     >
       {children}

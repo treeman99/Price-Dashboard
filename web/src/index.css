@@ -2,46 +2,105 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  디자인 원칙(전 탭 공통) — 자세한 규칙은 docs/ui-design-guide.md
+
+  · 종이(paper) 배경 위에 잉크(ink)로 쓴다. 상자(카드)로 감싸지 말고 괘선(rule)·헤어라인으로 나눈다.
+  · 섹션 머리는 2px 잉크 괘선 + 명조(Hahmlet) 제목. 그 아래 내용은 표·목록·다단으로 화면 폭을 채운다.
+  · 색은 의미가 있을 때만 쓴다: 탭 고유색(--tab), 상승/하락, 경고 톤. 장식용 색 배경은 쓰지 않는다.
+*/
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
-    --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
-    --primary: 222 47% 11%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 222 47% 11%;
-    --radius: 0.75rem;
+    --background: 45 29% 95%; /* paper  #F6F4EE */
+    --foreground: 45 8% 10%; /* ink    #1B1A17 */
+    --card: 48 33% 99%; /* 떠 있는 면(다이얼로그·팝오버) */
+    --card-foreground: 45 8% 10%;
+    --primary: 45 8% 10%;
+    --primary-foreground: 45 29% 97%;
+    --secondary: 43 22% 91%;
+    --secondary-foreground: 45 8% 10%;
+    --muted: 43 22% 91%; /* sunken #EEEBE3 — 행 hover, 안내 바탕 */
+    --muted-foreground: 40 6% 40%;
+    --border: 43 18% 84%; /* hairline */
+    --input: 43 14% 76%;
+    --ring: 45 8% 10%;
+    --radius: 0.375rem;
+
+    /* 안내·경고 톤. Notice / StatusTag 가 쓴다. */
+    --tone-error: 4 76% 40%;
+    --tone-warn: 28 92% 36%;
+    --tone-info: 216 78% 45%;
+    --tone-success: 158 89% 24%;
+
+    /* 활성 탭 고유색. App 이 탭을 바꿀 때 덮어쓴다. */
+    --tab: #1b1a17;
   }
 
   .dark {
-    --background: 222 47% 7%;
-    --foreground: 210 40% 98%;
-    --card: 222 47% 10%;
-    --card-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222 47% 11%;
-    --secondary: 217 33% 17%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
-    --border: 217 33% 20%;
-    --input: 217 33% 20%;
-    --ring: 213 27% 84%;
+    --background: 40 6% 8%;
+    --foreground: 45 20% 92%;
+    --card: 40 6% 11%;
+    --card-foreground: 45 20% 92%;
+    --primary: 45 20% 92%;
+    --primary-foreground: 40 6% 8%;
+    --secondary: 40 5% 16%;
+    --secondary-foreground: 45 20% 92%;
+    --muted: 40 5% 14%;
+    --muted-foreground: 40 6% 62%;
+    --border: 40 5% 22%;
+    --input: 40 5% 28%;
+    --ring: 45 20% 85%;
   }
 
   * {
     @apply border-border;
   }
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
   body {
-    @apply bg-background text-foreground;
-    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
-      "Pretendard", system-ui, sans-serif;
+    @apply bg-background font-sans text-foreground;
+    font-size: 15px;
+    line-height: 1.55;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+  ::selection {
+    background: hsl(var(--foreground) / 0.12);
+  }
+}
+
+@layer components {
+  /*
+    데이터 표. <table className="dtable"> 로 쓴다.
+    머리는 작은 회색 글씨 + 아래 잉크 괘선, 행 사이는 헤어라인, hover 시 옅은 바탕.
+  */
+  .dtable {
+    @apply w-full border-collapse text-left text-sm;
+  }
+  .dtable thead th {
+    @apply whitespace-nowrap border-b border-foreground/80 px-3 pb-2 pt-1 text-[12px] font-medium text-muted-foreground;
+  }
+  .dtable tbody td {
+    @apply border-b px-3 py-2.5 align-top;
+  }
+  .dtable tbody tr {
+    @apply transition-colors;
+  }
+  .dtable tbody tr:hover {
+    @apply bg-muted/60;
+  }
+}
+
+@layer utilities {
+  /* 숫자 열 정렬 — 가격·건수·날짜에 붙인다. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+  /* CSS 다단(columns-*) 사이 세로 괘선 */
+  .col-rule {
+    column-rule: 1px solid hsl(var(--border));
   }
 }
