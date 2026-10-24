@@ -9,7 +9,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Notice, StatusTag, EmptyState } from "@/components/ui/page";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { safeHref } from "@shared/url";
 import type { DismissedVideo, YoutubeCategoryDef } from "@shared/types";
 
@@ -114,20 +116,23 @@ export function DismissedVideosDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {err && <p className="text-sm text-up">{err}</p>}
+        {err && (
+          <Notice tone="error" className="mb-0">
+            {err}
+          </Notice>
+        )}
 
         {loading ? (
           <div className="flex h-32 items-center justify-center text-muted-foreground">
             <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 불러오는 중…
           </div>
         ) : ordered.length === 0 ? (
-          <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
-            <Youtube className="h-8 w-8" />
+          <EmptyState icon={<Youtube />} className="py-10">
             <p>제외한 영상이 없습니다.</p>
-            <p className="text-xs">각 영상 카드의 '이 영상 제외' 버튼으로 추가할 수 있어요.</p>
-          </div>
+            <p className="text-[12.5px]">각 영상의 '이 영상 제외' 버튼으로 추가할 수 있어요.</p>
+          </EmptyState>
         ) : (
-          <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+          <ul className="max-h-[55vh] divide-y overflow-y-auto border-y">
             {ordered.map((d) => {
               const href = safeHref(d.url);
               const editing = editingId === d.videoId;
@@ -136,12 +141,10 @@ export function DismissedVideosDialog({
                 ? (defs.find((c) => c.key === d.categoryKey)?.label ?? d.categoryKey)
                 : null;
               return (
-                <div
+                <li
                   key={d.videoId}
-                  // 사유가 붙은 항목은 테두리/배경으로 구분 — 에이전트가 더 강한 신호로 쓴다는 걸 눈으로 알 수 있게.
-                  className={`rounded-md border px-3 py-2 ${
-                    d.reason ? "border-amber-400/60 bg-amber-500/5" : ""
-                  }`}
+                  // 사유가 붙은 항목은 옅은 경고 바탕으로 구분 — 에이전트가 더 강한 신호로 쓴다는 걸 눈으로 알 수 있게.
+                  className={cn("px-3 py-2.5", d.reason && "bg-tone-warn/[0.06]")}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -150,24 +153,20 @@ export function DismissedVideosDialog({
                           href={href}
                           target="_blank"
                           rel="noreferrer"
-                          className="line-clamp-2 font-medium hover:underline"
+                          className="line-clamp-2 text-[15px] font-medium underline-offset-[3px] hover:underline"
                           title={d.title || d.videoId}
                         >
                           {d.title || d.videoId}
                         </a>
                       ) : (
-                        <p className="line-clamp-2 font-medium" title={d.title || d.videoId}>
+                        <p className="line-clamp-2 text-[15px] font-medium" title={d.title || d.videoId}>
                           {d.title || d.videoId}
                         </p>
                       )}
-                      <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 truncate text-xs text-muted-foreground">
+                      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 truncate text-[12.5px] text-muted-foreground">
                         {d.channel && <span>{d.channel}</span>}
-                        {catLabel && (
-                          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                            {catLabel}
-                          </span>
-                        )}
-                        <span>{new Date(d.dismissedAt).toLocaleString("ko-KR")} 제외</span>
+                        {catLabel && <StatusTag>{catLabel}</StatusTag>}
+                        <span className="num">{new Date(d.dismissedAt).toLocaleString("ko-KR")} 제외</span>
                       </p>
                     </div>
                     <Button
@@ -187,7 +186,7 @@ export function DismissedVideosDialog({
                   </div>
 
                   {/* 사유 — 선택 항목이라 평소엔 접혀 있고, 누르면 빠른 태그 + 직접 입력이 열린다. */}
-                  <div className="mt-2 border-t pt-2">
+                  <div className="mt-2">
                     {editing ? (
                       <div className="space-y-2">
                         <div className="flex flex-wrap gap-1.5">
@@ -197,9 +196,13 @@ export function DismissedVideosDialog({
                               onClick={() => saveReason(d.videoId, r)}
                               disabled={busy}
                               title={`'${r}' 사유로 저장`}
-                              className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors hover:border-amber-400 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                d.reason === r ? "border-amber-400 bg-amber-500/10 font-medium" : ""
-                              }`}
+                              aria-pressed={d.reason === r}
+                              className={cn(
+                                "h-6 rounded-[3px] border px-2 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                                d.reason === r
+                                  ? "border-foreground bg-foreground font-medium text-background"
+                                  : "border-input text-muted-foreground hover:border-foreground/40 hover:bg-muted hover:text-foreground"
+                              )}
                             >
                               {r}
                             </button>
@@ -243,7 +246,7 @@ export function DismissedVideosDialog({
                           <button
                             onClick={() => saveReason(d.videoId, null)}
                             disabled={busy}
-                            className="text-[11px] text-muted-foreground underline-offset-2 transition-colors hover:text-destructive hover:underline disabled:opacity-50"
+                            className="text-[12px] text-muted-foreground underline-offset-[3px] transition-colors hover:text-tone-error hover:underline disabled:opacity-50"
                           >
                             사유 지우기 (제외는 유지)
                           </button>
@@ -252,29 +255,29 @@ export function DismissedVideosDialog({
                     ) : (
                       <div className="flex items-center gap-2">
                         {d.reason ? (
-                          <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                          <StatusTag tone="warn" className="min-w-0 shrink gap-1">
                             <Tag className="h-3 w-3 shrink-0" />
                             <span className="truncate">{d.reason}</span>
-                          </span>
+                          </StatusTag>
                         ) : (
-                          <span className="text-[11px] text-muted-foreground">사유 없음</span>
+                          <span className="text-[12px] text-muted-foreground">사유 없음</span>
                         )}
                         <button
                           onClick={() => {
                             setEditingId(d.videoId);
                             setDraft(d.reason ?? "");
                           }}
-                          className="ml-auto shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                          className="ml-auto shrink-0 text-[12px] text-muted-foreground underline-offset-[3px] transition-colors hover:text-foreground hover:underline"
                         >
                           {d.reason ? "사유 수정" : "사유 붙이기"}
                         </button>
                       </div>
                     )}
                   </div>
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
 
         <div className="flex justify-end">

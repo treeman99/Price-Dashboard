@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   RefreshCw,
   Loader2,
   Youtube,
   PlayCircle,
-  CalendarDays,
   Eye,
   Ban,
   X,
@@ -17,7 +16,6 @@ import {
   Circle,
   Star,
   EyeOff,
-  AlertTriangle,
 } from "lucide-react";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategoryDef } from "@shared/types";
 import { safeHref } from "@shared/url";
@@ -31,9 +29,20 @@ import {
   shouldAutoMarkWatched,
 } from "@shared/youtube";
 import { api } from "@/lib/api";
-import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Tip } from "@/components/ui/tooltip";
+import {
+  PageToolbar,
+  Meta,
+  MetaDot,
+  Notice,
+  SectionHeader,
+  TextLink,
+  IconAction,
+  EmptyState,
+  EmptyLine,
+  LoadingState,
+} from "@/components/ui/page";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 import { BlockedChannelsDialog } from "@/components/BlockedChannelsDialog";
@@ -54,10 +63,26 @@ function canBlockChannel(v: YoutubeVideo): boolean {
   return !!(v.channelHandle && v.channelHandle.trim()) || (!!v.channel && v.channel !== UNKNOWN_CHANNEL);
 }
 
-function Thumbnail({ video, onOpen }: { video: YoutubeVideo; onOpen: () => void }) {
+/**
+ * 행 동작 아이콘의 라벨 툴팁에는 예전 버튼 title 의 설명 전문이 들어간다. 한 줄로는 길어서
+ * 줄바꿈되는 폭으로 열고, 오른쪽 끝 열에서 화면 밖으로 밀려나지 않게 버튼 오른쪽 끝에 맞춘다.
+ */
+const LONG_TIP =
+  "[&_[role=tooltip]]:left-auto [&_[role=tooltip]]:right-0 [&_[role=tooltip]]:w-max [&_[role=tooltip]]:max-w-[17rem] [&_[role=tooltip]]:translate-x-0 [&_[role=tooltip]]:whitespace-normal [&_[role=tooltip]]:text-left [&_[role=tooltip]]:leading-snug";
+
+function Thumbnail({
+  video,
+  onOpen,
+  className,
+}: {
+  video: YoutubeVideo;
+  onOpen: () => void;
+  className?: string;
+}) {
   const [errored, setErrored] = useState(false);
   const href = safeHref(video.url);
   const thumbSrc = safeHref(video.thumbnail);
+  const box = cn("group/thumb relative block aspect-video overflow-hidden rounded-[3px] bg-muted", className);
   const inner = (
     <>
       {thumbSrc && !errored ? (
@@ -66,30 +91,26 @@ function Thumbnail({ video, onOpen }: { video: YoutubeVideo; onOpen: () => void 
           alt=""
           loading="lazy"
           onError={() => setErrored(true)}
-          className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+          className="h-full w-full object-cover"
         />
       ) : (
-        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-muted to-muted-foreground/20">
-          <Youtube className="h-10 w-10 text-muted-foreground/50" />
+        <div className="flex h-full w-full items-center justify-center">
+          <Youtube className="h-8 w-8 text-muted-foreground/50" />
         </div>
       )}
       {/* 재생 오버레이 */}
-      <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/20">
-        <PlayCircle className="h-12 w-12 text-white/0 drop-shadow-lg transition-all group-hover:text-white/90" />
+      <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover/thumb:bg-black/20">
+        <PlayCircle className="h-10 w-10 text-white/0 transition-colors group-hover/thumb:text-white/90" />
       </div>
       {video.duration && (
-        <span className="absolute bottom-1.5 right-1.5 rounded bg-black/80 px-1.5 py-0.5 text-[11px] font-medium text-white">
+        <span className="num absolute bottom-1 right-1 rounded-[2px] bg-black/80 px-1 py-px text-[11px] font-medium text-white">
           {video.duration}
         </span>
       )}
     </>
   );
   if (!href) {
-    return (
-      <div className="group relative block aspect-video w-full overflow-hidden rounded-md bg-muted">
-        {inner}
-      </div>
-    );
+    return <div className={box}>{inner}</div>;
   }
   return (
     <a
@@ -97,11 +118,61 @@ function Thumbnail({ video, onOpen }: { video: YoutubeVideo; onOpen: () => void 
       target="_blank"
       rel="noreferrer"
       onClick={onOpen}
-      className="group relative block aspect-video w-full overflow-hidden rounded-md bg-muted"
+      className={box}
       title="유튜브에서 보기 — 보고 돌아오면 자동으로 '본영상' 체크됩니다"
     >
       {inner}
     </a>
+  );
+}
+
+/**
+ * 요약은 3줄까지만 보이고, 넘치면 '더 보기'로 펼친다. 예전 카드는 내부 스크롤로 전문을 보여줬으니
+ * 행으로 바꿔도 전문에 닿는 길은 남겨 둔다(넘칠 때만 버튼이 뜨도록 실제 높이를 잰다).
+ */
+function Summary({ text }: { text: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [open, setOpen] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    const check = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, open]);
+  const toggle = "text-[12.5px] text-muted-foreground underline-offset-[3px] hover:text-foreground hover:underline";
+  return (
+    <div className="relative mt-1.5">
+      <p
+        ref={ref}
+        className={cn("whitespace-pre-line text-sm leading-relaxed text-foreground/80", !open && "line-clamp-3")}
+      >
+        {text}
+      </p>
+      {open ? (
+        <button type="button" onClick={() => setOpen(false)} className={toggle}>
+          접기
+        </button>
+      ) : (
+        clamped && (
+          // 셋째 줄 끝을 종이색으로 덮고 그 위에 띄운다 — 버튼 때문에 행이 한 줄 더 길어지지 않게.
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className={cn(
+              toggle,
+              "absolute bottom-0 right-0 bg-[linear-gradient(to_right,transparent,hsl(var(--background))_1.5rem)] pl-8 leading-relaxed"
+            )}
+          >
+            더 보기
+          </button>
+        )
+      )}
+    </div>
   );
 }
 
@@ -123,14 +194,15 @@ function MoveMenu({
   if (!targets.length) return null;
   return (
     <div className="relative">
-      <button
+      <IconAction
+        label={disabled ? "수집 중에는 이동할 수 없습니다" : "다른 카테고리로 이동"}
         onClick={() => setOpen((o) => !o)}
         disabled={disabled}
-        title={disabled ? "수집 중에는 이동할 수 없습니다" : "다른 카테고리로 이동"}
-        className="inline-flex items-center gap-1 text-muted-foreground/70 transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-muted-foreground/70"
+        active={open}
+        className={LONG_TIP}
       >
-        <FolderInput className="h-3.5 w-3.5" /> 이동
-      </button>
+        <FolderInput />
+      </IconAction>
       {open && (
         <>
           {/* 바깥 클릭 시 닫기 */}
@@ -146,7 +218,7 @@ function MoveMenu({
                   setOpen(false);
                   onMove(video, currentKey, d.key);
                 }}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                className="flex w-full items-center gap-2 rounded-[3px] px-2 py-1.5 text-left text-sm hover:bg-muted"
               >
                 <span>{d.emoji}</span>
                 <span className="truncate">{d.label}</span>
@@ -159,6 +231,10 @@ function MoveMenu({
   );
 }
 
+/**
+ * '본영상 체크'(기간제 숨김)는 행 동작 줄 왼쪽에 글자 토글로, '이 영상 제외'(영구 제외)는 오른쪽 끝
+ * 아이콘(hover 시 붉은색)으로 둔다 — "잠깐 숨김"과 "영구 제외"를 색과 위치로 구분한다.
+ */
 function WatchedToggle({
   video,
   onToggleWatched,
@@ -169,55 +245,28 @@ function WatchedToggle({
   const watched = !!video.watched;
   return (
     <button
+      type="button"
       onClick={() => onToggleWatched(video)}
       disabled={!video.videoId}
+      aria-pressed={watched}
       title={
         watched
           ? "본영상 해제 — 다시 검색(수집)에 노출됩니다"
           : "본영상으로 체크 — 1주일간 검색(수집)에서 제외됩니다"
       }
-      className={`absolute left-3.5 top-3.5 z-10 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium shadow-sm backdrop-blur transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-        watched ? "bg-emerald-600 text-white" : "bg-black/55 text-white hover:bg-emerald-600"
-      }`}
+      className={cn(
+        "inline-flex items-center gap-1 whitespace-nowrap text-[12.5px] underline-offset-[3px] transition-colors hover:underline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:no-underline [&_svg]:h-3.5 [&_svg]:w-3.5",
+        watched ? "font-medium text-tone-success" : "text-muted-foreground hover:text-foreground"
+      )}
     >
-      {watched ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
+      {watched ? <CheckCircle2 /> : <Circle />}
       {watched ? "본영상" : "본영상 체크"}
     </button>
   );
 }
 
-/**
- * 카드 우상단 '이 영상 제외' — 한 번 누르면 확인 없이 바로 사라진다(사유는 선택, 나중에 붙임).
- * 좌상단 '본영상 체크'(emerald·기간제)와 같은 오버레이 줄이지만 반대편·붉은색으로 두어,
- * "잠깐 숨김"과 "영구 제외"를 색과 위치로 구분한다.
- */
-function DismissButton({
+function VideoRow({
   video,
-  onDismiss,
-}: {
-  video: YoutubeVideo;
-  onDismiss: (video: YoutubeVideo) => void;
-}) {
-  return (
-    <button
-      onClick={() => onDismiss(video)}
-      disabled={!video.videoId}
-      title={
-        video.videoId
-          ? "이 영상 제외 — 만료 없이 영구히 숨기고, 다음 수집 때 비슷한 영상도 피합니다('제외 영상'에서 되돌릴 수 있어요)"
-          : "영상 식별자가 없어 제외할 수 없습니다"
-      }
-      className="absolute right-3.5 top-3.5 z-10 inline-flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[11px] font-medium text-white shadow-sm backdrop-blur transition-colors hover:bg-destructive disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-black/55"
-    >
-      <EyeOff className="h-3.5 w-3.5" />
-      이 영상 제외
-    </button>
-  );
-}
-
-function VideoCard({
-  video,
-  color,
   currentKey,
   allDefs,
   moveDisabled,
@@ -230,11 +279,10 @@ function VideoCard({
   onOpenVideo,
 }: {
   video: YoutubeVideo;
-  color: string;
   currentKey: string;
   allDefs: YoutubeCategoryDef[];
   moveDisabled: boolean;
-  /** 이 카드의 채널이 현재 카테고리 추천 채널에 등록되어 있는지 */
+  /** 이 행의 채널이 현재 카테고리 추천 채널에 등록되어 있는지 */
   recommended: boolean;
   onToggleRecommend: (video: YoutubeVideo) => void;
   onBlock: (video: YoutubeVideo, categoryKey: string) => void;
@@ -247,81 +295,65 @@ function VideoCard({
   const canRecommend = !!recommendedChannelValue(video.channel, video.channelHandle);
   const videoHref = safeHref(video.url);
   return (
-    <Card
-      className={`flex h-[30rem] flex-col overflow-hidden border-l-4 p-0 transition-opacity ${
-        video.watched ? "opacity-75" : ""
-      }`}
-      style={{ borderLeftColor: color }}
-    >
-      {/* isolate: '본영상' 버튼(z-10)이 카드 밖으로 튀어나와 sticky 탭 헤더(z-10) 위에 겹치지
-          않도록 독립 스태킹 컨텍스트를 만든다 → 버튼도 카드처럼 헤더 아래로 스크롤된다. */}
-      <div className="relative isolate shrink-0 p-2 pb-0">
-        <Thumbnail video={video} onOpen={() => onOpenVideo(video)} />
-        <WatchedToggle video={video} onToggleWatched={onToggleWatched} />
-        <DismissButton video={video} onDismiss={onDismiss} />
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col p-3 pt-2">
-        {/* 제목 — 2줄 고정 */}
-        <h4 className="line-clamp-2 min-h-[2.6em] font-semibold leading-snug" title={video.originalTitle ?? video.title}>
+    <li className={cn("flex gap-4 border-b py-3.5 transition-opacity", video.watched && "opacity-75")}>
+      <Thumbnail video={video} onOpen={() => onOpenVideo(video)} className="w-36 shrink-0 self-start sm:w-[208px]" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <h3 className="line-clamp-2 text-[15px] font-semibold leading-snug" title={video.originalTitle ?? video.title}>
           {video.title}
-        </h4>
+        </h3>
         {/* 채널 / 날짜 / 조회수 */}
-        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+        <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
           <span className="font-medium text-foreground/70">
             {video.channel}
             {video.channelHandle ? ` · ${video.channelHandle}` : ""}
           </span>
-          <span className="inline-flex items-center gap-1">
-            <CalendarDays className="h-3 w-3" /> {video.date}
-          </span>
+          <MetaDot />
+          <span className="num">{video.date}</span>
           {video.views && (
-            <span className="inline-flex items-center gap-1">
-              <Eye className="h-3 w-3" /> {video.views}
-            </span>
+            <>
+              <MetaDot />
+              <span className="num inline-flex items-center gap-1">
+                <Eye className="h-3 w-3" /> {video.views}
+              </span>
+            </>
           )}
         </p>
-        {/* 요약 — 남는 공간을 채우고, 길면 카드 내부에서 스크롤되어 전부 보임 */}
-        <p className="mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-line pr-1 text-sm leading-relaxed text-foreground/80">
-          {video.summary}
-        </p>
-        {/* 액션 */}
-        <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2 text-xs">
+        <Summary text={video.summary} />
+        {/* 동작 — 행마다 같은 자리(맨 아래)에 오도록 mt-auto */}
+        <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 pt-2">
           {videoHref ? (
-            <a
+            <TextLink
               href={videoHref}
-              target="_blank"
-              rel="noreferrer"
               onClick={() => onOpenVideo(video)}
               title="유튜브에서 보기 — 보고 돌아오면 자동으로 '본영상' 체크됩니다"
-              className="inline-flex items-center gap-1 font-medium text-[#ff0000] hover:underline"
+              icon={<PlayCircle />}
+              className="font-medium text-foreground/80"
             >
-              <PlayCircle className="h-3.5 w-3.5" /> 영상 보기
-            </a>
+              영상 보기
+            </TextLink>
           ) : (
-            <span className="inline-flex items-center gap-1 font-medium text-muted-foreground">
+            <span className="inline-flex items-center gap-1 text-[12.5px] font-medium text-muted-foreground">
               <PlayCircle className="h-3.5 w-3.5" /> 영상 보기
             </span>
           )}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => onToggleRecommend(video)}
-              disabled={!canRecommend}
-              title={
+          <WatchedToggle video={video} onToggleWatched={onToggleWatched} />
+          <div className="ml-auto flex items-center gap-0.5">
+            <IconAction
+              label={
                 !canRecommend
                   ? "채널 정보가 없어 추천 채널로 추가할 수 없습니다"
                   : recommended
                     ? `'${video.channel}' 채널을 추천 채널에서 해제`
                     : `'${video.channel}' 채널을 이 카테고리의 추천 채널로 추가 — 다음 수집부터 우선 확인합니다`
               }
-              className={`inline-flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                recommended
-                  ? "font-medium text-amber-500 hover:text-amber-600"
-                  : "text-muted-foreground/70 hover:text-amber-500"
-              }`}
+              onClick={() => onToggleRecommend(video)}
+              disabled={!canRecommend}
+              aria-pressed={recommended}
+              active={recommended}
+              className={cn(LONG_TIP, recommended && "text-tone-warn hover:text-tone-warn")}
             >
-              <Star className="h-3.5 w-3.5" fill={recommended ? "currentColor" : "none"} />
-              {recommended ? "추천됨" : "추천"}
-            </button>
+              <Star fill={recommended ? "currentColor" : "none"} />
+            </IconAction>
             <MoveMenu
               video={video}
               currentKey={currentKey}
@@ -329,22 +361,37 @@ function VideoCard({
               disabled={moveDisabled}
               onMove={onMove}
             />
-            <button
-              onClick={() => onBlock(video, currentKey)}
-              disabled={!canBlockChannel(video)}
-              title={
+            <IconAction
+              label={
                 canBlockChannel(video)
                   ? `'${video.channel}' 채널을 이 카테고리 조사에서 제외`
                   : "채널 정보가 없어 제외할 수 없습니다"
               }
-              className="inline-flex items-center gap-1 text-muted-foreground/70 transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-muted-foreground/70"
+              onClick={() => onBlock(video, currentKey)}
+              disabled={!canBlockChannel(video)}
+              danger
+              className={LONG_TIP}
             >
-              <Ban className="h-3.5 w-3.5" /> 채널 제외
-            </button>
+              <Ban />
+            </IconAction>
+            {/* 한 번 누르면 확인 없이 바로 사라진다(사유는 선택, 나중에 붙임). */}
+            <IconAction
+              label={
+                video.videoId
+                  ? "이 영상 제외 — 만료 없이 영구히 숨기고, 다음 수집 때 비슷한 영상도 피합니다('제외 영상'에서 되돌릴 수 있어요)"
+                  : "영상 식별자가 없어 제외할 수 없습니다"
+              }
+              onClick={() => onDismiss(video)}
+              disabled={!video.videoId}
+              danger
+              className={LONG_TIP}
+            >
+              <EyeOff />
+            </IconAction>
           </div>
         </div>
       </div>
-    </Card>
+    </li>
   );
 }
 
@@ -383,64 +430,41 @@ function Section({
   onDismiss: (video: YoutubeVideo, categoryKey: string) => void;
   onOpenVideo: (video: YoutubeVideo) => void;
 }) {
-  const ctrl =
-    "rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
-  // 카드는 항상 최신(업로드일 내림차순) 우선으로 표시한다. date 는 "YYYY-MM-DD"라 문자열 비교로 정렬 가능.
+  // 영상은 항상 최신(업로드일 내림차순) 우선으로 표시한다. date 는 "YYYY-MM-DD"라 문자열 비교로 정렬 가능.
   const ordered = [...items].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   return (
-    <section className="mt-8">
-      <div className="mb-3 flex items-center gap-2 border-b pb-2" style={{ borderColor: def.color }}>
-        <h2 className="flex items-center gap-2 text-lg font-bold" style={{ color: def.color }}>
-          <span>{def.emoji}</span>
-          {def.label}
-          <span className="text-sm font-normal text-muted-foreground">({items.length})</span>
-        </h2>
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            onClick={() => onMove(def, "up")}
-            disabled={!canUp}
-            aria-label="위로"
-            className={`${ctrl} group/tt relative`}
-          >
-            <ChevronUp className="h-4 w-4" />
-            <Tip>위로</Tip>
-          </button>
-          <button
-            onClick={() => onMove(def, "down")}
-            disabled={!canDown}
-            aria-label="아래로"
-            className={`${ctrl} group/tt relative`}
-          >
-            <ChevronDown className="h-4 w-4" />
-            <Tip>아래로</Tip>
-          </button>
-          <button
-            onClick={() => onEdit(def)}
-            aria-label="카테고리 수정"
-            className={`${ctrl} group/tt relative`}
-          >
-            <Pencil className="h-4 w-4" />
-            <Tip>카테고리 수정</Tip>
-          </button>
-          {canDelete && (
-            <button
-              onClick={() => onDelete(def)}
-              aria-label="카테고리 삭제"
-              className="group/tt relative rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-destructive"
-            >
-              <X className="h-4 w-4" />
-              <Tip>카테고리 삭제</Tip>
-            </button>
-          )}
-        </div>
-      </div>
+    <section className="group/cat mt-12 first:mt-0">
+      <SectionHeader
+        title={[def.emoji, def.label].filter(Boolean).join(" ")}
+        accent={def.color}
+        count={items.length}
+        actions={
+          // 평소엔 흐리게 두고, 섹션에 마우스를 올리거나 키보드 포커스가 들어오면 또렷하게.
+          <div className="flex items-center gap-0.5 opacity-40 transition-opacity focus-within:opacity-100 group-hover/cat:opacity-100">
+            <IconAction label="위로" onClick={() => onMove(def, "up")} disabled={!canUp}>
+              <ChevronUp />
+            </IconAction>
+            <IconAction label="아래로" onClick={() => onMove(def, "down")} disabled={!canDown}>
+              <ChevronDown />
+            </IconAction>
+            <IconAction label="카테고리 수정" onClick={() => onEdit(def)}>
+              <Pencil />
+            </IconAction>
+            {canDelete && (
+              <IconAction label="카테고리 삭제" danger onClick={() => onDelete(def)}>
+                <X />
+              </IconAction>
+            )}
+          </div>
+        }
+      />
       {items.length ? (
-        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
+        // 카드 상자 없는 가로형 행을 화면 폭에 맞춰 여러 열로 깐다(1680px 에서 3열). 행 구분은 아래 헤어라인뿐.
+        <ul className="grid gap-x-10 [grid-template-columns:repeat(auto-fill,minmax(min(100%,480px),1fr))]">
           {ordered.map((it, i) => (
-            <VideoCard
+            <VideoRow
               key={it.videoId ?? i}
               video={it}
-              color={def.color}
               currentKey={def.key}
               allDefs={allDefs}
               moveDisabled={moveDisabled}
@@ -453,11 +477,9 @@ function Section({
               onOpenVideo={onOpenVideo}
             />
           ))}
-        </div>
+        </ul>
       ) : (
-        <p className="rounded-md bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
-          최근 새 영상이 없습니다.
-        </p>
+        <EmptyLine>최근 새 영상이 없습니다.</EmptyLine>
       )}
     </section>
   );
@@ -846,11 +868,7 @@ export function YoutubeBoard() {
   }
 
   if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center text-muted-foreground">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 불러오는 중…
-      </div>
-    );
+    return <LoadingState />;
   }
 
   // 카테고리 정의(defs)를 기준으로 렌더하고, 스냅샷에서 key가 일치하는 영상만 매칭한다.
@@ -863,88 +881,110 @@ export function YoutubeBoard() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <ScheduleControl kind="youtube" />
-          <span>
-            · 최근 {freshDays}일 이내 영상 · AI·LLM/신제품 리뷰 전문 조사 · 수집 시 이메일 발송(지금 갱신 포함)
-            {" · 영상을 보고 돌아오면 자동 본영상 체크"}
-            {updated && ` · 최종 갱신 ${updated}`}
-            {snap && ` · 총 ${total}건`}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setBlockDialogOpen(true)}>
-            <Ban className="h-4 w-4" /> 제외 채널{blockCount > 0 ? ` (${blockCount})` : ""}
-          </Button>
-          <Button variant="outline" onClick={() => setDismissDialogOpen(true)}>
-            <EyeOff className="h-4 w-4" /> 제외 영상{dismissCount > 0 ? ` (${dismissCount})` : ""}
-          </Button>
-          <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-4 w-4" /> 카테고리 추가
-          </Button>
-          <Button variant="outline" onClick={refresh} disabled={collecting}>
-            {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {collecting ? "수집 중…" : "지금 갱신"}
-          </Button>
-        </div>
-      </div>
+      <PageToolbar
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setBlockDialogOpen(true)}>
+              <Ban className="h-4 w-4" /> 제외 채널{blockCount > 0 ? ` (${blockCount})` : ""}
+            </Button>
+            <Button variant="outline" onClick={() => setDismissDialogOpen(true)}>
+              <EyeOff className="h-4 w-4" /> 제외 영상{dismissCount > 0 ? ` (${dismissCount})` : ""}
+            </Button>
+            <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
+              <Plus className="h-4 w-4" /> 카테고리 추가
+            </Button>
+            <Button variant="outline" onClick={refresh} disabled={collecting}>
+              {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {collecting ? "수집 중…" : "지금 갱신"}
+            </Button>
+          </>
+        }
+      >
+        <ScheduleControl kind="youtube" />
+        <MetaDot />
+        <Meta>최근 {freshDays}일 이내 영상</Meta>
+        <MetaDot />
+        <Meta>AI·LLM/신제품 리뷰 전문 조사</Meta>
+        <MetaDot />
+        <Meta>수집 시 이메일 발송(지금 갱신 포함)</Meta>
+        <MetaDot />
+        <Meta>영상을 보고 돌아오면 자동 본영상 체크</Meta>
+        {updated && (
+          <>
+            <MetaDot />
+            <Meta>
+              최종 갱신 <strong>{updated}</strong>
+            </Meta>
+          </>
+        )}
+        {snap && (
+          <>
+            <MetaDot />
+            <Meta>
+              총 <strong>{total}</strong>건
+            </Meta>
+          </>
+        )}
+      </PageToolbar>
 
-      {err && (
-        <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
-      )}
+      {err && <Notice tone="error">{err}</Notice>}
 
       {collecting && (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+        <Notice tone="info" progress>
           유튜브 소식을 수집하는 중입니다… 카테고리가 많으면 수 분~수십 분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
-        </div>
+        </Notice>
       )}
 
       {/* 수집이 실패하면 서버가 기존 스냅샷을 유지한다 → 화면이 그대로라 실패를 알 수 없다. 명시한다. */}
       {!collecting && failure && (
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            <div className="font-medium">
+        <Notice
+          tone="warn"
+          title={
+            <>
               마지막 수집이 실패해 아래 목록은 이전 결과입니다 (
               {new Date(failure.at).toLocaleString("ko-KR")} 시도)
-            </div>
-            <div className="mt-0.5 break-all text-amber-800">{failure.error}</div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p className="mt-0.5 break-all text-muted-foreground">{failure.error}</p>
+        </Notice>
       )}
 
       {!defs.length ? (
-        <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
-          <Youtube className="h-10 w-10" />
-          <p>카테고리가 없습니다. 카테고리를 추가하세요.</p>
-          <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-4 w-4" /> 카테고리 추가
-          </Button>
-        </div>
+        <EmptyState
+          icon={<Youtube />}
+          action={
+            <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
+              <Plus className="h-4 w-4" /> 카테고리 추가
+            </Button>
+          }
+        >
+          카테고리가 없습니다. 카테고리를 추가하세요.
+        </EmptyState>
       ) : (
-        defs.map((def, i) => (
-          <Section
-            key={def.key}
-            def={def}
-            items={itemsByKey.get(def.key) ?? []}
-            allDefs={defs}
-            canDelete={defs.length > 1}
-            canUp={i > 0}
-            canDown={i < defs.length - 1}
-            moveDisabled={collecting}
-            onMove={move}
-            onEdit={(d) => setDialog({ mode: "edit", cat: d })}
-            onDelete={deleteCategory}
-            onBlock={blockChannel}
-            onMoveVideo={moveVideo}
-            onToggleWatched={toggleWatched}
-            onToggleRecommend={toggleRecommend}
-            onDismiss={dismissVideo}
-            onOpenVideo={openVideo}
-          />
-        ))
+        <div>
+          {defs.map((def, i) => (
+            <Section
+              key={def.key}
+              def={def}
+              items={itemsByKey.get(def.key) ?? []}
+              allDefs={defs}
+              canDelete={defs.length > 1}
+              canUp={i > 0}
+              canDown={i < defs.length - 1}
+              moveDisabled={collecting}
+              onMove={move}
+              onEdit={(d) => setDialog({ mode: "edit", cat: d })}
+              onDelete={deleteCategory}
+              onBlock={blockChannel}
+              onMoveVideo={moveVideo}
+              onToggleWatched={toggleWatched}
+              onToggleRecommend={toggleRecommend}
+              onDismiss={dismissVideo}
+              onOpenVideo={openVideo}
+            />
+          ))}
+        </div>
       )}
 
       <CategoryDialog kind="youtube" state={dialog} onClose={() => setDialog(null)} onSaved={load} />
@@ -971,9 +1011,9 @@ export function YoutubeBoard() {
       {autoNotice && (
         <div
           role="status"
-          className="fixed bottom-6 left-1/2 z-50 flex max-w-[min(92vw,34rem)] -translate-x-1/2 items-center gap-3 rounded-full border bg-card px-4 py-2 text-sm shadow-lg"
+          className="fixed bottom-6 left-1/2 z-50 flex max-w-[min(92vw,34rem)] -translate-x-1/2 items-center gap-3 rounded-md border border-foreground/15 bg-card px-4 py-2 text-sm shadow-[0_12px_32px_-12px_rgba(27,26,23,0.35)]"
         >
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-tone-success" />
           <span className="truncate">{autoNotice.text}</span>
           <button
             onClick={undoAutoWatched}
@@ -984,7 +1024,7 @@ export function YoutubeBoard() {
           <button
             onClick={() => setAutoNotice(null)}
             aria-label="알림 닫기"
-            className="shrink-0 rounded p-0.5 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+            className="shrink-0 rounded-[3px] p-0.5 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" />
           </button>

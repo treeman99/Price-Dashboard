@@ -8,6 +8,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Notice, StatusTag, EmptyState } from "@/components/ui/page";
 import { api } from "@/lib/api";
 import type { BlockedChannel, YoutubeCategoryDef } from "@shared/types";
 
@@ -72,35 +73,35 @@ export function BlockedChannelsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {err && <p className="text-sm text-up">{err}</p>}
+        {err && (
+          <Notice tone="error" className="mb-0">
+            {err}
+          </Notice>
+        )}
 
         {loading ? (
           <div className="flex h-32 items-center justify-center text-muted-foreground">
             <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 불러오는 중…
           </div>
         ) : list.length === 0 ? (
-          <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
-            <Youtube className="h-8 w-8" />
+          <EmptyState icon={<Youtube />} className="py-10">
             <p>제외한 채널이 없습니다.</p>
-            <p className="text-xs">각 영상 카드의 '채널 제외' 버튼으로 추가할 수 있어요.</p>
-          </div>
+            <p className="text-[12.5px]">각 영상의 '채널 제외' 버튼으로 추가할 수 있어요.</p>
+          </EmptyState>
         ) : (
-          <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+          <ul className="max-h-[55vh] divide-y overflow-y-auto border-y pr-1">
             {list.map((b) => (
-              <div
-                key={b.id}
-                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
-              >
+              <li key={b.id} className="flex items-center justify-between gap-3 py-2.5">
                 <div className="min-w-0">
-                  <p className="flex items-center gap-1.5 truncate font-medium">
+                  <p className="flex items-center gap-2 truncate text-[15px] font-medium">
                     <span className="truncate">{b.channel}</span>
-                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
+                    <StatusTag>
                       {b.categoryKey
                         ? (defs.find((d) => d.key === b.categoryKey)?.label ?? b.categoryKey)
                         : "모든 카테고리"}
-                    </span>
+                    </StatusTag>
                   </p>
-                  <p className="truncate text-xs text-muted-foreground">
+                  <p className="num mt-0.5 truncate text-[12.5px] text-muted-foreground">
                     {b.handle ? `${b.handle} · ` : ""}
                     {new Date(b.blockedAt).toLocaleString("ko-KR")} 제외
                   </p>
@@ -119,9 +120,9 @@ export function BlockedChannelsDialog({
                   )}
                   해제
                 </Button>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
 
         <div className="flex justify-end">
