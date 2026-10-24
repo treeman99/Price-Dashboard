@@ -11,6 +11,7 @@ import { Tip } from "@/components/ui/tooltip";
  *   Notice        안내 띠(오류·경고·진행·성공·회색). 상자 대신 왼쪽 굵은 선
  *   SectionHeader 2px 잉크 괘선 + 명조 제목. 섹션 사이 구분은 이것 하나로 한다
  *   SubHeader     섹션 안의 소그룹 라벨(서울 · 8건, 코엑스 …)
+ *   Segmented     탭 안의 보기 전환(한국장/미국장 …)
  *   StatusTag     신규·종료임박 같은 짧은 상태 표시
  *   TextLink      목록 행 안의 보조 링크(원문·캘린더)
  *   IconAction    아이콘만 있는 행 동작 버튼(즉시 뜨는 라벨 툴팁 포함)
@@ -281,6 +282,52 @@ export const IconAction = React.forwardRef<
   </button>
 ));
 IconAction.displayName = "IconAction";
+
+/**
+ * 2~4개 중 하나를 고르는 보기 전환(한국장/미국장, star 총합/이번 주 급상승 …).
+ * 선택된 칸만 잉크로 채운다. 탭 안의 보기 전환은 전부 이것으로 통일한다.
+ */
+export function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+  className,
+  "aria-label": ariaLabel,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: React.ReactNode; disabled?: boolean }[];
+  className?: string;
+  "aria-label"?: string;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      className={cn("inline-flex items-center gap-0.5 rounded-md border border-foreground/20 p-0.5", className)}
+    >
+      {options.map((o) => {
+        const selected = o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            disabled={o.disabled}
+            onClick={() => onChange(o.value)}
+            className={cn(
+              "inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-[3px] px-3 text-[13px] font-medium transition-colors disabled:opacity-40 [&_svg]:h-3.5 [&_svg]:w-3.5",
+              selected ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            )}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export function EmptyState({
   icon,

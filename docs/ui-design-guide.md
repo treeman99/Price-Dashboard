@@ -49,7 +49,7 @@
 
 ```tsx
 import {
-  PageToolbar, Meta, MetaDot, Notice, SectionHeader, SubHeader,
+  PageToolbar, Meta, MetaDot, Notice, SectionHeader, SubHeader, Segmented,
   StatusTag, TextLink, IconAction, EmptyState, EmptyLine, LoadingState,
 } from "@/components/ui/page";
 ```
@@ -96,6 +96,14 @@ import {
 
 `SectionHeader`는 위쪽 2px 잉크 괘선을 그린다. 섹션을 상자로 감싸지 말고 이 괘선 하나로만 구분한다.
 같은 부모의 첫 섹션은 위 여백이 자동으로 0이 된다.
+
+### 보기 전환
+
+```tsx
+<Segmented value={market} onChange={setMarket} options={[{ value: "kr", label: "한국장" }, { value: "us", label: "미국장" }]} />
+```
+
+탭 안의 보기 전환(한국장/미국장, star 총합/이번 주 급상승, 지역 필터 …)은 모두 이 부품으로 통일한다.
 
 ### 행 동작과 상태
 
