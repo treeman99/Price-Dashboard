@@ -1,16 +1,5 @@
-import { useEffect, useId, useState } from "react";
-import {
-  AlertTriangle,
-  Archive,
-  CalendarClock,
-  ChevronDown,
-  Clock,
-  GitFork,
-  Loader2,
-  Scale,
-  Star,
-  TrendingUp,
-} from "lucide-react";
+import { Fragment, useEffect, useId, useState } from "react";
+import { Archive, CalendarClock, ChevronDown, Globe, Lock, Star, TrendingUp } from "lucide-react";
 import type {
   SkillAccess,
   SkillRankEntry,
@@ -22,10 +11,20 @@ import type {
 import { SKILLS_CYCLE_LABEL, SKILLS_RANK_SIZE } from "@shared/skills";
 import { safeHref } from "@shared/url";
 import { api, type CollectAttempt } from "@/lib/api";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
+import {
+  EmptyState,
+  LoadingState,
+  Meta,
+  MetaDot,
+  Notice,
+  PageToolbar,
+  SectionHeader,
+  Segmented,
+  StatusTag,
+  type TagTone,
+} from "@/components/ui/page";
 import { cn } from "@/lib/utils";
 
 /**
@@ -40,7 +39,6 @@ import { cn } from "@/lib/utils";
  *   비교할 지난 스냅샷이 없는 첫 회차(window === null)에는 0 으로 채우거나 총합 순위를
  *   대신 보여주지 않고, 비어 있다는 사실을 그대로 말한다.
  */
-const BLUE = "#2563eb";
 
 /** 수집 진행 상태 폴링 주기. 뉴스 탭과 같은 간격으로 맞춘다. */
 const POLL_MS = 5000;
@@ -85,13 +83,28 @@ function relTime(iso: string): string | null {
 /** 한 줄에 노출할 topic 칩 개수. 넘치면 "+n" 으로 접는다(줄바꿈으로 목록이 무너지지 않게). */
 const TOPIC_LIMIT = 4;
 
+/** 언어 점 색(GitHub linguist 색, 상위권에 실제로 나오는 언어만). 목록에 없으면 회색 점. */
+const LANG_COLOR: Record<string, string> = {
+  Python: "#3572A5",
+  JavaScript: "#f1e05a",
+  TypeScript: "#3178c6",
+  HTML: "#e34c26",
+  Go: "#00ADD8",
+  Rust: "#dea584",
+  "C++": "#f34b7d",
+  Shell: "#89e051",
+};
+
+/** 표의 열 수. 펼침 행이 colSpan 으로 순위 열을 뺀 나머지를 덮는다. */
+const COLS = 8;
+
 /**
- * 🔒 쪽 툴팁에만 붙는 **판정의 한계** 한 줄.
+ * 로컬 쪽 툴팁에만 붙는 **판정의 한계** 한 줄.
  *
  * ★ 우리가 실제로 뒷받침할 수 있는 주장은 "이 스킬은 네트워크를 안 쓴다"가 아니라
  *   **"SKILL.md 본문에서 네트워크 호출 근거를 찾지 못했다"** 이다. 스캐너는 본문의 텍스트만
  *   보므로, 외부 서비스 CLI 를 호출만 하는 스킬처럼 본문에 흔적이 옅은 경우를 놓칠 수 있다.
- *   칩 라벨은 짧아야 하니 이 단서는 툴팁에만 싣는다.
+ *   태그 라벨은 짧아야 하니 이 단서는 툴팁에만 싣는다.
  *
  * ★ `external`/`partial` 에는 붙이지 않는다. 그쪽은 **찾은 것**이라 확정이고, 확정 옆에
  *   "놓칠 수 있다"를 적으면 오히려 발견 사실이 의심스럽게 읽힌다.
@@ -100,7 +113,7 @@ const LOCAL_LIMIT =
   "SKILL.md 본문 기준입니다 — 외부 서비스 CLI 를 호출만 하는 스킬은 놓칠 수 있습니다.";
 
 /**
- * 네트워크 접근 칩의 표기 규칙(라벨·색·툴팁 본문)을 한자리에 모은다.
+ * 네트워크 접근 태그의 표기 규칙(라벨·톤·툴팁 본문)을 한자리에 모은다.
  *
  * ★ `local` 과 `local-sampled` 를 **같은 모양으로 그리지 않는다.** 계약(shared/skills.ts)이
  *   두 kind 를 나눈 이유가 "864개 중 40개만 보고 로컬이라 단정하지 않기" 이므로, 화면이
@@ -108,7 +121,13 @@ const LOCAL_LIMIT =
  *   점선으로 둬서 색을 보지 않고도 확정과 구분되게 한다.
  * ★ `no-skill`·`unknown` 은 회색(중립)이다. "모른다"는 경고가 아니므로 위험 색을 쓰지 않는다.
  */
-function accessChip(a: SkillAccess): { label: string; cls: string; detail: string } {
+function accessTag(a: SkillAccess): {
+  label: string;
+  tone: TagTone;
+  icon: "local" | "net" | null;
+  dashed?: boolean;
+  detail: string;
+} {
   // "20개 중 20개 검사" — 표본이면 이 문장만으로도 전수가 아니었음이 드러난다.
   const scanned = `${num(a.total)}개 중 ${num(a.checked)}개 검사`;
   const found =
@@ -117,75 +136,79 @@ function accessChip(a: SkillAccess): { label: string; cls: string; detail: strin
   switch (a.kind) {
     case "local":
       return {
-        label: `🔒 로컬 ${num(a.total)}/${num(a.total)}`,
-        cls: "border-emerald-300 bg-emerald-50 text-emerald-700",
+        label: `로컬 ${num(a.total)}/${num(a.total)}`,
+        tone: "success",
+        icon: "local",
         detail: `${found} · ${scanned} (전수). ${LOCAL_LIMIT}`,
       };
     case "local-sampled":
       return {
-        label: `🔒 로컬 추정 · 표본 ${num(a.checked)}/${num(a.total)}`,
-        cls: "border-dashed border-emerald-400/70 bg-emerald-50/50 text-emerald-600",
+        label: `로컬 추정 · 표본 ${num(a.checked)}/${num(a.total)}`,
+        tone: "success",
+        icon: "local",
+        dashed: true,
         detail: `${found} · ${scanned}. 표본이라 나머지는 확인하지 못했습니다 — '로컬'로 단정하지 않습니다. ${LOCAL_LIMIT}`,
       };
     case "external":
       return {
-        label: `🌐 외부 접근 ${num(a.network)}/${num(a.checked)}`,
-        cls: "border-orange-300 bg-orange-50 text-orange-700",
+        label: `외부 접근 ${num(a.network)}/${num(a.checked)}`,
+        tone: "warn",
+        icon: "net",
         detail: `${found} · ${scanned} · 검사한 전부에서 신호가 나왔습니다.`,
       };
     case "partial":
       return {
-        label: `🌐 일부 외부 ${num(a.network)}/${num(a.checked)}`,
-        cls: "border-amber-300 bg-amber-50 text-amber-700",
+        label: `일부 외부 ${num(a.network)}/${num(a.checked)}`,
+        tone: "warn",
+        icon: "net",
         detail: `${found} · ${scanned} · 그중 ${num(a.network)}개에서 신호가 나왔습니다.`,
       };
     case "no-skill":
       return {
-        label: "⚪ 스킬 없음",
-        cls: "border-slate-200 bg-slate-50 text-slate-500",
+        label: "스킬 없음",
+        tone: "neutral",
+        icon: null,
         detail: "SKILL.md 가 없는 저장소입니다(목록·도구 저장소일 수 있습니다).",
       };
     default:
       return {
-        label: "⚪ 판정 불가",
-        cls: "border-slate-200 bg-slate-50 text-slate-500",
+        label: "판정 불가",
+        tone: "neutral",
+        icon: null,
         detail: "파일을 읽지 못해 판정하지 못했습니다. 외부 접근이 없다는 뜻은 아닙니다.",
       };
   }
 }
 
 /**
- * 집계 칩 1개. 툴팁에 신호 종류와 검사 범위를 적는다.
+ * 집계 태그 1개. 툴팁에 신호 종류와 검사 범위를 적는다.
  *
  * 툴팁은 hover/focus 로만 뜨므로 같은 문장을 sr-only 로도 실어 스크린리더가 놓치지 않게 한다
- * (칩을 tabIndex 로 만들면 50줄 × 1개씩 탭 스톱이 늘어난다).
+ * (태그를 tabIndex 로 만들면 50줄 × 1개씩 탭 스톱이 늘어난다).
  */
-function AccessChip({ access }: { access: SkillAccess }) {
-  const c = accessChip(access);
+function AccessTag({ access }: { access: SkillAccess }) {
+  const c = accessTag(access);
   return (
-    <span
-      className={cn(
-        "group/tt relative inline-flex items-center rounded-full border px-2 py-0.5",
-        "text-[10px] font-semibold",
-        c.cls
-      )}
-    >
+    <StatusTag tone={c.tone} className={cn("group/tt relative gap-1", c.dashed && "border-dashed")}>
+      {c.icon === "local" && <Lock aria-hidden className="h-3 w-3" />}
+      {c.icon === "net" && <Globe aria-hidden className="h-3 w-3" />}
       {c.label}
       <span className="sr-only"> — {c.detail}</span>
       {/*
         기본 Tip 은 nowrap + 가운데 정렬이라 신호가 여러 개면 가로로 길어져 좁은 폭에서
         잘린다. 왼쪽 정렬 + 줄바꿈으로 바꿔 375px 에서도 칸 안에 들어오게 한다.
-        `w-max` 가 없으면 absolute 박스가 칩 너비(≈90px)에 맞춰 접혀 세로로 길쭉해진다.
+        `w-max` 가 없으면 absolute 박스가 태그 너비(≈90px)에 맞춰 접혀 세로로 길쭉해진다.
       */}
       <Tip className="left-0 w-max max-w-[13rem] translate-x-0 whitespace-normal text-left leading-snug">
         {c.detail}
       </Tip>
-    </span>
+    </StatusTag>
   );
 }
 
 /**
- * 펼침 목록 — 표본에 든 개별 스킬을 한 줄씩.
+ * 펼침 목록 — 표본에 든 개별 스킬을 한 줄씩. 표 아래 전체 폭 확장 행에 다단으로 흘린다
+ * (최대 40줄이라 한 단으로 두면 행 하나가 화면을 다 먹는다).
  *
  * ★ `units` 는 표본이라 `access.total` 보다 짧을 수 있다. 남은 개수를 그냥 "N개 더" 로만
  *   적으면 나머지가 로컬인 줄 오해하므로, 검사하지 못했다는 사실을 함께 적는다.
@@ -193,47 +216,42 @@ function AccessChip({ access }: { access: SkillAccess }) {
 function UnitsList({ units, access, id }: { units: SkillUnit[]; access?: SkillAccess; id: string }) {
   const rest = access ? access.total - units.length : 0;
   return (
-    <div
-      id={id}
-      className="mt-1.5 max-h-56 overflow-y-auto rounded-md border bg-muted/30 px-2 py-1.5"
-    >
-      <ul>
+    <div id={id} className="bg-muted/50 px-3 py-2">
+      <ul className="columns-1 gap-8 md:columns-2 xl:columns-3 2xl:columns-4">
         {units.map((u) => {
           const href = safeHref(u.url);
           const net = u.signals.length > 0;
           return (
-            <li
-              key={u.path}
-              className="flex flex-wrap items-baseline gap-x-2 text-[11px] leading-relaxed"
-            >
-              <span aria-hidden className="shrink-0">
-                {net ? "🌐" : "🔒"}
-              </span>
-              <span className="sr-only">{net ? "외부 접근" : "로컬"}</span>
-              {href ? (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="break-all font-medium hover:underline"
-                  style={{ color: BLUE }}
-                >
-                  {u.name}
-                </a>
+            <li key={u.path} className="flex break-inside-avoid gap-1.5 py-0.5 text-[12px] leading-relaxed">
+              {net ? (
+                <Globe aria-hidden className="mt-[4px] h-3 w-3 shrink-0 text-tone-warn" />
               ) : (
-                <span className="break-all font-medium">{u.name}</span>
+                <Lock aria-hidden className="mt-[4px] h-3 w-3 shrink-0 text-muted-foreground" />
               )}
-              {net && (
-                <span className="min-w-0 break-words text-muted-foreground">
-                  {u.signals.join(", ")}
-                </span>
-              )}
+              <span className="sr-only">{net ? "외부 접근" : "로컬"}</span>
+              <span className="min-w-0">
+                {href ? (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="break-all font-medium underline-offset-[3px] hover:underline"
+                  >
+                    {u.name}
+                  </a>
+                ) : (
+                  <span className="break-all font-medium">{u.name}</span>
+                )}
+                {net && (
+                  <span className="ml-2 break-words text-muted-foreground">{u.signals.join(", ")}</span>
+                )}
+              </span>
             </li>
           );
         })}
       </ul>
       {access && rest > 0 && (
-        <p className="mt-1 border-t pt-1 text-[10px] text-muted-foreground/80">
+        <p className="mt-1.5 border-t pt-1.5 text-[12px] text-muted-foreground">
           … {num(rest)}개 더 (표본 {num(access.checked)}개만 검사해 나머지는 확인하지 못했습니다)
         </p>
       )}
@@ -244,20 +262,16 @@ function UnitsList({ units, access, id }: { units: SkillUnit[]; access?: SkillAc
 /** 순위 변동 표시. prevRank 가 null 이면 신규 진입(NEW). */
 function RankDelta({ rank, prevRank }: { rank: number; prevRank: number | null }) {
   if (prevRank === null) {
-    return (
-      <Badge className="border-[#2563eb]/30 bg-[#2563eb]/10 px-1.5 py-0 text-[10px] font-bold text-[#2563eb]">
-        NEW
-      </Badge>
-    );
+    return <span className="font-mono text-[11px] font-semibold text-tone-info">NEW</span>;
   }
   const diff = prevRank - rank; // 양수 = 순위가 올랐다
-  if (diff === 0) return <span className="text-[11px] text-muted-foreground/50">–</span>;
+  if (diff === 0) return <span className="font-mono text-[11px] text-muted-foreground/50">–</span>;
   const up = diff > 0;
   return (
     <span
       className={cn(
-        "text-[11px] font-semibold tabular-nums",
-        up ? "text-emerald-600" : "text-slate-500"
+        "num font-mono text-[11px] font-semibold",
+        up ? "text-tone-success" : "text-muted-foreground"
       )}
       title={`지난 회차 ${prevRank}위`}
     >
@@ -267,7 +281,10 @@ function RankDelta({ rank, prevRank }: { rank: number; prevRank: number | null }
   );
 }
 
-/** 랭킹 한 줄. */
+/** 값이 없는 칸. 빈칸으로 두면 표에서 줄이 밀린 것처럼 보인다. */
+const Dash = () => <span className="text-muted-foreground/50">—</span>;
+
+/** 랭킹 한 줄(+ 펼쳤을 때 그 아래 확장 행). */
 function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }) {
   const r = entry.repo;
   const href = safeHref(r.url);
@@ -281,129 +298,141 @@ function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }
   const desc = r.summary ?? r.description ?? "설명 없음";
   const pushed = relTime(r.pushedAt);
   const extraTopics = r.topics.length - TOPIC_LIMIT;
+  const expanded = openUnits && units.length > 0;
 
   return (
-    <li className="flex gap-3 border-b px-3 py-3 last:border-b-0 hover:bg-muted/40">
-      {/* 순위 + 변동 */}
-      <div className="flex w-9 shrink-0 flex-col items-end gap-0.5 pt-0.5">
-        <span className="text-sm font-bold tabular-nums text-foreground/80">{entry.rank}</span>
-        <RankDelta rank={entry.rank} prevRank={entry.prevRank} />
-      </div>
+    <Fragment>
+      {/* 펼친 동안은 확장 행과 한 덩어리로 읽히게 사이 헤어라인을 뺀다. */}
+      <tr className={cn(expanded && "[&>td]:!border-b-0")}>
+        {/* 순위 + 변동 */}
+        <td className="text-right">
+          <div className="num font-mono text-[15px] font-semibold leading-tight">{entry.rank}</div>
+          <RankDelta rank={entry.rank} prevRank={entry.prevRank} />
+        </td>
 
-      {/* 저장소 이름 · 설명 · 부가 정보 */}
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          {href ? (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="break-all text-sm font-semibold hover:underline"
-              style={{ color: BLUE }}
-            >
-              <span className="font-normal opacity-70">{r.owner}/</span>
-              {r.name}
-            </a>
-          ) : (
-            <span className="break-all text-sm font-semibold">{r.fullName}</span>
+        {/* 저장소 이름 · 설명 · topic */}
+        <td>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {href ? (
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                className="break-all text-[15px] underline-offset-[3px] hover:underline"
+              >
+                <span className="text-muted-foreground">{r.owner}/</span>
+                <span className="font-semibold">{r.name}</span>
+              </a>
+            ) : (
+              <span className="break-all text-[15px] font-semibold">{r.fullName}</span>
+            )}
+            {/* 별은 많은데 관리가 끊긴 저장소를 숨기지 않는다. */}
+            {r.archived && (
+              <StatusTag tone="warn" className="gap-1">
+                <Archive aria-hidden className="h-3 w-3" /> 보관됨
+              </StatusTag>
+            )}
+          </div>
+
+          {/* 칸 폭에 따라 잘리는 부분은 title 로 전문을 볼 수 있게 한다. */}
+          <p
+            className="mt-0.5 line-clamp-2 whitespace-pre-line text-[13px] leading-relaxed text-muted-foreground"
+            title={desc}
+          >
+            {desc}
+          </p>
+
+          {r.topics.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              {r.topics.slice(0, TOPIC_LIMIT).map((t) => (
+                <span
+                  key={t}
+                  className="rounded-[3px] bg-muted px-1.5 py-px text-[11px] text-muted-foreground"
+                >
+                  {t}
+                </span>
+              ))}
+              {extraTopics > 0 && (
+                <span className="text-[11px] text-muted-foreground/70">+{extraTopics}</span>
+              )}
+            </div>
           )}
-          {/* 별은 많은데 관리가 끊긴 저장소를 숨기지 않는다. */}
-          {r.archived && (
-            <Badge className="border-amber-300 bg-amber-50 px-1.5 py-0 text-[10px] font-semibold text-amber-700">
-              <Archive className="mr-0.5 h-2.5 w-2.5" /> 보관됨
-            </Badge>
-          )}
-        </div>
+        </td>
 
-        <p className="mt-1 line-clamp-3 whitespace-pre-line text-[13px] leading-relaxed text-foreground/75">
-          {desc}
-        </p>
-
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-          {r.language && (
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+        <td className="whitespace-nowrap text-[13px] text-muted-foreground">
+          {r.language ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                aria-hidden
+                className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/40"
+                style={LANG_COLOR[r.language] ? { backgroundColor: LANG_COLOR[r.language] } : undefined}
+              />
               {r.language}
             </span>
+          ) : (
+            <Dash />
           )}
-          {r.license && (
-            <span className="inline-flex items-center gap-1">
-              <Scale className="h-3 w-3" /> {r.license}
-            </span>
-          )}
-          <span className="inline-flex items-center gap-1">
-            <GitFork className="h-3 w-3" /> {num(r.forks)}
-          </span>
-          {pushed && (
-            <span className="inline-flex items-center gap-1" title={`마지막 푸시 ${r.pushedAt}`}>
-              <Clock className="h-3 w-3" /> {pushed}
-            </span>
-          )}
-        </div>
+        </td>
+
+        <td className="whitespace-nowrap text-[13px] text-muted-foreground">{r.license ?? <Dash />}</td>
+
+        <td className="num whitespace-nowrap text-right text-[13px] text-muted-foreground">{num(r.forks)}</td>
+
+        <td className="whitespace-nowrap text-[13px] text-muted-foreground">
+          {pushed ? <span title={`마지막 푸시 ${r.pushedAt}`}>{pushed}</span> : <Dash />}
+        </td>
 
         {/*
-          태그 줄 — 네트워크 접근 칩을 topics 앞에 둔다(이 줄에서 가장 먼저 읽혀야 할 값이다).
-          ★ access 가 없으면 칩을 **아예 그리지 않는다.** 이 기능 배포 전 스냅샷을 보는
+          네트워크 접근 — 이 행에서 topic 보다 먼저 읽혀야 할 값이라 칸을 따로 둔다.
+          ★ access 가 없으면 태그를 **아예 그리지 않는다.** 이 기능 배포 전 스냅샷을 보는
             사용자에게 "미확인" 자리표시자를 띄우면 없는 판정을 있는 것처럼 읽히게 된다.
         */}
-        {(r.access || r.topics.length > 0) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            {r.access && <AccessChip access={r.access} />}
+        <td className="whitespace-nowrap">
+          <div className="flex flex-col items-start gap-1">
+            {r.access && <AccessTag access={r.access} />}
             {units.length > 0 && (
               <button
                 type="button"
                 onClick={() => setOpenUnits((v) => !v)}
                 aria-expanded={openUnits}
                 aria-controls={openUnits ? unitsId : undefined}
-                className={cn(
-                  "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px]",
-                  "font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-                )}
+                className="-ml-1 inline-flex items-center gap-0.5 rounded-[3px] px-1 py-px text-[12px] text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <ChevronDown
                   aria-hidden
-                  className={cn("h-3 w-3 transition-transform", openUnits && "rotate-180")}
+                  className={cn("h-3.5 w-3.5 transition-transform", openUnits && "rotate-180")}
                 />
                 {openUnits ? "접기" : "펼치기"}
               </button>
             )}
-            {r.topics.slice(0, TOPIC_LIMIT).map((t) => (
-              <span
-                key={t}
-                className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
-              >
-                {t}
-              </span>
-            ))}
-            {extraTopics > 0 && (
-              <span className="text-[10px] text-muted-foreground/70">+{extraTopics}</span>
-            )}
           </div>
-        )}
+        </td>
 
-        {openUnits && units.length > 0 && (
-          <UnitsList units={units} access={r.access} id={unitsId} />
-        )}
-      </div>
+        {/* star 총합 · 증가분 */}
+        <td className="whitespace-nowrap text-right">
+          <div className="num text-[15px] font-semibold leading-tight">{num(r.stars)}</div>
+          {entry.starsGained !== null && (
+            <div
+              className={cn(
+                "num mt-0.5 text-[12px]",
+                kind === "growth" ? "font-semibold text-tone-success" : "text-muted-foreground"
+              )}
+            >
+              {signed(entry.starsGained)}
+            </div>
+          )}
+        </td>
+      </tr>
 
-      {/* star 총합 · 증가분 */}
-      <div className="w-[5.5rem] shrink-0 text-right">
-        <div className="inline-flex items-center gap-1 text-sm font-semibold tabular-nums">
-          <Star className="h-3.5 w-3.5 text-amber-500" />
-          {num(r.stars)}
-        </div>
-        {entry.starsGained !== null && (
-          <div
-            className={cn(
-              "mt-0.5 text-[11px] font-semibold tabular-nums",
-              kind === "growth" ? "text-emerald-600" : "text-muted-foreground"
-            )}
-          >
-            {signed(entry.starsGained)}
-          </div>
-        )}
-      </div>
-    </li>
+      {expanded && (
+        <tr>
+          <td aria-hidden />
+          <td colSpan={COLS - 1} className="!pt-0">
+            <UnitsList units={units} access={r.access} id={unitsId} />
+          </td>
+        </tr>
+      )}
+    </Fragment>
   );
 }
 
@@ -457,23 +486,20 @@ export function SkillsBoard() {
     return () => clearInterval(id);
   }, [collecting]);
 
-  if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center text-muted-foreground">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 불러오는 중…
-      </div>
-    );
-  }
+  if (loading) return <LoadingState />;
 
   if (!snap) {
     return (
-      <Card className="p-8 text-center text-sm text-muted-foreground">
+      <EmptyState
+        action={
+          <Button variant="outline" size="sm" onClick={() => void load()}>
+            다시 시도
+          </Button>
+        }
+      >
         <p>스킬 랭킹을 불러올 수 없습니다.</p>
         {err && <p className="mt-2 text-xs text-muted-foreground/70">({err})</p>}
-        <Button variant="outline" size="sm" className="mt-4" onClick={() => void load()}>
-          다시 시도
-        </Button>
-      </Card>
+      </EmptyState>
     );
   }
 
@@ -484,51 +510,40 @@ export function SkillsBoard() {
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-bold" style={{ color: BLUE }}>
-            🧩 스킬 랭킹
-          </h2>
-          <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <CalendarClock className="h-3.5 w-3.5" />
-            매주 {SKILLS_CYCLE_LABEL} 자동 갱신 — GitHub 스킬 저장소 star 를 주간 스냅샷으로
-            쌓아 직접 차분합니다.
-            {updated && <span className="text-muted-foreground/70">(최근 {updated})</span>}
-          </p>
-        </div>
-      </div>
+      <PageToolbar
+        actions={
+          <Segmented
+            aria-label="랭킹 종류"
+            value={kind}
+            onChange={setKind}
+            options={[
+              { value: "total", label: <><Star /> star 총합</> },
+              { value: "growth", label: <><TrendingUp /> 이번 주 급상승</> },
+            ]}
+          />
+        }
+      >
+        <Meta className="inline-flex items-center gap-1.5">
+          <CalendarClock aria-hidden className="h-3.5 w-3.5" />매주 {SKILLS_CYCLE_LABEL} 자동 갱신
+        </Meta>
+        <MetaDot />
+        <Meta>GitHub 스킬 저장소 star 를 주간 스냅샷으로 쌓아 직접 차분합니다</Meta>
+        {updated && (
+          <>
+            <MetaDot />
+            <Meta>
+              최종 갱신 <strong>{updated}</strong>
+            </Meta>
+          </>
+        )}
+      </PageToolbar>
 
-      {/* 세그먼트 컨트롤 — shadcn Tabs 컴포넌트가 없어 Button 2개로 구성한다(증시 탭과 같은 방식). */}
-      <div className="mb-4 flex items-center gap-1">
-        <Button
-          variant={kind === "total" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setKind("total")}
-          style={kind === "total" ? { backgroundColor: BLUE } : undefined}
-        >
-          ⭐ star 총합
-        </Button>
-        <Button
-          variant={kind === "growth" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setKind("growth")}
-          style={kind === "growth" ? { backgroundColor: BLUE } : undefined}
-        >
-          🔥 이번 주 급상승
-        </Button>
-      </div>
-
-      {err && (
-        <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">
-          {err}
-        </div>
-      )}
+      {err && <Notice tone="error">{err}</Notice>}
 
       {collecting && (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+        <Notice tone="info" progress>
           스킬 저장소를 수집하는 중입니다… 몇 분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
-        </div>
+        </Notice>
       )}
 
       {/*
@@ -537,69 +552,68 @@ export function SkillsBoard() {
         눈에 띄게 띄운다.
       */}
       {snap.notes && (
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span className="min-w-0 whitespace-pre-line break-words">{snap.notes}</span>
-        </div>
+        <Notice tone="warn">
+          <span className="whitespace-pre-line break-words">{snap.notes}</span>
+        </Notice>
       )}
 
       {/* 마지막 수집 시도가 실패로 끝났다면, 아래 목록이 지난 회차라는 뜻이다. */}
       {attempt && !attempt.ok && (
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            마지막 수집 시도가 실패했습니다{fmtWhen(attempt.at) ? ` (${fmtWhen(attempt.at)})` : ""}
-            . 아래 목록은 {snap.date} 스냅샷으로, 이번 주 것이 아닐 수 있습니다.
-          </span>
-        </div>
+        <Notice tone="warn">
+          마지막 수집 시도가 실패했습니다{fmtWhen(attempt.at) ? ` (${fmtWhen(attempt.at)})` : ""}
+          . 아래 목록은 {snap.date} 스냅샷으로, 이번 주 것이 아닐 수 있습니다.
+        </Notice>
       )}
 
-      <Card className="overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
-          <span className="flex items-center gap-1.5 text-sm font-semibold">
-            {kind === "total" ? (
-              <>
-                <Star className="h-4 w-4 text-amber-500" /> star 총합 순위
-              </>
-            ) : (
-              <>
-                <TrendingUp className="h-4 w-4 text-emerald-600" /> 이번 주 급상승
-              </>
-            )}
-          </span>
-          <span className="text-[11px] text-muted-foreground">
-            {/* 증가 랭킹은 구간을 숨기지 않는다 — days 를 그대로 인용한다(7일이 아닐 수 있다). */}
-            {kind === "growth" && snap.window
-              ? windowLabel(snap.window)
-              : `기준 ${snap.date} 스냅샷`}
-          </span>
-        </div>
+      <section>
+        <SectionHeader
+          title={kind === "total" ? "star 총합 순위" : "이번 주 급상승"}
+          // 증가 랭킹은 구간을 숨기지 않는다 — days 를 그대로 인용한다(7일이 아닐 수 있다).
+          note={kind === "growth" && snap.window ? windowLabel(snap.window) : `기준 ${snap.date} 스냅샷`}
+        />
 
         {kind === "growth" && firstCycle ? (
-          <div className="px-4 py-10 text-center text-sm text-muted-foreground">
-            <TrendingUp className="mx-auto mb-2 h-8 w-8 opacity-30" />
+          <EmptyState icon={<TrendingUp />}>
             <p>증가 순위는 다음 주 월요일 갱신부터 채워집니다.</p>
             <p className="mt-1 text-xs">(비교할 지난주 기록이 아직 없어요)</p>
-          </div>
+          </EmptyState>
         ) : entries.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+          <EmptyState>
             {snap.source === "empty"
               ? `아직 첫 수집 전입니다. 매주 ${SKILLS_CYCLE_LABEL} 자동 갱신에서 채워집니다.`
               : "표시할 저장소가 없습니다."}
-          </div>
+          </EmptyState>
         ) : (
-          <ul>
-            {entries.map((e) => (
-              <RankRow key={e.repo.id} entry={e} kind={kind} />
-            ))}
-          </ul>
+          // 넓은 화면에서는 스크롤 상자를 만들지 않는다 — 접근 태그 툴팁이 마지막 행 아래로
+          // 내려올 때 overflow 상자에 잘리기 때문이다. 좁은 화면에서만 가로 스크롤을 준다.
+          <div className="max-lg:overflow-x-auto">
+            <table className="dtable max-lg:min-w-[60rem]">
+              <thead>
+                <tr>
+                  <th className="w-14 text-right">순위</th>
+                  <th>저장소</th>
+                  <th>언어</th>
+                  <th>라이선스</th>
+                  <th className="text-right">포크</th>
+                  <th>최근 푸시</th>
+                  <th>네트워크 접근</th>
+                  <th className="text-right">★ star</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((e) => (
+                  <RankRow key={e.repo.id} entry={e} kind={kind} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </Card>
 
-      <p className="mt-2 px-1 text-[11px] text-muted-foreground">
-        이번 주 추적 저장소 {num(snap.trackedCount)}개 중 상위 {SKILLS_RANK_SIZE} · GitHub 은
-        과거 star 수를 주지 않아 매주 우리 스냅샷을 남겨 직접 차분합니다.
-      </p>
+        <p className="mt-3 text-[12px] text-muted-foreground">
+          이번 주 추적 저장소 {num(snap.trackedCount)}개 중 상위 {SKILLS_RANK_SIZE} · GitHub 은
+          과거 star 수를 주지 않아 매주 우리 스냅샷을 남겨 직접 차분합니다.
+        </p>
+      </section>
     </div>
   );
 }
