@@ -39,10 +39,10 @@ interface TabDef {
 // 남은 경로는 robots·약관이 금지하는 크롤링뿐이라 기능을 접었다. 과거 가격 이력은
 // DB(price_points/listings)에 그대로 보존돼 있다.
 const TABS: TabDef[] = [
-  { id: "events", label: "팝업·전시", color: "#db2777", content: <EventsBoard /> },
   { id: "news", label: "뉴스", color: "#d97706", content: <NewsBoard /> },
   { id: "youtube", label: "유튜브 소식", color: "#dc2626", content: <YoutubeBoard /> },
   { id: "stock", label: "증시", color: "#059669", content: <StockBoard /> },
+  { id: "events", label: "팝업·전시", color: "#db2777", content: <EventsBoard /> },
   // 보유 종목은 증시 탭 안의 한국장/미국장과 **별도 탭**이다(인터뷰 결정).
   { id: "holdings", label: "보유 주식", color: "#0d9488", content: <HoldingsBoard /> },
   { id: "lotto", label: "로또", color: "#7c3aed", content: <LottoBoard /> },
