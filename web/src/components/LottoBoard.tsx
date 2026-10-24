@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CalendarClock, Check, Copy, Loader2, RefreshCw } from "lucide-react";
+import { CalendarClock, Check, Copy, Loader2, RefreshCw } from "lucide-react";
 import type { LottoRecentRound, LottoSnapshot } from "@shared/lotto";
 import { upcomingToText, winningNumbers } from "@shared/lotto";
 import { api } from "@/lib/api";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import {
+  PageToolbar,
+  Meta,
+  MetaDot,
+  Notice,
+  SectionHeader,
+  StatusTag,
+  EmptyState,
+  EmptyLine,
+  LoadingState,
+} from "@/components/ui/page";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,8 +26,9 @@ import { cn } from "@/lib/utils";
  *
  * 폴링도 없다. 데이터가 주 1회만 바뀌므로 3초마다 서버를 두드릴 이유가 없다 — 화면을 열 때
  * 한 번 받고, 갱신이 궁금하면 [새로고침]을 누르면 된다.
+ *
+ * 강조색은 탭 고유색(--tab, 로또는 #7c3aed)을 `text-tab`/`bg-tab` 으로 쓴다.
  */
-const VIOLET = "#7c3aed";
 
 /** ISO → "7월 30일 10:00". 연도는 뺀다(주간 갱신이라 같은 해가 아닐 일이 거의 없다). */
 function fmtWhen(iso: string): string {
@@ -32,16 +42,60 @@ function fmtWhen(iso: string): string {
   });
 }
 
-/** 번호 배지 하나. tone 으로 적중/미적중/추첨번호를 구분한다. */
-function NumberBadge({ n, tone }: { n: number; tone: "pick" | "hit" | "miss" | "draw" | "bonus" }) {
+/**
+ * 번호 공 하나. tone 으로 적중/미적중/추첨번호를 구분한다.
+ * 예상(pick)=탭색 테두리, 적중(hit)=탭색 채움, 미적중(miss)=옅은 회색, 추첨(draw)=잉크 테두리,
+ * 보너스(bonus)=경고 톤. 색이 비슷해지면 적중 여부를 한눈에 못 가리므로 다섯 가지를 섞지 않는다.
+ */
+function NumberBadge({
+  n,
+  tone,
+  size = "md",
+}: {
+  n: number;
+  tone: "pick" | "hit" | "miss" | "draw" | "bonus";
+  size?: "md" | "lg";
+}) {
   const style: Record<typeof tone, string> = {
-    pick: "border-[#7c3aed]/30 bg-[#7c3aed]/10 text-[#7c3aed]",
-    hit: "border-[#7c3aed] bg-[#7c3aed] font-bold text-white",
-    miss: "border-muted-foreground/20 text-muted-foreground",
-    draw: "border-emerald-300 bg-emerald-100 font-semibold text-emerald-800",
-    bonus: "border-amber-300 bg-amber-100 font-semibold text-amber-800",
+    pick: "border-tab font-medium text-tab",
+    hit: "border-tab bg-tab font-semibold text-white",
+    miss: "border-foreground/15 text-muted-foreground",
+    draw: "border-[1.5px] border-foreground font-semibold text-foreground",
+    bonus: "border-[1.5px] border-tone-warn bg-tone-warn/10 font-semibold text-tone-warn",
   };
-  return <Badge className={cn("min-w-7 justify-center tabular-nums", style[tone])}>{n}</Badge>;
+  return (
+    <span
+      className={cn(
+        "num inline-flex shrink-0 items-center justify-center rounded-full border font-mono leading-none",
+        size === "lg" ? "h-7 w-7 text-[13px]" : "h-[26px] w-[26px] text-[12px]",
+        style[tone]
+      )}
+    >
+      {n}
+    </span>
+  );
+}
+
+/**
+ * 10세트를 상자 없이 행으로 여러 열에 깐다. 넓은 화면에서 세로 길이를 줄이려는 배치다.
+ * 최소 폭 280px 은 1680px 화면에서 한 줄 5세트(10세트 = 2줄)가 되도록 맞춘 값이다.
+ */
+function SetGrid({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={cn(
+        "grid gap-x-8 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]",
+        className
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** 세트 번호(1. 2. …). 회차 번호처럼 기계적인 값이라 mono. */
+function SetIndex({ i }: { i: number }) {
+  return <span className="num w-6 shrink-0 font-mono text-[12px] text-muted-foreground">{i + 1}.</span>;
 }
 
 /**
@@ -92,24 +146,28 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
 
   if (!u) {
     return (
-      <Card className="p-6 text-center text-sm text-muted-foreground">
-        <p>다음 회차 예상 번호가 아직 준비되지 않았습니다.</p>
-        <p className="mt-1 text-xs">
-          매주 일요일 10:00 자동 갱신 시 확정됩니다(서버 기동 직후에는 잠시 걸릴 수 있습니다).
-        </p>
-      </Card>
+      <>
+        <SectionHeader title="다음 회차 예상 번호" accent="var(--tab)" />
+        <EmptyState>
+          <p>다음 회차 예상 번호가 아직 준비되지 않았습니다.</p>
+          <p className="mt-1 text-[13px]">
+            매주 일요일 10:00 자동 갱신 시 확정됩니다(서버 기동 직후에는 잠시 걸릴 수 있습니다).
+          </p>
+        </EmptyState>
+      </>
     );
   }
   return (
-    <Card className="border-[#7c3aed]/30 p-5 shadow-sm">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-lg font-bold" style={{ color: VIOLET }}>
-          🎱 {u.round}회차 예상 번호
-        </h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">
+    <>
+      <SectionHeader
+        title={`${u.round}회차 예상 번호`}
+        accent="var(--tab)"
+        note={
+          <span className="num">
             v{u.version} · {fmtWhen(u.createdAt)} 확정
           </span>
+        }
+        actions={
           <Button
             variant="outline"
             size="sm"
@@ -121,32 +179,28 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
               );
             }}
           >
-            {copied?.ok ? (
-              <Check className="h-4 w-4 text-[#7c3aed]" />
-            ) : (
-              <Copy className="h-4 w-4" />
-            )}
+            {copied?.ok ? <Check className="h-4 w-4 text-tab" /> : <Copy className="h-4 w-4" />}
             {copied ? (copied.ok ? "복사됨" : "복사 실패") : "번호 복사"}
           </Button>
-        </div>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-2">
+        }
+      />
+      <SetGrid className="gap-y-0.5">
         {u.sets.map((set, i) => (
-          <div key={i} className="flex flex-wrap items-center gap-1">
-            <span className="w-5 shrink-0 text-xs text-muted-foreground">{i + 1}.</span>
+          <div key={i} className="flex items-center gap-1.5 border-b py-1.5">
+            <SetIndex i={i} />
             {set.map((n) => (
-              <NumberBadge key={n} n={n} tone="pick" />
+              <NumberBadge key={n} n={n} tone="pick" size="lg" />
             ))}
           </div>
         ))}
-      </div>
+      </SetGrid>
       {/* 이 한 줄이 없으면 "화면을 열 때마다 번호가 바뀌는 게 아닐까" 하는 의심이 남는다.
           실제로 추첨 전에 저장해 두고 다음 주에 그 번호로만 채점한다는 것을 명시한다. */}
-      <p className="mt-3 border-t pt-3 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="mt-2.5 text-[12px] leading-relaxed text-muted-foreground">
         추첨 전에 확정해 저장한 번호입니다 — 다시 열어도 바뀌지 않고, 다음 주 일요일에 이 번호로
         채점합니다. 실제 구매·투자 목적이 아닌 알고리즘 검증용입니다.
       </p>
-    </Card>
+    </>
   );
 }
 
@@ -161,42 +215,44 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
     })
   );
   const best = r.matches.length ? Math.max(...r.matches) : 0;
+  // 3개 이상 적중 회차는 상자 배경 대신 머리 줄(회차 번호·태그)을 탭색으로 강조한다.
+  const strong = best >= 3;
   return (
-    <Card className={cn("p-4", best >= 3 && "border-emerald-300 bg-emerald-50/40")}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold">{r.round}회차</span>
-          <span className="text-xs text-muted-foreground">
+    <article className="border-t py-2 first:border-t-0 first:pt-0.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <span className={cn("num font-mono text-[15px] font-semibold", strong && "text-tab")}>
+            {r.round}회차
+          </span>
+          <span className="num text-[13px] text-muted-foreground">
             {r.drawDate} · v{r.version}
           </span>
-          {best >= 3 && (
-            <Badge className="border-emerald-300 bg-emerald-100 text-[11px] font-semibold text-emerald-700">
-              🎯 {best}개 적중
-            </Badge>
+          {strong && (
+            <StatusTag className="border-tab text-tab">{best}개 적중</StatusTag>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1">
-          <span className="mr-1 text-[11px] text-muted-foreground">추첨</span>
+          <span className="mr-1 text-[12px] text-muted-foreground">추첨</span>
           {r.drawNumbers.map((n) => (
             <NumberBadge key={n} n={n} tone="draw" />
           ))}
-          <span className="mx-0.5 text-xs text-muted-foreground">+</span>
+          <span className="mx-0.5 text-[13px] text-muted-foreground">+</span>
           <NumberBadge n={r.drawBonus} tone="bonus" />
         </div>
       </div>
-      <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
+      <SetGrid className="mt-1.5 gap-y-1">
         {r.sets.map((set, i) => {
           const m = r.matches[i] ?? 0;
           return (
-            <div key={i} className="flex flex-wrap items-center gap-1">
-              <span className="w-5 shrink-0 text-xs text-muted-foreground">{i + 1}.</span>
+            <div key={i} className="flex items-center gap-1">
+              <SetIndex i={i} />
               {set.map((n) => (
                 <NumberBadge key={n} n={n} tone={winSet.has(n) ? "hit" : "miss"} />
               ))}
               <span
                 className={cn(
-                  "ml-1 text-[11px]",
-                  m >= 3 ? "font-semibold text-emerald-700" : "text-muted-foreground"
+                  "num ml-1.5 text-[12px]",
+                  m >= 3 ? "font-semibold text-tab" : "text-muted-foreground"
                 )}
               >
                 {m}개
@@ -204,8 +260,8 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
             </div>
           );
         })}
-      </div>
-    </Card>
+      </SetGrid>
+    </article>
   );
 }
 
@@ -287,92 +343,89 @@ export function LottoBoard() {
   }, [feedback]);
 
   if (loading && !snap) {
-    return (
-      <div className="flex h-64 items-center justify-center text-muted-foreground">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 불러오는 중…
-      </div>
-    );
+    return <LoadingState />;
   }
 
   if (!snap) {
     return (
-      <Card className="p-8 text-center text-sm text-muted-foreground">
+      <EmptyState
+        action={
+          <Button variant="outline" size="sm" onClick={() => void load(true)}>
+            다시 시도
+          </Button>
+        }
+      >
         <p>로또 데이터를 불러올 수 없습니다.</p>
-        {err && <p className="mt-2 text-xs text-muted-foreground/70">({err})</p>}
-        <Button variant="outline" size="sm" className="mt-4" onClick={() => void load(true)}>
-          다시 시도
-        </Button>
-      </Card>
+        {err && <p className="mt-1 text-[13px] text-muted-foreground/70">({err})</p>}
+      </EmptyState>
     );
   }
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-bold" style={{ color: VIOLET }}>
-            🎱 로또 6/45
-          </h2>
-          <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <CalendarClock className="h-3.5 w-3.5" />
-            매주 일요일 10:00 자동 갱신 — 새 추첨 결과로 지난 회차를 채점하고 다음 회차 번호를
-            뽑습니다.
-            <span className="text-muted-foreground/70">
-              (다음 {fmtWhen(snap.nextCycleAt)}
-              {snap.state.lastCycleAt ? ` · 최근 ${fmtWhen(snap.state.lastCycleAt)}` : ""})
-            </span>
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* 눌렀는데 화면이 그대로인 게 정상이라는 것을 알려준다 — 주 1회 갱신이라 대개 '최신'이다. */}
-          {feedback && (
-            <span
-              className={cn(
-                "flex items-center gap-1 whitespace-nowrap text-xs",
-                feedback.kind === "updated" ? "font-medium text-[#7c3aed]" : "text-muted-foreground"
-              )}
-            >
-              <Check className="h-3.5 w-3.5" />
-              {feedback.kind === "updated" ? "새 내용으로 갱신됨" : "이미 최신입니다 (주 1회 갱신)"}
-            </span>
-          )}
-          <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading}>
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
+      <PageToolbar
+        actions={
+          <>
+            {/* 눌렀는데 화면이 그대로인 게 정상이라는 것을 알려준다 — 주 1회 갱신이라 대개 '최신'이다. */}
+            {feedback && (
+              <span
+                className={cn(
+                  "flex items-center gap-1 whitespace-nowrap text-[13px]",
+                  feedback.kind === "updated" ? "font-medium text-tab" : "text-muted-foreground"
+                )}
+              >
+                <Check className="h-3.5 w-3.5" />
+                {feedback.kind === "updated" ? "새 내용으로 갱신됨" : "이미 최신입니다 (주 1회 갱신)"}
+              </span>
             )}
-            새로고침
-          </Button>
-        </div>
-      </div>
+            <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              새로고침
+            </Button>
+          </>
+        }
+      >
+        <Meta>
+          <strong>로또 6/45</strong>
+        </Meta>
+        <MetaDot />
+        <Meta className="inline-flex items-center gap-1.5">
+          <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+          매주 일요일 10:00 자동 갱신 — 새 추첨 결과로 지난 회차를 채점하고 다음 회차 번호를 뽑습니다.
+        </Meta>
+        <MetaDot />
+        <Meta>
+          다음 <strong>{fmtWhen(snap.nextCycleAt)}</strong>
+        </Meta>
+        {snap.state.lastCycleAt && (
+          <>
+            <MetaDot />
+            <Meta>
+              최근 <strong>{fmtWhen(snap.state.lastCycleAt)}</strong>
+            </Meta>
+          </>
+        )}
+      </PageToolbar>
 
       {/* 자동 사이클이 남긴 오류는 조용히 삼키지 않는다 — 번호가 갱신되지 않은 이유가 여기 있다. */}
       {snap.state.lastError && (
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            마지막 자동 갱신에서 문제가 있었습니다 — {snap.state.lastError}
-            {snap.state.retryAt && ` (${fmtWhen(snap.state.retryAt)} 재시도 예정)`}
-          </span>
-        </div>
+        <Notice tone="warn">
+          마지막 자동 갱신에서 문제가 있었습니다 — {snap.state.lastError}
+          {snap.state.retryAt && ` (${fmtWhen(snap.state.retryAt)} 재시도 예정)`}
+        </Notice>
       )}
 
-      <section className="mb-6">
+      <section>
         <UpcomingCard snap={snap} />
       </section>
 
-      <section>
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="text-lg font-bold">지난 회차 비교</h3>
-          <span className="text-xs text-muted-foreground">최근 {snap.recentResults.length}회차</span>
-        </div>
+      {/* SectionHeader 의 first:mt-0 은 section 안에서 적용되므로 섹션 간격은 section 이 갖는다. */}
+      <section className="mt-10">
+        <SectionHeader title="지난 회차 비교" count={`최근 ${snap.recentResults.length}회차`} />
         {snap.recentResults.length === 0 ? (
-          <Card className="p-6 text-center text-sm text-muted-foreground">
-            아직 채점된 회차가 없습니다.
-          </Card>
+          <EmptyLine>아직 채점된 회차가 없습니다.</EmptyLine>
         ) : (
-          <div className="space-y-2">
+          <div>
             {snap.recentResults.map((r) => (
               <ResultCard key={r.round} r={r} />
             ))}

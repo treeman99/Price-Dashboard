@@ -11,7 +11,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Notice } from "@/components/ui/page";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { marketLabel } from "@shared/stock";
 import { HORIZONS, horizonLabel, horizonDescription } from "@shared/holdings";
 import type { StockHolding, StockHorizon, StockMarket } from "@shared/types";
@@ -92,8 +94,9 @@ export function AddHoldingDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button size="sm" variant="outline" className="gap-1">
-          <Plus className="h-4 w-4" /> 보유 종목 추가
+        {/* 시장별로 버튼이 두 개 나란히 서므로 라벨에 시장을 붙여 구분한다. */}
+        <Button size="sm" variant="outline">
+          <Plus className="h-4 w-4" /> {marketLabel(market)} 추가
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg">
@@ -178,17 +181,19 @@ export function AddHoldingDialog({
                   key={h}
                   type="button"
                   onClick={() => setHorizon(h)}
-                  className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
+                  aria-pressed={horizon === h}
+                  className={cn(
+                    "flex-1 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
                     horizon === h
-                      ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                  }`}
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-input text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
                 >
                   {horizonLabel(h)}
                 </button>
               ))}
             </div>
-            <p className="mt-1 text-xs text-slate-500">{horizonDescription(horizon)}</p>
+            <p className="mt-1 text-[12.5px] text-muted-foreground">{horizonDescription(horizon)}</p>
           </div>
 
           <div>
@@ -200,15 +205,16 @@ export function AddHoldingDialog({
               rows={2}
               placeholder="예: HBM 수요 사이클 베팅. 2027년 증설 확정까지 보유."
             />
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-[12.5px] text-muted-foreground">
               적어두면 실시간 취합 에이전트가 “왜 샀는지”까지 반영해 영향도를 판정합니다.
             </p>
           </div>
 
+          {/* 애매한 종목은 서버가 후보를 줄바꿈으로 담아 보내므로 줄바꿈을 살린다. */}
           {err && (
-            <p className="whitespace-pre-wrap rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
+            <Notice tone="error" className="mb-0 whitespace-pre-wrap">
               {err}
-            </p>
+            </Notice>
           )}
         </div>
 
@@ -216,7 +222,7 @@ export function AddHoldingDialog({
           <Button variant="ghost" onClick={() => setOpen(false)} disabled={saving}>
             취소
           </Button>
-          <Button onClick={submit} disabled={saving} className="gap-1">
+          <Button onClick={submit} disabled={saving}>
             {saving && <Loader2 className="h-4 w-4 animate-spin" />} 추가
           </Button>
         </div>

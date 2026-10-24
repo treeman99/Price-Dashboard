@@ -11,7 +11,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { IconAction, Notice } from "@/components/ui/page";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { HORIZONS, horizonLabel, horizonDescription } from "@shared/holdings";
 import type { StockHolding, StockHorizon, UpdateStockHoldingInput } from "@shared/types";
 
@@ -123,14 +125,15 @@ export function EditHoldingDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button size="sm" variant="ghost" title="보유 내용 수정">
-          <Pencil className="h-4 w-4" />
-        </Button>
+        <IconAction label="보유 내용 수정">
+          <Pencil />
+        </IconAction>
       </DialogTrigger>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            {h.name} <span className="text-sm font-normal text-slate-400">{h.symbol}</span>
+            {h.name}{" "}
+            <span className="font-mono text-sm font-normal text-muted-foreground">{h.symbol}</span>
           </DialogTitle>
           <DialogDescription>
             수량·평단을 고치면 손익률이 다시 계산됩니다. 종목 자체는 바꿀 수 없습니다.
@@ -189,7 +192,7 @@ export function EditHoldingDialog({
               />
             </div>
           </div>
-          <p className="text-xs text-slate-500">
+          <p className="text-[12.5px] text-muted-foreground">
             목표가·손절가는 <strong>칸을 비우면 해제</strong>됩니다. 그대로 두면 지금 값이 유지됩니다.
           </p>
 
@@ -201,17 +204,19 @@ export function EditHoldingDialog({
                   key={x}
                   type="button"
                   onClick={() => setHorizon(x)}
-                  className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
+                  aria-pressed={horizon === x}
+                  className={cn(
+                    "flex-1 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
                     horizon === x
-                      ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                  }`}
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-input text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
                 >
                   {horizonLabel(x)}
                 </button>
               ))}
             </div>
-            <p className="mt-1 text-xs text-slate-500">{horizonDescription(horizon)}</p>
+            <p className="mt-1 text-[12.5px] text-muted-foreground">{horizonDescription(horizon)}</p>
           </div>
 
           <div>
@@ -223,15 +228,15 @@ export function EditHoldingDialog({
               rows={2}
               placeholder="예: HBM 수요 사이클 베팅. 2027년 증설 확정까지 보유."
             />
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-[12.5px] text-muted-foreground">
               적어두면 실시간 취합 에이전트가 “왜 샀는지”까지 반영해 영향도를 판정합니다.
             </p>
           </div>
 
           {err && (
-            <p className="whitespace-pre-wrap rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
+            <Notice tone="error" className="mb-0 whitespace-pre-wrap">
               {err}
-            </p>
+            </Notice>
           )}
         </div>
 
@@ -239,7 +244,7 @@ export function EditHoldingDialog({
           <Button variant="ghost" onClick={() => setOpen(false)} disabled={saving}>
             취소
           </Button>
-          <Button onClick={submit} disabled={saving} className="gap-1">
+          <Button onClick={submit} disabled={saving}>
             {saving && <Loader2 className="h-4 w-4 animate-spin" />} 저장
           </Button>
         </div>

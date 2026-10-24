@@ -4,14 +4,27 @@ import type { StockHoldingSummary, StockMarket } from "@shared/types";
 import { marketLabel, formatPrice, changeTone } from "@shared/stock";
 import { formatPnlPct, horizonLabel } from "@shared/holdings";
 import { api } from "@/lib/api";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  PageToolbar,
+  MetaDot,
+  Meta,
+  Notice,
+  SectionHeader,
+  SubHeader,
+  StatusTag,
+  IconAction,
+  EmptyState,
+} from "@/components/ui/page";
 import { cn } from "@/lib/utils";
 import { AddHoldingDialog } from "@/components/AddHoldingDialog";
 import { EditHoldingDialog } from "@/components/EditHoldingDialog";
 import { ScheduleControl } from "@/components/ScheduleControl";
 
 const MARKETS: StockMarket[] = ["kr", "us"];
+
+/** 표의 열 수. 시장 머리 행이 colSpan 으로 쓴다. */
+const COLS = 8;
 
 /**
  * ⚠️ 등락·손익 색은 **한국 증시 관례**다: 상승=빨강, 하락=파랑.
@@ -20,7 +33,7 @@ const MARKETS: StockMarket[] = ["kr", "us"];
  */
 function toneClass(pct: number | null): string {
   const t = changeTone(pct);
-  return t === "up" ? "text-red-600" : t === "down" ? "text-blue-600" : "text-slate-400";
+  return t === "up" ? "text-up" : t === "down" ? "text-stock-down" : "text-muted-foreground";
 }
 
 function HoldingRow({
@@ -57,81 +70,92 @@ function HoldingRow({
   const noQuote = h.close == null;
 
   return (
-    <Card className="p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div className="flex items-baseline gap-2">
+    <tr className="group">
+      <td>
+        <div className="flex flex-wrap items-baseline gap-x-2">
           <span className="text-[15px] font-semibold">{h.name}</span>
-          <span className="text-xs text-slate-400">
-            {h.symbol} · {horizonLabel(h.horizon)}
+          <span className="text-[12px] text-muted-foreground">
+            <span className="font-mono">{h.symbol}</span> · {horizonLabel(h.horizon)}
           </span>
         </div>
-        <div className="flex items-baseline gap-3">
-          <span className={cn("text-lg font-bold", toneClass(h.pnlPct))}>
-            {formatPnlPct(h.pnlPct)}
-          </span>
+        {h.memo && <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">{h.memo}</p>}
+        {noQuote && (
+          <p className="mt-0.5 flex items-center gap-1 text-[12px] text-tone-warn">
+            <AlertTriangle className="h-3 w-3 shrink-0" /> 시세를 가져오지 못했습니다. 손익은 다음 조회 때 채워집니다.
+          </p>
+        )}
+      </td>
+      <td className="num text-right">
+        <div className="font-medium">{formatPrice(h.close, h.currency)}</div>
+        {h.changePct != null && (
+          <div className={cn("text-[12px]", toneClass(h.changePct))}>
+            {h.changePct > 0 ? "▲" : h.changePct < 0 ? "▼" : ""}
+            {Math.abs(h.changePct).toFixed(2)}%
+          </div>
+        )}
+      </td>
+      <td className="num text-right">{formatPrice(h.avgPrice, h.currency)}</td>
+      <td className="num text-right">{h.quantity}</td>
+      <td className="num text-right font-medium">{formatPrice(h.marketValue, h.currency)}</td>
+      <td className={cn("num text-right text-lg font-semibold leading-tight", toneClass(h.pnlPct))}>
+        {formatPnlPct(h.pnlPct)}
+      </td>
+      <td className="num text-right text-[13px]">
+        {h.targetPrice == null && h.stopPrice == null && <span className="text-muted-foreground">-</span>}
+        {h.targetPrice != null && (
+          <div>
+            <span className="text-muted-foreground">목표 </span>
+            {formatPrice(h.targetPrice, h.currency)}{" "}
+            <span className="text-muted-foreground">({formatPnlPct(h.toTargetPct)})</span>
+          </div>
+        )}
+        {h.stopPrice != null && (
+          <div>
+            <span className="text-muted-foreground">손절 </span>
+            {formatPrice(h.stopPrice, h.currency)}{" "}
+            <span className="text-muted-foreground">({formatPnlPct(h.toStopPct)})</span>
+          </div>
+        )}
+      </td>
+      <td>
+        <div className="flex justify-end opacity-40 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
           <EditHoldingDialog h={h} onSaved={onChanged} />
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={remove}
-            disabled={deleting}
-            title="보유 종목에서 삭제"
-          >
-            {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-          </Button>
+          <IconAction label="보유 종목에서 삭제" danger onClick={remove} disabled={deleting}>
+            {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
+          </IconAction>
         </div>
-      </div>
+      </td>
+    </tr>
+  );
+}
 
-      <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[13px] sm:grid-cols-4">
-        <div>
-          <span className="text-slate-400">현재가 </span>
-          <span className="font-medium">{formatPrice(h.close, h.currency)}</span>
-          {h.changePct != null && (
-            <span className={cn("ml-1 text-xs", toneClass(h.changePct))}>
-              {h.changePct > 0 ? "▲" : h.changePct < 0 ? "▼" : ""}
-              {Math.abs(h.changePct).toFixed(2)}%
-            </span>
-          )}
-        </div>
-        <div>
-          <span className="text-slate-400">평단 </span>
-          <span className="font-medium">{formatPrice(h.avgPrice, h.currency)}</span>
-        </div>
-        <div>
-          <span className="text-slate-400">수량 </span>
-          <span className="font-medium">{h.quantity}</span>
-        </div>
-        <div>
-          <span className="text-slate-400">평가금액 </span>
-          <span className="font-medium">{formatPrice(h.marketValue, h.currency)}</span>
-        </div>
-      </div>
-
-      {(h.targetPrice != null || h.stopPrice != null) && (
-        <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
-          {h.targetPrice != null && (
-            <span>
-              🎯 목표 {formatPrice(h.targetPrice, h.currency)}{" "}
-              <span className="text-slate-400">({formatPnlPct(h.toTargetPct)})</span>
-            </span>
-          )}
-          {h.stopPrice != null && (
-            <span>
-              🛡 손절 {formatPrice(h.stopPrice, h.currency)}{" "}
-              <span className="text-slate-400">({formatPnlPct(h.toStopPct)})</span>
-            </span>
-          )}
-        </div>
-      )}
-
-      {h.memo && <p className="mt-2 text-xs leading-relaxed text-slate-500">📝 {h.memo}</p>}
-
-      {noQuote && (
-        <p className="mt-2 flex items-center gap-1 text-xs text-amber-600">
-          <AlertTriangle className="h-3 w-3" /> 시세를 가져오지 못했습니다. 손익은 다음 조회 때 채워집니다.
-        </p>
-      )}
-    </Card>
+/**
+ * 시장 한 묶음. 시장마다 표를 따로 만들면 열 머리가 반복되고 열 위치도 어긋나서,
+ * 한 표 안의 tbody 로 나누고 머리 행에 SubHeader 를 둔다.
+ */
+function MarketRows({
+  market,
+  rows,
+  first,
+  onChanged,
+}: {
+  market: StockMarket;
+  rows: StockHoldingSummary[];
+  first: boolean;
+  onChanged: () => void;
+}) {
+  return (
+    <tbody>
+      {/* 머리 행은 데이터 행이 아니므로 .dtable 의 hover 바탕을 끈다(규칙 우선순위가 높아 ! 필요). */}
+      <tr className="hover:!bg-transparent">
+        <th colSpan={COLS} scope="rowgroup" className={cn("p-0 text-left font-normal", !first && "pt-5")}>
+          <SubHeader count={`${rows.length}종목`}>{marketLabel(market)}</SubHeader>
+        </th>
+      </tr>
+      {rows.map((h) => (
+        <HoldingRow key={h.id} h={h} onChanged={onChanged} />
+      ))}
+    </tbody>
   );
 }
 
@@ -171,64 +195,77 @@ function PulseStatus() {
   const queued = state.recent.filter((r) => r.status === "queued").length;
 
   return (
-    <Card className="mb-4 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Radio className={cn("h-4 w-4", state.running ? "animate-pulse text-emerald-600" : "text-slate-400")} />
-          <span className="text-sm font-semibold">실시간 취합(펄스)</span>
-          <span className="text-xs text-slate-400">하루 {state.schedule.length}회</span>
-        </div>
-        <Button size="sm" variant="outline" onClick={runNow} disabled={starting || state.running}>
+    <div className="mb-8 bg-muted/50 px-3.5 py-2">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-muted-foreground">
+        <Radio
+          className={cn("h-4 w-4 shrink-0", state.running ? "animate-pulse text-tone-success" : "text-muted-foreground")}
+        />
+        <span className="text-sm font-semibold text-foreground">실시간 취합(펄스)</span>
+        <Meta>하루 {state.schedule.length}회</Meta>
+        <MetaDot />
+        <Meta>
+          지난 24시간 · 문자 발송 <strong>{sent}</strong>건
+          {queued > 0 && (
+            <>
+              {" "}
+              · 야간 보류 <strong>{queued}</strong>건
+            </>
+          )}{" "}
+          · 전체 판정 <strong>{state.recent.length}</strong>건
+        </Meta>
+        {state.lastRun && (
+          <>
+            <MetaDot />
+            <Meta className="inline-flex items-center gap-1">
+              마지막 실행 <strong>{state.lastRun.slot}</strong>
+              {state.lastRun.ok ? (
+                <Check className="h-3.5 w-3.5 text-tone-success" />
+              ) : (
+                <span className="text-tone-error">실패({state.lastRun.error})</span>
+              )}
+            </Meta>
+          </>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          className="ml-auto bg-background"
+          onClick={runNow}
+          disabled={starting || state.running}
+        >
           {starting || state.running ? (
-            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <RefreshCw className="mr-1 h-3 w-3" />
+            <RefreshCw className="h-3.5 w-3.5" />
           )}
           지금 실행
         </Button>
       </div>
 
       {!state.notifyEnabled && (
-        <p className="mt-2 flex items-center gap-1 text-xs text-amber-600">
-          <AlertTriangle className="h-3 w-3" />
+        <p className="mt-1.5 flex items-center gap-1 text-[12.5px] text-tone-warn">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           iMessage 알림이 꺼져 있어 펄스를 실행하지 않습니다. .env 의 NOTIFY_IMESSAGE / IMESSAGE_TO 를 확인하세요.
         </p>
       )}
 
-      <p className="mt-2 text-xs text-slate-500">
-        지난 24시간 · 문자 발송 {sent}건
-        {queued > 0 && ` · 야간 보류 ${queued}건`} · 전체 판정 {state.recent.length}건
-        {state.lastRun && (
-          <>
-            {" · "}마지막 실행 {state.lastRun.slot}{" "}
-            {state.lastRun.ok ? (
-              <Check className="inline h-3 w-3 text-emerald-600" />
-            ) : (
-              <span className="text-red-500">실패({state.lastRun.error})</span>
-            )}
-          </>
-        )}
-      </p>
-
       {/* 최근 헤드라인은 '동작 확인'용으로 몇 줄만. 피드가 아니다. */}
       {state.recent.length > 0 && (
-        <ul className="mt-2 space-y-1 text-xs text-slate-500">
+        <ul className="mt-2 grid gap-x-8 gap-y-1 border-t border-foreground/10 pt-2 text-[12.5px] text-muted-foreground lg:grid-cols-2">
           {state.recent.slice(0, 5).map((r) => (
-            <li key={r.id} className="truncate">
-              <span
-                className={cn(
-                  "mr-1 font-medium",
-                  r.status === "sent" ? "text-emerald-600" : "text-slate-400"
-                )}
-              >
-                [{r.status === "sent" ? "발송" : r.status === "queued" ? "보류" : "기록"}]
+            <li key={r.id} className="flex min-w-0 items-center gap-1.5">
+              <StatusTag tone={r.status === "sent" ? "success" : "neutral"}>
+                {r.status === "sent" ? "발송" : r.status === "queued" ? "보류" : "기록"}
+              </StatusTag>
+              <span className="truncate">
+                <span className="font-mono">{r.at.slice(11, 16)}</span> {r.symbol ? `${r.name}` : "거시"} —{" "}
+                {r.headline}
               </span>
-              {r.at.slice(11, 16)} {r.symbol ? `${r.name}` : "거시"} — {r.headline}
             </li>
           ))}
         </ul>
       )}
-    </Card>
+    </div>
   );
 }
 
@@ -258,71 +295,84 @@ export function HoldingsBoard() {
     void load();
   }, [load]);
 
+  const groups = MARKETS.map((m) => ({ market: m, rows: (holdings ?? []).filter((h) => h.market === m) })).filter(
+    (g) => g.rows.length > 0
+  );
+
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="text-lg font-bold">💼 보유 종목</h2>
-          <p className="text-xs text-slate-500">
-            등록한 종목은 관심 종목에 자동 포함되고, 실시간 취합의 영향도 판정 대상이 됩니다.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={load} disabled={loading}>
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-          </Button>
-          {MARKETS.map((m) => (
-            <AddHoldingDialog key={m} market={m} onAdded={load} />
-          ))}
-        </div>
-      </div>
+      <PageToolbar
+        actions={
+          <>
+            <IconAction label="새로고침" onClick={load} disabled={loading}>
+              {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            </IconAction>
+            {MARKETS.map((m) => (
+              <AddHoldingDialog key={m} market={m} onAdded={load} />
+            ))}
+          </>
+        }
+      >
+        <ScheduleControl kind="stockPulse" />
+      </PageToolbar>
 
-      <ScheduleControl kind="stockPulse" />
+      <PulseStatus />
 
-      <div className="mt-4">
-        <PulseStatus />
-      </div>
+      {err && <Notice tone="error">{err}</Notice>}
 
-      {err && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>
-      )}
+      <SectionHeader
+        title="보유 종목"
+        count={holdings && holdings.length > 0 ? `${holdings.length}종목` : null}
+        note="등록한 종목은 관심 종목에 자동 포함되고, 실시간 취합의 영향도 판정 대상이 됩니다."
+      />
 
       {holdings && holdings.length === 0 && (
-        <Card className="p-8 text-center text-sm text-slate-500">
-          아직 보유 종목이 없습니다. 위 “보유 종목 추가”로 등록하세요.
+        <EmptyState>
+          아직 보유 종목이 없습니다. 위 “한국장 추가”·“미국장 추가”로 등록하세요.
           <br />
-          <span className="text-xs">
-            보유 종목이 하나도 없으면 시간당 실시간 취합은 실행되지 않습니다.
-          </span>
-        </Card>
+          <span className="text-[13px]">보유 종목이 하나도 없으면 시간당 실시간 취합은 실행되지 않습니다.</span>
+        </EmptyState>
       )}
 
-      {MARKETS.map((m) => {
-        const rows = (holdings ?? []).filter((h) => h.market === m);
-        if (!rows.length) return null;
-        return (
-          <section key={m} className="mb-6">
-            <h3 className="mb-2 text-sm font-semibold text-slate-600">
-              {m === "kr" ? "🇰🇷" : "🇺🇸"} {marketLabel(m)}
-              <span className="ml-2 text-xs font-normal text-slate-400">{rows.length}종목</span>
-            </h3>
-            <div className="space-y-2">
-              {rows.map((h) => (
-                <HoldingRow key={h.id} h={h} onChanged={load} />
-              ))}
-            </div>
-          </section>
-        );
-      })}
+      {groups.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="dtable min-w-[64rem] table-fixed">
+            {/* 종목·목표가 열만 넓히고 나머지 숫자 열은 남는 폭을 고르게 나눠, 넓은 화면에서도 숫자가 한쪽에 몰리지 않게 한다. */}
+            <colgroup>
+              <col className="w-[20%]" />
+              <col />
+              <col />
+              <col />
+              <col />
+              <col />
+              <col className="w-[17%]" />
+              <col className="w-[4.75rem]" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>종목</th>
+                <th className="text-right">현재가 · 일간</th>
+                <th className="text-right">평단</th>
+                <th className="text-right">수량</th>
+                <th className="text-right">평가금액</th>
+                <th className="text-right">수익률</th>
+                <th className="text-right">목표가 · 손절가</th>
+                <th>
+                  <span className="sr-only">동작</span>
+                </th>
+              </tr>
+            </thead>
+            {groups.map((g, i) => (
+              <MarketRows key={g.market} market={g.market} rows={g.rows} first={i === 0} onChanged={load} />
+            ))}
+          </table>
+        </div>
+      )}
 
-      <p className="mt-6 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
-        ⚠️ 실시간 취합은 재료의 <strong>영향 방향과 강도만</strong> 판정합니다. 매수·매도 권유가 아니며,
-        투자 판단과 그 결과는 본인 책임입니다.
-      </p>
+      <Notice tone="warn" className="mb-0 mt-8">
+        실시간 취합은 재료의 <strong>영향 방향과 강도만</strong> 판정합니다. 매수·매도 권유가 아니며, 투자 판단과 그
+        결과는 본인 책임입니다.
+      </Notice>
     </div>
   );
 }
