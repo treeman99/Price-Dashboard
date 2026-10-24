@@ -201,9 +201,9 @@ export default function App() {
             <span className="num hidden text-[13px] text-muted-foreground sm:inline">{today}</span>
           </div>
 
-          {/* 게시판 탭 — 넓은 화면에선 제목 옆 한 줄, 좁으면 아래 줄로 내려가 가로 스크롤 */}
+          {/* 게시판 탭 — 1440px 이상이면 제목 옆 한 줄(탭 7개 + 제목 + 우측 컨트롤 ≈ 1420px), 좁으면 아래 줄로 내려가 가로 스크롤 */}
           <nav
-            className="order-last -mx-5 flex w-[calc(100%+2.5rem)] items-stretch gap-1 overflow-x-auto overflow-y-hidden px-5 [scrollbar-width:none] xl:order-none xl:mx-0 xl:w-auto xl:flex-1 xl:px-0 [&::-webkit-scrollbar]:hidden"
+            className="order-last -mx-5 flex w-[calc(100%+2.5rem)] items-stretch gap-1 overflow-x-auto overflow-y-hidden border-t px-3 [scrollbar-width:none] lg:-mx-8 lg:w-[calc(100%+4rem)] lg:px-6 min-[1440px]:order-none min-[1440px]:mx-0 min-[1440px]:w-auto min-[1440px]:flex-1 min-[1440px]:border-t-0 min-[1440px]:px-0 [&::-webkit-scrollbar]:hidden"
             role="tablist"
           >
             {TABS.map((t) => {
