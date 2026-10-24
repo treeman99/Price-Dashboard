@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Notice } from "@/components/ui/page";
 import { api } from "@/lib/api";
 import type { NewsCategoryDef } from "@shared/types";
 
@@ -158,18 +159,19 @@ export function CategoryDialog({
               <Label>검색 범위</Label>
               <div className="flex gap-2">
                 {([
-                  ["kr", "🇰🇷 한국 영상만"],
-                  ["global", "🌐 해외 포함"],
+                  ["kr", "한국 영상만"],
+                  ["global", "해외 포함"],
                 ] as const).map(([val, text]) => (
                   <button
                     key={val}
                     type="button"
+                    aria-pressed={region === val}
                     onClick={() => setRegion(val)}
                     className={
                       "flex-1 rounded-md border px-3 py-2 text-sm transition-colors " +
                       (region === val
-                        ? "border-primary bg-primary/10 font-medium text-foreground"
-                        : "border-input text-muted-foreground hover:bg-muted")
+                        ? "border-foreground bg-foreground font-medium text-background"
+                        : "border-input text-muted-foreground hover:bg-muted hover:text-foreground")
                     }
                   >
                     {text}
@@ -207,7 +209,11 @@ export function CategoryDialog({
               </p>
             </div>
           )}
-          {err && <p className="text-sm text-up">{err}</p>}
+          {err && (
+            <Notice tone="error" className="mb-0">
+              {err}
+            </Notice>
+          )}
         </div>
 
         <div className="flex justify-end gap-2">

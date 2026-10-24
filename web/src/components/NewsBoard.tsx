@@ -4,8 +4,6 @@ import {
   Loader2,
   Newspaper,
   Link as LinkIcon,
-  CalendarDays,
-  AlertTriangle,
   X,
   Pencil,
   Plus,
@@ -15,62 +13,59 @@ import {
 import type { NewsSnapshot, NewsItem, NewsCategoryDef } from "@shared/types";
 import { safeHref } from "@shared/url";
 import { api, type CollectAttempt } from "@/lib/api";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tip } from "@/components/ui/tooltip";
+import {
+  PageToolbar,
+  Meta,
+  MetaDot,
+  Notice,
+  SectionHeader,
+  TextLink,
+  IconAction,
+  EmptyState,
+  EmptyLine,
+  LoadingState,
+} from "@/components/ui/page";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 import { SnapshotNotice, snapshotHealth } from "@/components/SnapshotNotice";
 
-function NewsItemCard({ item, color }: { item: NewsItem; color: string }) {
+function NewsRow({ item }: { item: NewsItem }) {
   const href = safeHref(item.link);
   return (
-    <Card className="flex h-[20rem] flex-col border-l-4 p-4" style={{ borderLeftColor: color }}>
-      {/* 제목 — 2줄 고정 */}
-      <h4 className="line-clamp-2 min-h-[2.6em] font-semibold leading-snug">{item.title}</h4>
+    <li className="py-3">
+      <h3 className="text-[15px] font-semibold leading-snug">{item.title}</h3>
       {/* 출처 / 날짜 */}
-      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-        <span>{item.source}</span>
-        <span className="inline-flex items-center gap-1">
-          <CalendarDays className="h-3 w-3" /> {item.date}
+      <p className="mt-1 text-[12.5px] text-muted-foreground">
+        {item.source}
+        <span aria-hidden className="mx-1.5 text-muted-foreground/50">
+          ·
         </span>
+        <span className="num">{item.date}</span>
       </p>
-      {/* 요약 — 남는 공간을 채우고, 길면 카드 내부에서 스크롤되어 전부 보임 */}
-      <p className="mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-line pr-1 text-sm leading-relaxed text-foreground/80">
-        {item.summary}
-      </p>
-      {/* 액션 — 항상 카드 하단 같은 위치 */}
-      <div className="mt-3 flex flex-wrap items-center gap-3 border-t pt-2 text-xs">
+      {/* 요약 — 고정 높이 없이 전문을 그대로 보여준다(다단이 높이 차이를 흡수한다) */}
+      <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-foreground/80">{item.summary}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         {href && (
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-[#4361ee] hover:underline"
-          >
-            <LinkIcon className="h-3 w-3" /> 원문 보기
-          </a>
+          <TextLink href={href} icon={<LinkIcon />}>
+            원문 보기
+          </TextLink>
         )}
         {item.related.map((r, i) => {
           const rHref = safeHref(r.link);
+          // 관련 링크 라벨은 길 수 있어 좁은 단에서 줄바꿈되게 둔다.
           return rHref ? (
-            <a
-              key={i}
-              href={rHref}
-              target="_blank"
-              rel="noreferrer"
-              className="text-muted-foreground hover:underline"
-            >
+            <TextLink key={i} href={rHref} className="whitespace-normal">
               {r.label}
-            </a>
+            </TextLink>
           ) : (
-            <span key={i} className="text-muted-foreground">
+            <span key={i} className="text-[12.5px] text-muted-foreground">
               {r.label}
             </span>
           );
         })}
       </div>
-    </Card>
+    </li>
   );
 }
 
@@ -93,68 +88,42 @@ function Section({
   onEdit: (def: NewsCategoryDef) => void;
   onDelete: (def: NewsCategoryDef) => void;
 }) {
-  const ctrl =
-    "rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
   return (
-    <section className="mt-8">
-      <div
-        className="mb-3 flex items-center gap-2 border-b pb-2"
-        style={{ borderColor: def.color }}
-      >
-        <h2 className="flex items-center gap-2 text-lg font-bold" style={{ color: def.color }}>
-          <span>{def.emoji}</span>
-          {def.label}
-          <span className="text-sm font-normal text-muted-foreground">({items.length})</span>
-        </h2>
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            onClick={() => onMove(def, "up")}
-            disabled={!canUp}
-            aria-label="위로"
-            className={`${ctrl} group/tt relative`}
-          >
-            <ChevronUp className="h-4 w-4" />
-            <Tip>위로</Tip>
-          </button>
-          <button
-            onClick={() => onMove(def, "down")}
-            disabled={!canDown}
-            aria-label="아래로"
-            className={`${ctrl} group/tt relative`}
-          >
-            <ChevronDown className="h-4 w-4" />
-            <Tip>아래로</Tip>
-          </button>
-          <button
-            onClick={() => onEdit(def)}
-            aria-label="카테고리 수정"
-            className={`${ctrl} group/tt relative`}
-          >
-            <Pencil className="h-4 w-4" />
-            <Tip>카테고리 수정</Tip>
-          </button>
-          {canDelete && (
-            <button
-              onClick={() => onDelete(def)}
-              aria-label="카테고리 삭제"
-              className="group/tt relative rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-destructive"
-            >
-              <X className="h-4 w-4" />
-              <Tip>카테고리 삭제</Tip>
-            </button>
-          )}
-        </div>
-      </div>
+    // break-inside-avoid: 카테고리 블록이 두 단에 걸쳐 쪼개지지 않게 한다.
+    <section className="group/cat mb-8 break-inside-avoid">
+      <SectionHeader
+        className="mt-0"
+        title={`${def.emoji} ${def.label}`}
+        accent={def.color}
+        count={items.length}
+        actions={
+          // 평소엔 흐리게 두고, 블록에 마우스를 올리거나 키보드 포커스가 들어오면 또렷하게.
+          <div className="flex items-center gap-0.5 opacity-40 transition-opacity focus-within:opacity-100 group-hover/cat:opacity-100">
+            <IconAction label="위로" onClick={() => onMove(def, "up")} disabled={!canUp}>
+              <ChevronUp />
+            </IconAction>
+            <IconAction label="아래로" onClick={() => onMove(def, "down")} disabled={!canDown}>
+              <ChevronDown />
+            </IconAction>
+            <IconAction label="카테고리 수정" onClick={() => onEdit(def)}>
+              <Pencil />
+            </IconAction>
+            {canDelete && (
+              <IconAction label="카테고리 삭제" danger onClick={() => onDelete(def)}>
+                <X />
+              </IconAction>
+            )}
+          </div>
+        }
+      />
       {items.length ? (
-        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
+        <ul className="divide-y">
           {items.map((it, i) => (
-            <NewsItemCard key={i} item={it} color={def.color} />
+            <NewsRow key={i} item={it} />
           ))}
-        </div>
+        </ul>
       ) : (
-        <p className="rounded-md bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
-          오늘은 해당 카테고리의 최신 뉴스가 없습니다.
-        </p>
+        <EmptyLine>오늘은 해당 카테고리의 최신 뉴스가 없습니다.</EmptyLine>
       )}
     </section>
   );
@@ -255,11 +224,7 @@ export function NewsBoard() {
   }
 
   if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center text-muted-foreground">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 불러오는 중…
-      </div>
-    );
+    return <LoadingState />;
   }
 
   // 카테고리 정의(defs)를 기준으로 렌더하고, 스냅샷에서 key가 일치하는 기사만 매칭한다.
@@ -272,42 +237,50 @@ export function NewsBoard() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <ScheduleControl kind="news" />
-          <span>
-            · 최근 24시간 뉴스 · 수집 시 이메일 발송(지금 갱신 포함)
-            {updated && ` · 최종 갱신 ${updated}`}
-            {snap && ` · 총 ${total}건`}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-4 w-4" /> 카테고리 추가
-          </Button>
-          <Button variant="outline" onClick={refresh} disabled={collecting}>
-            {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {collecting ? "수집 중…" : "지금 갱신"}
-          </Button>
-        </div>
-      </div>
+      <PageToolbar
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
+              <Plus className="h-4 w-4" /> 카테고리 추가
+            </Button>
+            <Button variant="outline" onClick={refresh} disabled={collecting}>
+              {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {collecting ? "수집 중…" : "지금 갱신"}
+            </Button>
+          </>
+        }
+      >
+        <ScheduleControl kind="news" />
+        <MetaDot />
+        <Meta>최근 24시간 뉴스</Meta>
+        <MetaDot />
+        <Meta>수집 시 이메일 발송(지금 갱신 포함)</Meta>
+        {updated && (
+          <>
+            <MetaDot />
+            <Meta>
+              최종 갱신 <strong>{updated}</strong>
+            </Meta>
+          </>
+        )}
+        {snap && (
+          <>
+            <MetaDot />
+            <Meta>
+              총 <strong>{total}</strong>건
+            </Meta>
+          </>
+        )}
+      </PageToolbar>
 
-      {err && (
-        <div className="mb-4 rounded-md border border-up/40 bg-up/10 px-4 py-3 text-sm text-up">{err}</div>
-      )}
+      {err && <Notice tone="error">{err}</Notice>}
 
-      {busyMsg && (
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{busyMsg}</span>
-        </div>
-      )}
+      {busyMsg && <Notice tone="warn">{busyMsg}</Notice>}
 
       {collecting && (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+        <Notice tone="info" progress>
           뉴스를 수집하는 중입니다… 1~3분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
-        </div>
+        </Notice>
       )}
 
       {/* 실패해도 어제 스냅샷이 그대로 남아 '오늘 것'처럼 보이므로, 어느 날짜인지 반드시 알린다. */}
@@ -317,27 +290,34 @@ export function NewsBoard() {
       />
 
       {!defs.length ? (
-        <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
-          <Newspaper className="h-10 w-10" />
-          <p>카테고리가 없습니다. 카테고리를 추가하세요.</p>
-          <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-4 w-4" /> 카테고리 추가
-          </Button>
-        </div>
+        <EmptyState
+          icon={<Newspaper />}
+          action={
+            <Button variant="outline" onClick={() => setDialog({ mode: "add" })}>
+              <Plus className="h-4 w-4" /> 카테고리 추가
+            </Button>
+          }
+        >
+          카테고리가 없습니다. 카테고리를 추가하세요.
+        </EmptyState>
       ) : (
-        defs.map((def, i) => (
-          <Section
-            key={def.key}
-            def={def}
-            items={itemsByKey.get(def.key) ?? []}
-            canDelete={defs.length > 1}
-            canUp={i > 0}
-            canDown={i < defs.length - 1}
-            onMove={move}
-            onEdit={(d) => setDialog({ mode: "edit", cat: d })}
-            onDelete={deleteCategory}
-          />
-        ))
+        // 신문 다단: 카테고리마다 기사가 1~3건뿐이라 그리드로 깔면 오른쪽이 빈다.
+        // 블록째 단에 흘려 넣어 짧은 카테고리도 빈칸 없이 화면 폭을 채운다.
+        <div className="col-rule columns-1 gap-10 lg:columns-2 2xl:columns-3 min-[2200px]:columns-4">
+          {defs.map((def, i) => (
+            <Section
+              key={def.key}
+              def={def}
+              items={itemsByKey.get(def.key) ?? []}
+              canDelete={defs.length > 1}
+              canUp={i > 0}
+              canDown={i < defs.length - 1}
+              onMove={move}
+              onEdit={(d) => setDialog({ mode: "edit", cat: d })}
+              onDelete={deleteCategory}
+            />
+          ))}
+        </div>
       )}
 
       <CategoryDialog state={dialog} onClose={() => setDialog(null)} onSaved={load} />
