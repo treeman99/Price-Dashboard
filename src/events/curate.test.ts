@@ -10,7 +10,7 @@ import type { RawCorpus } from "./gather.ts";
  */
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "price-events-timeout-"));
 process.env.DB_PATH = path.join(tmpDir, "price.db");
-process.env.EVENTS_TIMEOUT_MS = "333000"; // 다른 탭·공용 값과 겹치지 않는 표식값
+process.env.EVENTS_TIMEOUT_MS = "780000"; // 다른 탭·공용 값과 겹치지 않는 표식값(13분 — 운영 설정 기본값은 정수 분으로 반올림된다)
 process.env.AGENT_QUERY_TIMEOUT_MS = "999000";
 
 const { config } = await import("../config.ts");
@@ -42,5 +42,5 @@ test("팝업/전시 큐레이션은 이벤트 전용 예산(eventsTimeoutMs)으�
   assert.equal(calls[0].label, "팝업/전시 큐레이션");
   assert.equal(calls[0].timeoutMs, config.eventsTimeoutMs);
   // 표식값 그대로여야 한다 = 공용 999_000(agentQueryTimeoutMs)이 아니라 이벤트 값이 배선됐다.
-  assert.equal(calls[0].timeoutMs, 333_000);
+  assert.equal(calls[0].timeoutMs, 780_000);
 });

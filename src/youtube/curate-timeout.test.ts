@@ -15,7 +15,7 @@ import path from "node:path";
  */
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "price-youtube-timeout-"));
 process.env.DB_PATH = path.join(tmpDir, "price.db");
-process.env.YOUTUBE_TIMEOUT_MS = "222000"; // 다른 탭·공용 값과 겹치지 않는 표식값
+process.env.YOUTUBE_TIMEOUT_MS = "720000"; // 다른 탭·공용 값과 겹치지 않는 표식값(12분 — 운영 설정 기본값은 정수 분으로 반올림된다)
 process.env.AGENT_QUERY_TIMEOUT_MS = "999000";
 process.env.YOUTUBE_FRESH_DAYS = "11"; // .env 기본 신선도 표식값(운영 설정 저장값 5 와 겹치지 않게)
 // 추천 채널이 없는 카테고리 1개만 둔다. 발굴 결과까지 비우면 RSS 하베스트(harvestFreshUploads)가
@@ -57,7 +57,7 @@ test("유튜브: 큐레이션은 youtubeTimeoutMs, 채널 발굴은 전용 상�
 
   assert.equal(curation.timeoutMs, config.youtubeTimeoutMs);
   // 표식값 그대로여야 한다 = 공용 999_000(agentQueryTimeoutMs)이 아니라 유튜브 값이 배선됐다.
-  assert.equal(curation.timeoutMs, 222_000);
+  assert.equal(curation.timeoutMs, 720_000);
 
   // 발굴은 탭 예산과 별개인 곁가지 예산이다(상수 선언부 주석 참고). 탭 예산을 따라가면 안 된다.
   assert.equal(discovery.timeoutMs, CHANNEL_DISCOVERY_TIMEOUT_MS);

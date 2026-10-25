@@ -17,7 +17,7 @@ import path from "node:path";
  */
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "price-news-timeout-"));
 process.env.DB_PATH = path.join(tmpDir, "price.db");
-process.env.NEWS_TIMEOUT_MS = "111000"; // 다른 탭·공용 값과 겹치지 않는 표식값
+process.env.NEWS_TIMEOUT_MS = "660000"; // 다른 탭·공용 값과 겹치지 않는 표식값(11분 — 운영 설정 기본값은 정수 분으로 반올림된다)
 process.env.AGENT_QUERY_TIMEOUT_MS = "999000";
 
 const { config } = await import("../config.ts");
@@ -49,5 +49,5 @@ test("뉴스 큐레이션은 뉴스 전용 예산(newsTimeoutMs)으로 실행한
   assert.equal(calls[0].label, "뉴스 큐레이션");
   assert.equal(calls[0].timeoutMs, config.newsTimeoutMs);
   // 표식값 그대로여야 한다 = 공용 999_000(agentQueryTimeoutMs)이 아니라 뉴스 값이 배선됐다.
-  assert.equal(calls[0].timeoutMs, 111_000);
+  assert.equal(calls[0].timeoutMs, 660_000);
 });
