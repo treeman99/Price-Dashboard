@@ -196,7 +196,7 @@ export interface SkillsSnapshot {
   updatedAt: string;
   /** "github" = 정상 수집 / "empty" = 아직 수집 전 / "error" = 실패 */
   source: "github" | "empty" | "error";
-  /** 이번 회차에 실제로 추적(스냅샷 저장)한 저장소 수. 화면 각주에 쓴다. */
+  /** 이번 회차에 실제로 추적(스냅샷 저장 — 중간 점검이면 조회만)한 저장소 수. 화면 각주에 쓴다. */
   trackedCount: number;
   /** star 총합 순위 (최대 SKILLS_RANK_SIZE) */
   byStars: SkillRankEntry[];
@@ -209,4 +209,14 @@ export interface SkillsSnapshot {
   window: SkillWindow | null;
   /** 사람에게 보여줄 상태 문구(스냅샷 보호 발동 안내 등). */
   notes?: string;
+  /**
+   * 회차 사이에 '지금 갱신'으로 만든 **중간 점검** 결과일 때만 있다.
+   *
+   * 중간 점검은 DB 스냅샷(skill_repo_points)에 남지 않는다 — 남기면 그 날짜가 다음 회차의
+   * 비교 기준이 되어 '주간 증가'가 수요일~월요일 5일치로 쪼그라든다. 그래서 숫자는 지금 값이지만
+   * 기록은 정식 회차만 쌓는다. `cycleUpdatedAt` 은 이 점검이 딛고 선 마지막 정식 회차의
+   * updatedAt 이고, 스케줄러의 '이번 회차 커버됨' 판정은 updatedAt 대신 이 값을 본다
+   * (점검 시각이 놓친 회차를 덮어 가리면 보충이 영영 안 돈다).
+   */
+  interim?: { cycleUpdatedAt: string };
 }

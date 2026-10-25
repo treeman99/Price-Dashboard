@@ -87,7 +87,7 @@ import {
   getSkillsSnapshot,
   isSkillsCollecting,
   getSkillsLastAttempt,
-  refreshSkills,
+  refreshSkillsNow,
 } from "../skills/skills.ts";
 import { isPulseNotifyEnabled } from "../notify/pulse-imessage.ts";
 import { allRecentPulseAlerts } from "../db/repo.ts";
@@ -1479,16 +1479,15 @@ api.get("/skills/status", (_req, res) => {
  * 이미 수집 중이면 409, 다른 탭이 LLM 슬롯을 쥐고 있어도 409 —
  * 파일 상단 '수동 지금 갱신' 주석 참고.
  *
- * ★ notify 는 false 다. 이 문은 사람이 결과를 눈으로 확인하려고 누르는 것이라, 누를 때마다
- *   메일·iMessage 가 나가면 안 된다. 정기 알림은 스케줄러(주간 cron) 경로가 담당한다.
+ * ★ 이번 회차가 이미 기록돼 있으면 **중간 점검**으로만 돈다 — 지금 star 로 다시 매기되 DB
+ *   스냅샷은 남기지 않고 알림도 없다(남기면 다음 회차 '주간 증가'의 비교 기준이 끌려온다).
+ *   회차가 비어 있으면 이 버튼이 곧 그 회차라 기록·알림까지 한다. 판정은 refreshSkillsNow.
  */
 api.post("/skills/refresh", async (_req, res) => {
   if (isSkillsCollecting()) {
     return res.status(409).json({ error: "이미 스킬 수집이 진행 중입니다.", collecting: true });
   }
-  const started = await startManualLlmJob("스킬 랭킹", () =>
-    refreshSkills({ trigger: "manual", notify: false })
-  );
+  const started = await startManualLlmJob("스킬 랭킹", () => refreshSkillsNow());
   if (!started) return res.status(409).json(llmBusyBody());
   res.status(202).json({ ok: true, started: true, collecting: true });
 });

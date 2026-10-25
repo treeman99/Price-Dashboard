@@ -212,15 +212,63 @@ export function nextSkillsCycleAt(
  *    무한 재시도는 스케줄러의 백오프가 막는다.
  */
 export function skillsCoveredSince(occurrence: Date): boolean {
-  const snap = getSkillsSnapshot();
+  return snapshotCoversSince(getSkillsSnapshot(), occurrence);
+}
+
+/**
+ * skillsCoveredSince 의 순수 판정. 중간 점검(`interim`)은 점검 시각이 아니라 **딛고 선 정식
+ * 회차의 시각**으로 판정한다 — 월요일 08:59 에 시작한 점검이 09:05 에 끝나도 그 주 회차를
+ * 돈 것은 아니다(shared/skills.ts 의 interim 주석).
+ */
+export function snapshotCoversSince(snap: SkillsSnapshot | null, occurrence: Date): boolean {
   if (!isSkillsSuccess(snap)) return false;
-  const at = new Date(snap!.updatedAt).getTime();
+  const at = new Date(cycleUpdatedAt(snap!)).getTime();
   return Number.isFinite(at) && at >= occurrence.getTime();
+}
+
+/** 마지막 **정식 회차**가 끝난 시각(ISO). 중간 점검이면 그 점검이 딛고 선 회차의 시각이다. */
+function cycleUpdatedAt(s: SkillsSnapshot): string {
+  return s.interim?.cycleUpdatedAt ?? s.updatedAt;
 }
 
 /** 이번 회차(직전 경계 이후)가 성공적으로 커버돼 있는지. */
 export function skillsCoveredThisWeek(now: Date = new Date()): boolean {
   return skillsCoveredSince(lastSkillsCycleBoundary(now));
+}
+
+// ── 수동 '지금 갱신' ─────────────────────────────────────────────────────────
+
+/**
+ * '지금 갱신' 한 번의 처리 방침(순수 판정).
+ *
+ * 증가 랭킹은 **기록된 회차끼리의 차분**이라, 버튼을 누를 때마다 스냅샷을 남기면 비교 기준이
+ * 회차 사이 아무 날로 끌려온다(수요일에 누르면 다음 월요일 '주간 증가'가 5일치가 된다).
+ * 그래서 이번 회차가 이미 기록돼 있으면 **중간 점검**(record=false)으로만 돌린다 — 지금 star 로
+ * 순위를 다시 매겨 보여주되 DB 에는 남기지 않는다.
+ *
+ * 이번 회차가 아직 비어 있으면(맥이 자서 놓쳤거나 첫 수집 전) 이 버튼이 곧 그 회차다 —
+ * 스케줄러 보충이 했을 일을 그대로 하므로 기록하고, 자동 실행이 켜져 있으면 알림도 보낸다
+ * (안 보내면 그 회차 알림이 영영 사라진다 — 보충은 이제 '커버됨'을 보고 건너뛴다).
+ * 회차당 한 번뿐이라 눌러 댈 때마다 메일이 나가는 일은 없다.
+ */
+export function decideManualRun(
+  snap: SkillsSnapshot | null,
+  boundary: Date,
+  autoEnabled: boolean
+): { record: boolean; notify: boolean } {
+  if (snapshotCoversSince(snap, boundary)) return { record: false, notify: false };
+  return { record: true, notify: autoEnabled };
+}
+
+/** '지금 갱신'(POST /api/skills/refresh). 판정은 실행 직전에 한다(decideManualRun). */
+export function refreshSkillsNow(now: Date = new Date()): Promise<SkillsSnapshot> {
+  const job = getSchedule().skills;
+  const { record, notify } = decideManualRun(
+    getSkillsSnapshot(),
+    lastSkillsCycleBoundary(now, job),
+    job.enabled
+  );
+  return refreshSkills({ trigger: record ? "manual" : "manual:interim", notify, record });
 }
 
 // ── 스냅샷 보호 ──────────────────────────────────────────────────────────────
@@ -310,7 +358,7 @@ function emptySnapshot(date: string, source: "empty" | "error", note: string): S
  * 실패한 회차는 직전 스냅샷을 덮어쓰지 않는다(decideSkillsSnapshot).
  */
 export async function refreshSkills(
-  opts: { trigger: string; notify?: boolean } = { trigger: "manual" }
+  opts: { trigger: string; notify?: boolean; record?: boolean } = { trigger: "manual" }
 ): Promise<SkillsSnapshot> {
   if (running) {
     log.warn(`스킬 수집 진행 중 → ${opts.trigger} 중복 방지`);
@@ -322,7 +370,11 @@ export async function refreshSkills(
   try {
     const date = localDate();
     const prev = getSkillsSnapshot();
-    const fresh = await buildSnapshot(date);
+    // record:false = 중간 점검(decideManualRun). 딛고 설 정식 회차가 없으면 점검이 성립하지 않으므로
+    // 그때는 평소처럼 기록한다.
+    const interim =
+      opts.record === false && isSkillsSuccess(prev) ? { cycleUpdatedAt: cycleUpdatedAt(prev!) } : undefined;
+    const fresh = await buildSnapshot(date, interim);
     const decision = decideSkillsSnapshot(prev, fresh, startedAt, opts.trigger);
 
     // action="keep" 이면 decision.snapshot 은 '직전 성공본 + 안내 notes'다(이번 실패 결과가
@@ -350,7 +402,7 @@ export async function refreshSkills(
     }
 
     log.info(
-      `스킬 랭킹 회차 완료 [${opts.trigger}] ${date} — 추적 ${decision.snapshot.trackedCount}건, ` +
+      `스킬 랭킹 ${interim ? "중간 점검(기록 안 함)" : "회차"} 완료 [${opts.trigger}] ${date} — 추적 ${decision.snapshot.trackedCount}건, ` +
         `총합 ${decision.snapshot.byStars.length}위 / 증가 ${decision.snapshot.byGrowth.length}위` +
         (decision.snapshot.window
           ? ` (최근 ${decision.snapshot.window.days}일 비교)`
@@ -377,8 +429,12 @@ export async function refreshSkills(
 /**
  * 이번 회차 스냅샷 1건을 만든다. **예외를 던지지 않는다** — 실패는 source="error" 스냅샷으로
  * 돌려주고, 그걸 받은 refreshSkills 가 보호 판정을 거쳐 지난주 랭킹을 지킨다.
+ * `interim` 이 있으면 중간 점검이다 — 순위는 똑같이 매기되 DB 스냅샷은 남기지 않는다.
  */
-async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
+async function buildSnapshot(
+  date: string,
+  interim?: SkillsSnapshot["interim"]
+): Promise<SkillsSnapshot> {
   let collected;
   try {
     collected = await collectSkillRepos();
@@ -391,7 +447,8 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
 
   // 1) 주간 스냅샷 저장. **랭킹보다 먼저** 한다 — 뒤의 LLM 요약이 실패하더라도 그 주의 관측값은
   //    남아야 다음 주 차분이 성립한다. 요약 때문에 star 이력에 구멍이 나면 복구할 방법이 없다.
-  const trackedCount = saveWeeklySnapshot(date, repos);
+  //    중간 점검은 저장하지 않는다 — 남기면 그 날짜가 다음 회차의 비교 기준이 된다.
+  const trackedCount = interim ? repos.length : saveWeeklySnapshot(date, repos);
 
   // 2) 차분. 직전 스냅샷이 없으면 첫 회차 — 증가 랭킹은 빈 배열, window 는 null 이다.
   const prevDate = previousSnapshotDate(date);
@@ -456,6 +513,7 @@ async function buildSnapshot(date: string): Promise<SkillsSnapshot> {
     byGrowth: attachAccess(attachSummaries(ranking.byGrowth, summaries), scans),
     window: ranking.window,
     notes: buildNotes(warnings, prune, scanned.budgetSkipped),
+    ...(interim ? { interim } : {}),
   };
 }
 
