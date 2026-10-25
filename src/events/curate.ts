@@ -13,6 +13,7 @@ import type {
   VenueGroup,
   EventTag,
 } from "../../shared/types.ts";
+import { titleKey } from "../../shared/events.ts";
 
 const REGIONS = [
   // 서울
@@ -369,15 +370,6 @@ function computeTag(startDate: string | null, endDate: string | null, today: str
   if (startDate && startDate > today) return "예정";
   if (endDate && endDate >= today && daysBetween(today, endDate) <= 7) return "종료임박";
   return null;
-}
-
-/** 제목 정규화: 공백/괄호/특수문자 제거 후 비교용 키 */
-export function titleKey(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/\s+/g, "")
-    .replace(/[\[\]()·,~!?.“”"'`\-_/]/g, "")
-    .replace(/(전시회|전시|展|팝업스토어|팝업|박람회|페어|expo|fair)/g, "");
 }
 
 /** 제목 기준 중복 제거 (LLM 누락 대비 안전장치) */

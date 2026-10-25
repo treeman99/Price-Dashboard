@@ -48,7 +48,7 @@ import type {
   StockWatchItem,
   StockSearchCandidate,
 } from "../../shared/types.ts";
-import { normalizeSymbol, partitionWatchlist } from "../../shared/stock.ts";
+import { movingAverage, normalizeSymbol, partitionWatchlist, weekChange } from "../../shared/stock.ts";
 
 /** 차트·이동평균에 쓰는 거래일 수. */
 const HISTORY_DAYS = 20;
@@ -195,26 +195,7 @@ export function isStockCollecting(market: StockMarket): boolean {
   return running.get(market) === true;
 }
 
-// ── 시세 파생 지표 (전부 quote.ts 가 가져온 점에서 계산 — LLM 미개입) ──
-
-/** 최근 n거래일 종가 단순이동평균. 점이 부족하거나 종가가 없으면 null. */
-function movingAverage(points: StockPoint[], n: number): number | null {
-  const closes = points
-    .slice(-n)
-    .map((p) => p.close)
-    .filter((c): c is number => typeof c === "number" && Number.isFinite(c));
-  if (closes.length < n) return null;
-  return closes.reduce((a, b) => a + b, 0) / closes.length;
-}
-
-/** 5거래일 등락률. 6개 점(오늘 + 5거래일 전)이 있어야 계산 가능. */
-function weekChange(points: StockPoint[]): number | null {
-  if (points.length < 6) return null;
-  const last = points[points.length - 1]?.close;
-  const base = points[points.length - 6]?.close;
-  if (typeof last !== "number" || typeof base !== "number" || base === 0) return null;
-  return ((last - base) / base) * 100;
-}
+// ── 시세 파생 지표 ── movingAverage·weekChange 는 화면 카드와 같은 식을 쓰도록 shared/stock.ts 에 있다.
 
 function lastPoint(points: StockPoint[]): StockPoint | null {
   return points.length ? points[points.length - 1] : null;

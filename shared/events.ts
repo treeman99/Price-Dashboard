@@ -51,3 +51,36 @@ export const POPUP_GROUPS = {
   seoul: { label: "서울", sub: "", accent: "#7C3AED" },
   outer: { label: "수원 · 화성 등", sub: "(경기 등 서울 외)", accent: "#059669" },
 } as const;
+
+// ── 행사 식별키 (서버 '신규' 판정 + 화면 '지난번 본 뒤 신규' 표시 공용) ──────────────
+// 같은 행사를 같은 행사로 알아보는 기준이 둘로 갈리면, 서버가 '이미 본 행사'라 한 것을 화면이
+// 새 행사로 띄우는 식으로 어긋난다. 그래서 정규화 규칙을 여기 한 곳에 둔다.
+
+/** 제목 정규화: 공백/괄호/특수문자 제거 후 비교용 키 */
+export function titleKey(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[\[\]()·,~!?.“”"'`\-_/]/g, "")
+    .replace(/(전시회|전시|展|팝업스토어|팝업|박람회|페어|expo|fair)/g, "");
+}
+
+/**
+ * 행사명 정규화 키: titleKey(공백/기호/행사어 제거) 위에 **연도 토큰(19xx/20xx) 제거**.
+ * LLM이 같은 행사를 어제는 '서울국제도서전', 오늘은 '2026 서울국제도서전'으로 적어도
+ * 같은 key가 되도록 하여 연도 표기 흔들림에 의한 '신규' 오탐을 줄인다.
+ */
+function nameKey(s: string): string {
+  return titleKey(s).replace(/(?:19|20)\d{2}/g, "");
+}
+
+/** 행사 식별키: 종류 접두어 + 정규화 제목(+전시는 전시장). */
+export function popupKey(name: string): string {
+  return `p:${nameKey(name)}`;
+}
+export function exhibitionKey(venue: string, title: string): string {
+  return `e:${nameKey(venue)}:${nameKey(title)}`;
+}
+export function festivalKey(name: string): string {
+  return `f:${nameKey(name)}`;
+}

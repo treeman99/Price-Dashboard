@@ -3,7 +3,7 @@ import path from "node:path";
 import { config } from "../config.ts";
 import { getTabSettings } from "../settings/tab-settings.ts";
 import { log } from "../util/log.ts";
-import { titleKey } from "./curate.ts";
+import { exhibitionKey, festivalKey, popupKey } from "../../shared/events.ts";
 import type { EventsSnapshot } from "../../shared/types.ts";
 
 /**
@@ -50,25 +50,7 @@ function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
 }
 
-/**
- * 행사명 정규화 키: titleKey(공백/기호/행사어 제거) 위에 **연도 토큰(19xx/20xx) 제거**.
- * LLM이 같은 행사를 어제는 '서울국제도서전', 오늘은 '2026 서울국제도서전'으로 적어도
- * 같은 key가 되도록 하여 연도 표기 흔들림에 의한 '신규' 오탐을 줄인다.
- */
-function nameKey(s: string): string {
-  return titleKey(s).replace(/(?:19|20)\d{2}/g, "");
-}
-
-/** 행사 식별키: 종류 접두어 + 정규화 제목(+전시는 전시장). */
-function popupKey(name: string): string {
-  return `p:${nameKey(name)}`;
-}
-function exhibitionKey(venue: string, title: string): string {
-  return `e:${nameKey(venue)}:${nameKey(title)}`;
-}
-function festivalKey(name: string): string {
-  return `f:${nameKey(name)}`;
-}
+// 행사 식별키(popupKey 등)는 화면의 '지난번 본 뒤 신규' 표시와 같은 기준을 쓰도록 shared/events.ts 에 있다.
 
 /**
  * 순수 판정 로직(디스크 미접근, 테스트 대상). ledger 를 갱신한 새 객체와
