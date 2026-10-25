@@ -28,6 +28,167 @@ export interface ScheduleSettings {
   stockPulse: string[];
 }
 
+// ── 탭별 자동 실행 스케줄 v2 (시각 + 요일 + 주기 + 켜기/끄기) ──
+//
+// 위 ScheduleSettings(v1: '매일 이 시각들')를 대체한다. 소비처 이전이 끝나면 v1 은 지운다.
+// 의미 규칙(보충 판정·금지 구간 등)은 docs/customization-contract.md 가 정본이다.
+// 순수 계산(다음 실행·설명 문구·검증)은 shared/schedule.ts 한 곳에 두고 서버와 화면이 함께 쓴다.
+
+/** 0=일 … 6=토. JS `Date#getDay()` 와 같다. */
+export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+/** '어느 날' 실행하는가. 시각(times)과 분리되어 있다 — 그날이 실행일이면 times 전부가 돈다. */
+export type ScheduleRepeat =
+  | { kind: "daily" }
+  | {
+      kind: "weekly";
+      /** 실행 요일(1개 이상, 오름차순·중복 없음). 평일=[1,2,3,4,5], 주말=[0,6]. */
+      days: Weekday[];
+      /** 1=매주, 2=격주, 3·4=N주마다. */
+      intervalWeeks: number;
+      /**
+       * intervalWeeks > 1 일 때의 기준 날짜(YYYY-MM-DD). 이 날짜가 속한 **월~일 주**가 실행 주이고,
+       * 거기서 intervalWeeks 주마다 반복한다. 비어 있으면 서버가 저장 시점의 날짜로 채운다.
+       */
+      anchorDate?: string;
+    }
+  | {
+      kind: "monthly";
+      /** 1~31, -1=말일(오름차순·중복 없음). 그 달에 없는 날짜(예: 2월 30일)는 그 달 건너뛴다. */
+      dates: number[];
+    };
+
+/** 잡 1개의 스케줄. */
+export interface JobSchedule {
+  /** false 면 정시 실행·누락 보충·가동 중단 누락 집계가 모두 멈춘다. 수동 갱신은 그대로 된다. */
+  enabled: boolean;
+  repeat: ScheduleRepeat;
+  /** 실행일의 실행 시각 "HH:mm"(정규화·중복 제거·오름차순, 1개 이상). 'N시간 간격'은 화면이 이 목록으로 펼친다. */
+  times: string[];
+}
+
+/** 스케줄을 갖는 잡. 증시는 시장별 브리핑 2개 + 시간당 펄스 1개다. */
+export type ScheduleJobId =
+  | "events"
+  | "news"
+  | "youtube"
+  | "stockKr"
+  | "stockUs"
+  | "stockPulse"
+  | "skills"
+  | "lotto";
+
+export type ScheduleConfig = Record<ScheduleJobId, JobSchedule>;
+
+/** 잡별 편집 제약. 서버(shared/schedule.ts 의 SCHEDULE_RULES)가 정본이고 화면은 응답값을 그대로 쓴다. */
+export interface JobScheduleRules {
+  /** 허용 반복 종류. 예: 로또는 ["weekly"]. */
+  repeatKinds: ScheduleRepeat["kind"][];
+  /** 시각 최대 개수(로또·스킬 랭킹=1). */
+  maxTimes: number;
+  /** weekly 의 요일 최대 개수(로또·스킬 랭킹=1). 없으면 7. */
+  maxDays?: number;
+  /** monthly 의 날짜 최대 개수(스킬 랭킹=1). 없으면 무제한. */
+  maxDates?: number;
+  /** weekly 의 intervalWeeks 상한(로또=1). */
+  maxIntervalWeeks: number;
+  /** 저장 거부 구간. 요일 day 의 [from, to) 시각에 실행 시각이 걸리면 400. 예: 로또 토요일 추첨 전후. */
+  blackout?: { day: Weekday; from: string; to: string; reason: string }[];
+  /** 화면에 그대로 보여 줄 제약 사유 한 줄. */
+  note?: string;
+}
+
+/** GET/PUT /api/schedule 응답. */
+export interface ScheduleResponse {
+  /** 현재 유효 스케줄(.env 기본값 + 사용자 변경). */
+  schedule: ScheduleConfig;
+  /** .env 기본값('기본값으로 되돌리기'용). */
+  defaults: ScheduleConfig;
+  rules: Record<ScheduleJobId, JobScheduleRules>;
+  /** 다음 실행 예정 시각(로컬 오프셋 ISO). 꺼짐이면 null. */
+  next: Record<ScheduleJobId, string | null>;
+}
+
+// ── 탭별 운영 설정 (지금까지 .env 에서만 바꿀 수 있던 값들) ──
+//
+// 저장: data/tab-settings.json(바꾼 필드만 sparse override) 위에 .env(config.ts) 기본값을 병합.
+// 저장 즉시 반영된다(재시작 불필요). 비밀값·경로·포트는 여기 넣지 않는다.
+
+/** 알림을 보내는 주체. 로또는 알림이 없다. uptime = 가동 중단 사후 보고. */
+export type NotifyTabId = "events" | "news" | "youtube" | "stock" | "stockPulse" | "skills" | "uptime";
+export type NotifyChannel = "email" | "imessage";
+
+export interface TabSettings {
+  /**
+   * 탭별 알림 채널 on/off. 전역 .env 스위치(NOTIFY_EMAIL / NOTIFY_IMESSAGE+수신자)와 **AND** 다 —
+   * 전역이 꺼져 있으면 여기서 켜도 나가지 않는다. 그 탭에 없는 채널 값은 무시된다(channels 참고).
+   */
+  notify: Record<NotifyTabId, Record<NotifyChannel, boolean>>;
+  youtube: {
+    /** 최근 N일 이내 게시 영상만 채택(YOUTUBE_FRESH_DAYS). */
+    freshDays: number;
+    /** '본영상' 체크 영상을 N일 동안 제외(YOUTUBE_WATCHED_EXCLUDE_DAYS). */
+    watchedExcludeDays: number;
+  };
+  events: {
+    /** N일 이상 안 보이다 다시 나오면 '신규'(EVENTS_NEW_GAP_DAYS). */
+    newGapDays: number;
+    /** '신규' 배지 유지 일수(EVENTS_NEW_SHOW_DAYS). */
+    newShowDays: number;
+    /** 종료된 행사 날짜 검증(EVENTS_VERIFY_DATES). */
+    verifyDates: boolean;
+  };
+  stockPulse: {
+    perSymbolCap: number;
+    dailyCap: number;
+    macroCap: number;
+    dedupHours: number;
+    threshold: PulseSeverity;
+    /** 0~23. 이 시각부터 긴급만 즉시 발송. */
+    quietStartHour: number;
+    /** 0~23. 야간 종료 = 보류분 묶음 발송 시각(바꾸면 발송 cron 도 즉시 재등록). */
+    quietEndHour: number;
+  };
+  stock: {
+    /** 증시 시계열 보존 일수(HISTORY_RETENTION_DAYS). 매일 04:30 정리. */
+    historyRetentionDays: number;
+  };
+  /** 탭별 LLM 1회 최대 대기(분). 다음 실행부터 적용된다(진행 중인 실행은 시작 시점 값). */
+  timeouts: {
+    newsMin: number;
+    youtubeMin: number;
+    eventsMin: number;
+    stockBriefMin: number;
+    stockPulseMin: number;
+    skillsSummaryMin: number;
+    skillsBudgetMin: number;
+  };
+}
+
+/** 숫자 필드 1개의 허용 범위. */
+export interface NumberRule {
+  min: number;
+  max: number;
+  /** 화면 표시 단위. 예: "일", "분", "건", "시". */
+  unit: string;
+}
+
+/** 재귀 부분 타입(PUT /api/settings 본문). */
+export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+
+/** GET/PUT /api/settings 응답. PUT 본문은 DeepPartial<TabSettings>. 검증 실패는 400 {error}. */
+export interface TabSettingsResponse {
+  settings: TabSettings;
+  /** .env 기본값('기본값으로 되돌리기'용). */
+  defaults: TabSettings;
+  /** 숫자 필드 범위. 키는 점 경로("youtube.freshDays", "timeouts.newsMin" …). */
+  numberRules: Record<string, NumberRule>;
+  /** 탭별로 실제 존재하는 알림 채널. */
+  channels: Record<NotifyTabId, NotifyChannel[]>;
+  /** 전역 채널 상태(.env). false 인 채널은 화면이 '전역에서 꺼짐'으로 표시한다. */
+  globalChannels: Record<NotifyChannel, boolean>;
+}
+
 // ── 수집/큐레이션 에이전트 모델 설정 ──
 
 /** 선택 가능한 에이전트 모델 1건. */
