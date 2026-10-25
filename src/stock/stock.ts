@@ -19,6 +19,7 @@ import {
   resolveSlot,
   MANUAL_SLOT,
   SLOT_HANDLED,
+  type NotifiedFlags,
 } from "./notify-ledger.ts";
 import { searchTicker, fetchHistory, fetchIndexHistory, fetchExchangeRate } from "./quote.ts";
 import {
@@ -35,7 +36,7 @@ import {
   type IndexQuoteRow,
   type PositionPromptRow,
 } from "./curate.ts";
-import { sendStockEmail, sendStockIMessage } from "../notify/stock-email.ts";
+import { sendStockEmail, sendStockIMessage, stockChannelOffReason } from "../notify/stock-email.ts";
 import { stockSlotRoleDetail } from "./slot-role.ts";
 import { getSchedule } from "../scheduler/schedule-store.ts";
 import type {
@@ -836,18 +837,10 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     // 수동 갱신은 '지난 슬롯의 누락을 보충'할 뿐 새 알림을 만들지 않는다(notify-ledger 참고).
     const sendable = opts.notify === true && slot !== MANUAL_SLOT;
     if (sendable && ok && hasContent && (!emailed || !imessaged)) {
-      if (!emailed) {
-        emailed = await sendStockEmail(snapshot).catch((e) => {
-          log.warn(`증시 이메일 발송 예외 [${market}]: ${(e as Error).message}`);
-          return false;
-        });
-      }
-      if (!imessaged) {
-        imessaged = await sendStockIMessage(snapshot).catch((e) => {
-          log.warn(`증시 iMessage 발송 예외 [${market}]: ${(e as Error).message}`);
-          return false;
-        });
-      }
+      ({ email: emailed, imessage: imessaged } = await notifySlotChannels(snapshot, slot, {
+        email: emailed,
+        imessage: imessaged,
+      }));
     } else if (sendable && ok && !hasContent) {
       // 보낼 내용이 없는 것은 '실패'가 아니라 확정된 결과다 → 슬롯을 닫아 catch-up 이
       // 이 슬롯을 30분마다 재시도하지 않게 한다(수집 실패 ok=false 는 반대로 열어 둔다).
@@ -874,6 +867,53 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
   } finally {
     running.set(market, false);
   }
+}
+
+/**
+ * 슬롯 하나의 채널별 알림 → 원장에 기록할 플래그. 이미 닫힌 채널(true)은 건드리지 않는다.
+ *
+ * 원장 플래그의 의미는 '발송 성공'이 아니라 **'이 채널로 더 보낼 것이 없음'**(notify-ledger SLOT_HANDLED)이다.
+ * - **꺼진 채널**(탭 스위치 off · 전역 off · 메일 자격증명 미설정 · iMessage 수신자 없음)은 보내지 않고
+ *   닫는다. 열어 두면 slotNeedsCatchup 이 그 슬롯을 영원히 미발송으로 보고 catch-up 이 자정까지
+ *   30분마다 증시 브리핑 전체(LLM)를 다시 수집한다(2026-10-25 QA H1).
+ * - **켜진 채널의 발송 실패**(예외·API 오류)는 false 그대로 — 다음 catch-up 이 그 채널만 재시도한다.
+ *
+ * ⚠️ '꺼짐' 판정은 send 함수의 조기 반환과 같은 stockChannelOffReason 하나만 본다(그 함수 주석).
+ *
+ * export 이유: 알림 블록은 refreshStock(LLM·시세) 안쪽이라 단위 테스트가 닿지 않는다.
+ */
+export async function notifySlotChannels(
+  snapshot: StockSnapshot,
+  slot: string,
+  done: NotifiedFlags
+): Promise<NotifiedFlags> {
+  const market = snapshot.market;
+  let { email, imessage } = done;
+  if (!email) {
+    const off = stockChannelOffReason("email");
+    if (off) {
+      email = SLOT_HANDLED.email;
+      log.info(`증시 [${market}] 슬롯 ${slot} 메일 알림 꺼짐(${off}) → 슬롯 종료 처리`);
+    } else {
+      email = await sendStockEmail(snapshot).catch((e) => {
+        log.warn(`증시 이메일 발송 예외 [${market}]: ${(e as Error).message}`);
+        return false;
+      });
+    }
+  }
+  if (!imessage) {
+    const off = stockChannelOffReason("imessage");
+    if (off) {
+      imessage = SLOT_HANDLED.imessage;
+      log.info(`증시 [${market}] 슬롯 ${slot} 문자 알림 꺼짐(${off}) → 슬롯 종료 처리`);
+    } else {
+      imessage = await sendStockIMessage(snapshot).catch((e) => {
+        log.warn(`증시 iMessage 발송 예외 [${market}]: ${(e as Error).message}`);
+        return false;
+      });
+    }
+  }
+  return { email, imessage };
 }
 
 /** resolveSession 의 종료 상태. holiday 와 settled 는 **서로 다른 종료**다(아래 주석 참고). */

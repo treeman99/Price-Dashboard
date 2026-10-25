@@ -2,7 +2,7 @@ import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { renderLineChartPng } from "./chart.ts";
 import { isMailConfigured, sendMail, type MailAttachment } from "./mailer.ts";
-import { sendIMessage } from "./imessage.ts";
+import { isIMessageConfigured, sendIMessage } from "./imessage.ts";
 import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import { listStocks } from "../stock/tickers.ts";
@@ -18,6 +18,7 @@ import {
 } from "../../shared/stock.ts";
 import { formatPnlPct, horizonLabel } from "../../shared/holdings.ts";
 import type {
+  NotifyChannel,
   StockAnalysis,
   StockIndex,
   StockMarket,
@@ -462,11 +463,36 @@ function truncate(s: string, max: number): string {
 }
 
 /**
- * 증시 브리핑을 본인 iMessage 로 발송. off(전역·탭)/미설정이면 false.
+ * 증시 알림 채널이 **꺼져 있으면 그 사유**, 켜져 있으면 null.
+ *
+ * 꺼짐 = 탭 스위치 off · 전역 스위치 off(NOTIFY_EMAIL / NOTIFY_IMESSAGE) · 메일 자격증명 미설정 ·
+ * iMessage 수신자 없음. 판정은 isTabNotifyEnabled(전역 AND 탭) 한 줄이고, 사유는 로그 문구용이다.
+ *
+ * ⚠️ send 함수의 조기 반환과 stock.ts 의 원장 기록(꺼진 채널은 SLOT_HANDLED 로 닫는다)이 **이 함수
+ *    하나**를 본다. 둘이 따로 판정하면 '원장은 켜짐으로 보고 열어 둠 · send 는 꺼짐으로 보고 안 보냄'인
+ *    틈이 생기고, 그 슬롯은 영원히 미발송이라 catch-up 이 30분마다 증시 브리핑 전체를 다시 수집한다
+ *    (2026-10-25 QA H1 — 대시보드 탭 알림 스위치 한 번이면 열리는 경로였다).
+ * ⚠️ '자격증명은 있는데 Google 미연결·재로그인 필요'는 꺼짐이 아니다(isMailConfigured 판정 —
+ *    tab-settings.ts isTabNotifyEnabled 주석의 2026-08-05 실패 모드). 발송을 시도해 실패로 남겨야
+ *    재연결 뒤 catch-up 이 그 슬롯을 보충한다.
+ */
+export function stockChannelOffReason(channel: NotifyChannel): string | null {
+  if (isTabNotifyEnabled("stock", channel)) return null;
+  if (channel === "email") {
+    if (!config.notify.email) return "전역 NOTIFY_EMAIL 꺼짐";
+    if (!isMailConfigured()) return "메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*)";
+  } else if (!isIMessageConfigured()) {
+    return config.notify.imessage ? "iMessage 수신자(IMESSAGE_TO) 미설정" : "전역 NOTIFY_IMESSAGE 꺼짐";
+  }
+  return "대시보드 운영 설정";
+}
+
+/**
+ * 증시 브리핑을 본인 iMessage 로 발송. 채널이 꺼져 있으면(stockChannelOffReason) false.
  * 절대 throw 하지 않는다(수집 흐름을 막지 않음) — 실패는 로깅 후 false.
  */
 export async function sendStockIMessage(s: StockSnapshot): Promise<boolean> {
-  if (!isTabNotifyEnabled("stock", "imessage")) return false;
+  if (stockChannelOffReason("imessage")) return false;
   try {
     await sendIMessage(stockIMessageText(s));
     return true;
@@ -477,17 +503,13 @@ export async function sendStockIMessage(s: StockSnapshot): Promise<boolean> {
 }
 
 /**
- * 증시 브리핑 이메일 발송. NOTIFY_EMAIL + Gmail 자격증명 필요.
+ * 증시 브리핑 이메일 발송. 채널이 꺼져 있으면(stockChannelOffReason) false.
  * 발송 실패는 throw 하지 않고 false — 브리핑 알림 하나가 수집 런 전체를 깨면 안 된다.
  */
 export async function sendStockEmail(s: StockSnapshot): Promise<boolean> {
-  if (!config.notify.email) return false;
-  if (!isMailConfigured()) {
-    log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 증시 이메일 건너뜀");
-    return false;
-  }
-  if (!isTabNotifyEnabled("stock", "email")) {
-    log.info("증시 메일 알림 꺼짐(대시보드 운영 설정) → 건너뜀");
+  const off = stockChannelOffReason("email");
+  if (off) {
+    log.info(`증시 메일 알림 꺼짐(${off}) → 건너뜀`);
     return false;
   }
 
