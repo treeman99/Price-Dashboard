@@ -30,6 +30,7 @@ import {
 } from "@shared/stock";
 import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
+import { formatDay, formatWhen } from "@/lib/tabConfig";
 import { Button } from "@/components/ui/button";
 import {
   PageToolbar,
@@ -221,7 +222,7 @@ function PositionRow({ p }: { p: StockPositionReview }) {
  * 아직 브리핑이 붙지 않은 등록 종목(예: 방금 추가)을 카드로 보여주기 위한 자리표시 분석.
  * 숫자는 전부 null 로 둔다 — 없는 값을 0 으로 채우면 '보합'처럼 보이는 가짜 시세가 된다.
  */
-function placeholderAnalysis(t: StockTicker): StockAnalysis {
+function placeholderAnalysis(t: StockTicker, closed: boolean): StockAnalysis {
   return {
     symbol: t.symbol,
     name: t.name,
@@ -233,7 +234,9 @@ function placeholderAnalysis(t: StockTicker): StockAnalysis {
     history: [],
     ma5: null,
     ma20: null,
-    summary: "아직 이 종목의 브리핑이 없습니다. 다음 브리핑에서 분석이 첨부됩니다.",
+    // 휴장일엔 '아직 브리핑이 없다'가 사실이 아니고(브리핑을 만들지 않는 날이다), 맨 위 휴장 안내가 이미
+    // 그 사실을 말한다. 요약을 비우면 카드의 요약 칸이 숨는다(Field 는 빈 값을 그리지 않는다).
+    summary: closed ? "" : "아직 이 종목의 브리핑이 없습니다. 다음 브리핑에서 분석이 첨부됩니다.",
     outlook: "",
     rationale: "",
     risks: "",
@@ -350,7 +353,7 @@ export function StockBoard() {
   // variants 가 비어 있어 탭이 나타나지 않고 화면이 현행과 동일하다.
   const roleViews = (["close", "preview"] as const).filter((r) => !!resp?.variants?.[r]);
 
-  const updated = snap?.updatedAt ? new Date(snap.updatedAt).toLocaleString("ko-KR") : null;
+  const updated = snap?.updatedAt ? formatWhen(new Date(snap.updatedAt), new Date()) : null;
   // 역할 배지·거래일 라벨. 구 스냅샷은 role 이 없으므로 반드시 effectiveRole 을 거친다
   // (직접 snap.role 을 읽으면 undefined 가 화면으로 샌다).
   const role = snap ? effectiveRole(snap) : "both";
@@ -371,7 +374,8 @@ export function StockBoard() {
           ? `대상 세션 ${snap.sessionDate}(오늘 밤)`
           : `대상 세션 ${snap.sessionDate}(종료된 세션 · 지난 프리뷰)`
         : snap.sessionDate !== snap.date
-          ? `거래일 ${snap.sessionDate}`
+          ? // 한국장은 휴장이면 '다음 거래일', 미국장 혼합본은 '직전 마감 거래일'이 온다 — 날짜만 두면 어느 쪽인지 모른다.
+            `${snap.sessionDate > snap.date ? "다음" : "직전"} 거래일 ${formatDay(snap.sessionDate)}`
           : null;
 
   const bySymbol = new Map<string, StockAnalysis>();
@@ -422,7 +426,7 @@ export function StockBoard() {
         {snap && (
           <>
             <MetaDot />
-            <Meta>{snap.date}</Meta>
+            <Meta>브리핑 {formatDay(snap.date)}</Meta>
           </>
         )}
         {sessionText && (
@@ -484,13 +488,13 @@ export function StockBoard() {
       {/* 휴장은 실패가 아니다 — 에러(빨강)와 구분되게 회색 안내로 표시한다. */}
       {snap?.closed && (
         <Notice tone="muted">
-          {snap.date}
+          {formatDay(snap.date)}
           {snap.closedReason ? ` ${snap.closedReason}` : ""} 휴장 —{" "}
           {role === "preview"
             ? "오늘 밤 뉴욕장이 열리지 않습니다. 다음 거래일 프리뷰를 기다립니다."
             : role === "close"
               ? `직전 마감(${snap.sessionDate ?? "미상"}) 결산은 다음 거래일 아침 브리핑이 이어받습니다.`
-              : "다음 거래일 브리핑을 기다립니다."}
+              : `${snap.indices.length ? `지수·종목 시세는 ${formatDay(indexAsOf(snap.indices[0]) ?? "") || "최종 거래일"} 종가 기준이고, ` : ""}분석은 다음 거래일 브리핑에서 붙습니다.`}
         </Notice>
       )}
 
@@ -534,12 +538,7 @@ export function StockBoard() {
           {!!snap?.indices.length && (
             <section>
               <SectionHeader title="지수" count={snap.indices.length} accent={ACCENT} />
-              {snap.closed && (
-                <Notice tone="muted" icon={null} className="mb-2">
-                  휴장 중이라 {indexAsOf(snap.indices[0]) ?? "최종 거래일"} 종가 기준입니다. 값과
-                  추이는 그대로 보이고, 시황 서술은 다음 거래일 브리핑에서 붙습니다.
-                </Notice>
-              )}
+              {/* 휴장일 '종가 기준' 안내는 맨 위 휴장 안내에 합쳤다. 칸마다 'MM-DD 종가'가 따로 붙는다. */}
               {/* 지수 띠 — 지수 수만큼 열을 두고 세로 헤어라인으로 나눈다(lg 미만은 세로로 쌓는다). */}
               <div
                 className="grid divide-y lg:grid-cols-[repeat(var(--n),minmax(0,1fr))] lg:divide-x lg:divide-y-0"
@@ -565,7 +564,7 @@ export function StockBoard() {
                   <StockCard
                     key={t.id}
                     ticker={t}
-                    analysis={bySymbol.get(t.symbol) ?? placeholderAnalysis(t)}
+                    analysis={bySymbol.get(t.symbol) ?? placeholderAnalysis(t, !!snap?.closed)}
                     canUp={i > 0}
                     canDown={i < tickers.length - 1}
                     onMove={move}
@@ -647,7 +646,10 @@ export function StockBoard() {
 
           {(snap?.notes || snap?.disclaimer) && (
             <footer className="space-y-6">
-              {snap?.notes && <p className="whitespace-pre-line text-sm text-muted-foreground">{snap.notes}</p>}
+              {/* 휴장 스냅샷의 notes 는 "휴장(주말) — 브리핑을 생성하지 않았습니다." 뿐이라 맨 위 안내와 겹친다. */}
+              {snap?.notes && !snap.closed && (
+                <p className="whitespace-pre-line text-sm text-muted-foreground">{snap.notes}</p>
+              )}
 
               {/* 면책 — 보드 하단에 상시 노출 */}
               {snap?.disclaimer && (

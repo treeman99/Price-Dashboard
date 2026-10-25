@@ -13,6 +13,8 @@ import {
 import type { NewsSnapshot, NewsItem, NewsCategoryDef } from "@shared/types";
 import { safeHref } from "@shared/url";
 import { api, type CollectAttempt } from "@/lib/api";
+import { formatWhen } from "@/lib/tabConfig";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   PageToolbar,
@@ -20,6 +22,7 @@ import {
   MetaDot,
   Notice,
   SectionHeader,
+  SubHeader,
   TextLink,
   IconAction,
   EmptyState,
@@ -29,12 +32,31 @@ import {
 import { NotifyMeta, ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 import { SnapshotNotice, snapshotHealth } from "@/components/SnapshotNotice";
+import { NewTag } from "@/components/NewTag";
+import { newsItemId, newsVisibleItems } from "@/lib/feed";
+import { NewMarksProvider, useIsNew, useNewMarks } from "@/lib/seen";
 
 function NewsRow({ item }: { item: NewsItem }) {
   const href = safeHref(item.link);
+  const fresh = useIsNew(newsItemId(item));
   return (
     <li className="py-3">
-      <h3 className="text-[15px] font-semibold leading-snug">{item.title}</h3>
+      <h3 className="text-[15px] font-semibold leading-snug">
+        {fresh && <NewTag />}
+        {/* 제목이 곧 원문 링크다 — 12.5px '원문 보기'만 눌리던 것을 넓혔다('원문 보기'는 그대로 둔다). */}
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="underline-offset-[3px] hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {item.title}
+          </a>
+        ) : (
+          item.title
+        )}
+      </h3>
       {/* 출처 / 날짜 */}
       <p className="mt-1 text-[12.5px] text-muted-foreground">
         {item.source}
@@ -69,31 +91,75 @@ function NewsRow({ item }: { item: NewsItem }) {
   );
 }
 
-/**
- * 카테고리마다 처음에 보이는 기사 수. 평소엔 카테고리당 1~3건이라 버튼이 안 뜨고,
- * 많은 날(실측 최대 총 76건·한 카테고리 12건)에도 카테고리 한 줄이 화면 한 장 남짓에 머문다.
- */
-const PREVIEW_COUNT = 4;
-
-function Section({
-  def,
-  items,
-  canDelete,
-  canUp,
-  canDown,
-  onMove,
-  onEdit,
-  onDelete,
-}: {
+interface CategoryActionProps {
   def: NewsCategoryDef;
-  items: NewsItem[];
   canDelete: boolean;
   canUp: boolean;
   canDown: boolean;
   onMove: (def: NewsCategoryDef, dir: "up" | "down") => void;
   onEdit: (def: NewsCategoryDef) => void;
   onDelete: (def: NewsCategoryDef) => void;
-}) {
+}
+
+/** 카테고리 이름. 이모지는 사용자가 고른 표지라 보이게 두되, 스크린리더가 이모지 이름부터 읽지 않게 숨긴다. */
+function CategoryName({ def }: { def: NewsCategoryDef }) {
+  return (
+    <>
+      {def.emoji && <span aria-hidden>{def.emoji} </span>}
+      {def.label}
+    </>
+  );
+}
+
+/** 카테고리 동작(위로·아래로·수정·삭제). 평소엔 흐리게 두고, 블록에 마우스를 올리거나 키보드 포커스가 들어오면 또렷하게. */
+function CategoryActions({ def, canDelete, canUp, canDown, onMove, onEdit, onDelete }: CategoryActionProps) {
+  return (
+    <div className="flex items-center gap-0.5 opacity-40 transition-opacity focus-within:opacity-100 group-hover/cat:opacity-100">
+      <IconAction label="위로" onClick={() => onMove(def, "up")} disabled={!canUp}>
+        <ChevronUp />
+      </IconAction>
+      <IconAction label="아래로" onClick={() => onMove(def, "down")} disabled={!canDown}>
+        <ChevronDown />
+      </IconAction>
+      <IconAction label="카테고리 수정" onClick={() => onEdit(def)}>
+        <Pencil />
+      </IconAction>
+      {canDelete && (
+        <IconAction label="카테고리 삭제" danger onClick={() => onDelete(def)}>
+          <X />
+        </IconAction>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 오늘 기사가 없는 카테고리 한 줄. 격자 한 칸을 통째로 차지하지 않게 섹션 대신 이걸로 접어 둔다.
+ * 순서·수정·삭제 동작은 섹션과 똑같이 남긴다(순서는 기사가 생겼을 때 격자 위치를 정한다).
+ */
+function EmptyCategoryRow(props: CategoryActionProps) {
+  return (
+    <li className="group/cat flex flex-wrap items-center gap-x-2.5 gap-y-1 py-2">
+      <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-[2px]" style={{ backgroundColor: props.def.color }} />
+      <span className="text-[15px] font-semibold">
+        <CategoryName def={props.def} />
+      </span>
+      <span className="text-[13px] text-muted-foreground">오늘은 최신 뉴스가 없습니다</span>
+      <div className="ml-auto">
+        <CategoryActions {...props} />
+      </div>
+    </li>
+  );
+}
+
+/**
+ * 카테고리마다 처음에 보이는 기사 수. 평소엔 카테고리당 1~3건이라 버튼이 안 뜨고,
+ * 많은 날(실측 최대 총 76건·한 카테고리 12건)에도 카테고리 한 줄이 화면 한 장 남짓에 머문다.
+ */
+const PREVIEW_COUNT = 4;
+
+function Section({ items, ...actions }: CategoryActionProps & { items: NewsItem[] }) {
+  const { def } = actions;
   const ref = useRef<HTMLElement>(null);
   const [open, setOpen] = useState(false);
   const hidden = items.length - PREVIEW_COUNT;
@@ -111,28 +177,10 @@ function Section({
     <section ref={ref} className="group/cat scroll-mt-32">
       <SectionHeader
         className="mt-0"
-        title={`${def.emoji} ${def.label}`}
+        title={<CategoryName def={def} />}
         accent={def.color}
         count={items.length}
-        actions={
-          // 평소엔 흐리게 두고, 블록에 마우스를 올리거나 키보드 포커스가 들어오면 또렷하게.
-          <div className="flex items-center gap-0.5 opacity-40 transition-opacity focus-within:opacity-100 group-hover/cat:opacity-100">
-            <IconAction label="위로" onClick={() => onMove(def, "up")} disabled={!canUp}>
-              <ChevronUp />
-            </IconAction>
-            <IconAction label="아래로" onClick={() => onMove(def, "down")} disabled={!canDown}>
-              <ChevronDown />
-            </IconAction>
-            <IconAction label="카테고리 수정" onClick={() => onEdit(def)}>
-              <Pencil />
-            </IconAction>
-            {canDelete && (
-              <IconAction label="카테고리 삭제" danger onClick={() => onDelete(def)}>
-                <X />
-              </IconAction>
-            )}
-          </div>
-        }
+        actions={<CategoryActions {...actions} />}
       />
       {items.length ? (
         <>
@@ -261,6 +309,9 @@ export function NewsBoard() {
     }
   }
 
+  // '지난번 본 뒤 신규' — 화면에 보이는 목록(정의 순서·범위) 기준. 1면도 같은 기준으로 센다.
+  const isNew = useNewMarks("news", snap && !loading ? newsVisibleItems(snap, defs).map(newsItemId) : null);
+
   if (loading) {
     return <LoadingState />;
   }
@@ -270,10 +321,25 @@ export function NewsBoard() {
   const itemsByKey = new Map<string, NewsItem[]>();
   snap?.categories.forEach((c) => itemsByKey.set(c.key, c.items));
 
-  const updated = snap?.updatedAt ? new Date(snap.updatedAt).toLocaleString("ko-KR") : null;
+  const updated = snap?.updatedAt ? formatWhen(new Date(snap.updatedAt), new Date()) : null;
   const total = defs.reduce((a, d) => a + (itemsByKey.get(d.key)?.length ?? 0), 0);
+  const filled = defs.filter((d) => (itemsByKey.get(d.key)?.length ?? 0) > 0);
+  const empty = defs.filter((d) => (itemsByKey.get(d.key)?.length ?? 0) === 0);
+  // 순서 버튼은 화면 배치가 아니라 정의 순서(defs) 기준이다 — 빈 카테고리를 아래로 접어도 순서는 그대로다.
+  const actionProps = (def: NewsCategoryDef): CategoryActionProps => {
+    const i = defs.indexOf(def);
+    return {
+      def,
+      canDelete: defs.length > 1,
+      canUp: i > 0,
+      canDown: i < defs.length - 1,
+      onMove: move,
+      onEdit: (d) => setDialog({ mode: "edit", cat: d }),
+      onDelete: deleteCategory,
+    };
+  };
 
-  return (
+  const page = (
     <div>
       <PageToolbar
         actions={
@@ -342,24 +408,31 @@ export function NewsBoard() {
         // 카테고리를 가로로 줄 세운다(왼→오, 위→아래 = 카테고리 순서). 세로 다단(columns)은 기사가 많은 날
         // 한 단이 화면 대여섯 장 길이가 되어, 끝까지 내려 읽고 다시 맨 위로 올라가 다음 단을 읽어야 했다.
         // 줄마다 높이는 PREVIEW_COUNT 가 묶어 둔다.
-        <div className="grid grid-cols-1 items-start gap-x-10 gap-y-10 lg:grid-cols-2 2xl:grid-cols-3 min-[2200px]:grid-cols-4">
-          {defs.map((def, i) => (
-            <Section
-              key={def.key}
-              def={def}
-              items={itemsByKey.get(def.key) ?? []}
-              canDelete={defs.length > 1}
-              canUp={i > 0}
-              canDown={i < defs.length - 1}
-              onMove={move}
-              onEdit={(d) => setDialog({ mode: "edit", cat: d })}
-              onDelete={deleteCategory}
-            />
-          ))}
-        </div>
+        <>
+          {filled.length > 0 && (
+            <div className="grid grid-cols-1 items-start gap-x-10 gap-y-10 lg:grid-cols-2 2xl:grid-cols-3 min-[2200px]:grid-cols-4">
+              {filled.map((def) => (
+                <Section key={def.key} items={itemsByKey.get(def.key) ?? []} {...actionProps(def)} />
+              ))}
+            </div>
+          )}
+          {/* 오늘 기사가 없는 카테고리는 격자 칸을 비워 두지 않고 맨 아래 한 줄씩 접는다. */}
+          {empty.length > 0 && (
+            <section className={cn(filled.length > 0 && "mt-10")}>
+              <SubHeader count={`${empty.length}개`}>오늘 뉴스가 없는 카테고리</SubHeader>
+              <ul className="divide-y">
+                {empty.map((def) => (
+                  <EmptyCategoryRow key={def.key} {...actionProps(def)} />
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
       )}
 
       <CategoryDialog state={dialog} onClose={() => setDialog(null)} onSaved={load} />
     </div>
   );
+  // 행 깊은 곳의 '신규' 표시가 이 탭의 판정을 읽도록 감싼다.
+  return <NewMarksProvider value={isNew}>{page}</NewMarksProvider>;
 }

@@ -305,3 +305,31 @@ export function formatWhen(at: Date, now: Date): string {
   const md = `${at.getMonth() + 1}/${at.getDate()}(${WEEKDAY_SHORT[at.getDay()]})`;
   return at.getFullYear() === now.getFullYear() ? `${md} ${hm}` : `${at.getFullYear()}. ${md} ${hm}`;
 }
+
+/**
+ * 툴바·개요용 시각 요약. 정각 시각이 6개 이상이면 연속 구간으로 묶는다:
+ *   ["00:00","01:00",…,"06:00","08:00",…,"16:00","22:00","23:00"] → "매시 정각(00~06·08~16·22~23시)"
+ *   24개 전부면 "매시 정각". 그 밖(시각이 적거나 정각이 아닌 시각이 섞임)은 null — 목록을 그대로 쓴다.
+ * 펄스처럼 시각이 18개면 목록이 툴바에서 잘려 읽을 수 없다. 전체 목록은 다이얼로그에 그대로 있다.
+ */
+export function compactHourlyTimes(times: string[]): string | null {
+  if (times.length < 6 || !times.every((t) => /^\d{2}:00$/.test(t))) return null;
+  const hours = [...new Set(times.map((t) => Number(t.slice(0, 2))))].sort((a, b) => a - b);
+  if (hours.length === 24) return "매시 정각";
+  const runs: [number, number][] = [];
+  for (const h of hours) {
+    const last = runs[runs.length - 1];
+    if (last && h === last[1] + 1) last[1] = h;
+    else runs.push([h, h]);
+  }
+  const hh = (h: number) => String(h).padStart(2, "0");
+  return `매시 정각(${runs.map(([a, b]) => (a === b ? hh(a) : `${hh(a)}~${hh(b)}`)).join("·")}시)`;
+}
+
+/** "2026-10-26" → "10/26(월)". 형식이 아니면 받은 문자열 그대로. */
+export function formatDay(ymdText: string): string {
+  const m = ymdText.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return ymdText;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return `${d.getMonth() + 1}/${d.getDate()}(${WEEKDAY_SHORT[d.getDay()]})`;
+}

@@ -103,3 +103,30 @@ export function pnlTone(v: number | null): "up" | "down" | "flat" {
   if (v == null || !Number.isFinite(v) || v === 0) return "flat";
   return v > 0 ? "up" : "down";
 }
+
+/**
+ * 같은 시장(=같은 통화) 보유 종목의 합계. 통화가 다른 시장끼리는 더하지 않는다.
+ * 시세를 못 가져온 종목(close=null)은 평가금액·손익을 알 수 없으므로 합계에서 빼고 그 수를 missing 으로 알린다
+ * — 빼고도 말하지 않으면 합계가 실제보다 작은데 맞는 숫자처럼 보인다.
+ */
+export function summarizeGroup(rows: StockHoldingSummary[]): {
+  marketValue: number;
+  cost: number;
+  pnlAmount: number;
+  pnlPct: number | null;
+  missing: number;
+} {
+  let marketValue = 0;
+  let cost = 0;
+  let missing = 0;
+  for (const h of rows) {
+    if (h.marketValue == null) {
+      missing++;
+      continue;
+    }
+    marketValue += h.marketValue;
+    cost += h.avgPrice * h.quantity;
+  }
+  const pnlAmount = marketValue - cost;
+  return { marketValue, cost, pnlAmount, pnlPct: cost > 0 ? (pnlAmount / cost) * 100 : null, missing };
+}

@@ -8,6 +8,7 @@ import {
   TAB_CONFIG,
   buildSchedulePatch,
   buildSettingsPatch,
+  compactHourlyTimes,
   formatWhen,
   getAtPath,
   mondayOf,
@@ -162,4 +163,14 @@ test("formatWhen: 오늘·내일은 말로, 그 밖은 날짜(요일), 해가 �
   assert.equal(formatWhen(new Date(2026, 9, 26, 8, 0), now), "내일 08:00");
   assert.equal(formatWhen(new Date(2026, 9, 28, 9, 5), now), "10/28(수) 09:05");
   assert.equal(formatWhen(new Date(2027, 0, 1, 9, 0), now), "2027. 1/1(금) 09:00");
+});
+
+test("compactHourlyTimes: 정각이 많으면 연속 구간으로 묶고, 적거나 정각이 아니면 그대로 둔다", () => {
+  const pulse = ["00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00", "08:00", "09:00", "10:00", "11:00",
+    "12:00", "13:00", "14:00", "15:00", "16:00", "22:00", "23:00"];
+  assert.equal(compactHourlyTimes(pulse), "매시 정각(00~06·08~16·22~23시)");
+  assert.equal(compactHourlyTimes(Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`)), "매시 정각");
+  assert.equal(compactHourlyTimes(["08:00", "17:00"]), null); // 시각이 적으면 목록 그대로
+  assert.equal(compactHourlyTimes(["09:00", "10:00", "11:00", "12:00", "13:00", "13:30"]), null); // 정각 아닌 시각
+  assert.equal(compactHourlyTimes(["09:00", "11:00", "13:00", "15:00", "17:00", "19:00"]), "매시 정각(09·11·13·15·17·19시)");
 });

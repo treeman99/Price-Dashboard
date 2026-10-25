@@ -7,6 +7,7 @@ import {
   summarizeHolding,
   formatPnlPct,
   pnlTone,
+  summarizeGroup,
 } from "./holdings.ts";
 import type { StockHolding } from "./types.ts";
 
@@ -123,4 +124,16 @@ test("pnlTone: 0 과 null 은 flat", () => {
   assert.equal(pnlTone(-5), "down");
   assert.equal(pnlTone(0), "flat");
   assert.equal(pnlTone(null), "flat");
+});
+
+test("summarizeGroup: 시세 있는 종목만 더하고, 빠진 수를 알린다", () => {
+  const row = (avgPrice: number, quantity: number, close: number | null) =>
+    ({ avgPrice, quantity, marketValue: close == null ? null : close * quantity }) as never;
+  const g = summarizeGroup([row(185_993, 14, 213_500), row(318_290, 10, 1_263_000), row(100, 5, null)]);
+  assert.equal(g.marketValue, 213_500 * 14 + 1_263_000 * 10);
+  assert.equal(g.cost, 185_993 * 14 + 318_290 * 10);
+  assert.equal(g.pnlAmount, g.marketValue - g.cost);
+  assert.ok(Math.abs((g.pnlPct ?? 0) - (g.pnlAmount / g.cost) * 100) < 1e-9);
+  assert.equal(g.missing, 1);
+  assert.deepEqual(summarizeGroup([]), { marketValue: 0, cost: 0, pnlAmount: 0, pnlPct: null, missing: 0 });
 });

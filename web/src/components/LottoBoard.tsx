@@ -64,7 +64,9 @@ function NumberBadge({
     hit: "border-tab bg-tab font-semibold text-white",
     miss: "border-foreground/15 text-muted-foreground",
     draw: "border-[1.5px] border-foreground font-semibold text-foreground",
-    bonus: "border-[1.5px] border-tone-warn bg-tone-warn/10 font-semibold text-tone-warn",
+    // 숫자는 잉크로 둔다 — 호박색 글씨는 호박 10% 바탕 위에서 대비가 4.0:1(12px 기준 4.5:1 미달)이었다.
+    // 보너스라는 표시는 호박 테두리·바탕이 맡는다.
+    bonus: "border-[1.5px] border-tone-warn bg-tone-warn/10 font-semibold text-foreground",
   };
   return (
     <span

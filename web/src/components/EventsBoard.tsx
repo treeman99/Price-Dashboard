@@ -22,7 +22,10 @@ import {
   type TagTone,
 } from "@/components/ui/page";
 import { NotifyMeta, ScheduleControl } from "@/components/ScheduleControl";
-import { SnapshotNotice, snapshotHealth } from "@/components/SnapshotNotice";
+import { SnapshotNotice, localDay, snapshotHealth } from "@/components/SnapshotNotice";
+import { formatWhen } from "@/lib/tabConfig";
+import { eventsVisibleItems, exhibitionItemId, festivalItemId, popupItemId } from "@/lib/feed";
+import { NewMarksProvider, useIsNew, useNewMarks } from "@/lib/seen";
 
 /** 섹션 고유색. 섹션 제목 앞 작은 사각형에만 쓴다. */
 const ACCENT = { popup: "#7C3AED", exhibition: "#FF8C00", festival: "#E8590C" } as const;
@@ -33,17 +36,33 @@ const TAG_STYLE: Record<Exclude<EventTag, null>, { tone: TagTone; label: string 
   예정: { tone: "soon", label: "오픈예정" },
 };
 
-function TagBadge({ tag }: { tag: EventTag }) {
+/**
+ * '종료임박'(7일 안에 끝남)이 축제 목록의 대부분을 덮던 날이 있었다(11건 중 9건, 그중 7건이 오늘 종료).
+ * 오늘 끝나는 행사만 빨간 '오늘 종료'로 가르고, 나머지 종료임박은 호박색으로 한 단계 낮춘다.
+ * 태그 계산 자체(서버 computeTag·메일)는 그대로 두고 화면 표기만 나눈다.
+ */
+const ENDS_TODAY = { tone: "urgent" as TagTone, label: "오늘 종료" };
+const ENDING_SOON = { tone: "warn" as TagTone, label: "종료임박" };
+
+function TagBadge({ tag, endDate }: { tag: EventTag; endDate: string | null }) {
   if (!tag) return null;
-  const s = TAG_STYLE[tag];
+  const s = tag === "종료임박" ? (endDate === localDay() ? ENDS_TODAY : ENDING_SOON) : TAG_STYLE[tag];
   return <StatusTag tone={s.tone}>{s.label}</StatusTag>;
 }
 
-/** '신규' 배지 — 약 일주일 만에 새로 등장한 행사 표시. 날짜 기반 태그와 함께 노출된다. */
-function NewBadge({ show }: { show?: boolean }) {
-  if (!show) return null;
+/**
+ * '신규' 배지 — 날짜 기반 태그와 함께 노출된다. 두 가지 이유로 붙는다.
+ *  - isNew: 서버 판정. 약 일주일 이상 목록에 없다가 새로 등장한 행사.
+ *  - fresh: 화면 판정. 지난번 이 탭을 본 뒤 새로 들어온 행사(lib/seen.ts).
+ * 같은 낱말에 배지를 둘 달면 무엇이 다른지 읽히지 않으므로 하나로 합치고 이유는 툴팁에 적는다.
+ */
+function NewBadge({ isNew, fresh }: { isNew?: boolean; fresh?: boolean }) {
+  if (!isNew && !fresh) return null;
   return (
-    <StatusTag tone={TAG_STYLE.신규.tone} title="약 일주일 만에 새로 등장한 행사">
+    <StatusTag
+      tone={TAG_STYLE.신규.tone}
+      title={isNew ? "약 일주일 만에 새로 등장한 행사" : "지난번 이 탭을 본 뒤 새로 들어온 행사"}
+    >
       {TAG_STYLE.신규.label}
     </StatusTag>
   );
@@ -83,6 +102,8 @@ function CalendarButton({
 
 /** 표 한 행의 공통 형태. 팝업·전시·축제가 같은 열 구성(상태·이름·장소·기간·분류·링크)을 쓴다. */
 interface EventRowData {
+  /** 행사 식별키(lib/feed.ts) — '지난번 본 뒤 신규' 판정에 쓴다. */
+  id: string;
   title: string;
   tag: EventTag;
   isNew?: boolean;
@@ -96,6 +117,7 @@ interface EventRowData {
 
 function popupRow(p: PopupItem): EventRowData {
   return {
+    id: popupItemId(p),
     title: p.name,
     tag: p.tag,
     isNew: p.isNew,
@@ -114,8 +136,9 @@ function popupRow(p: PopupItem): EventRowData {
   };
 }
 
-function exhRow(e: ExhibitionItem): EventRowData {
+function exhRow(e: ExhibitionItem, venueName: string): EventRowData {
   return {
+    id: exhibitionItemId(venueName, e),
     title: e.title,
     tag: e.tag,
     isNew: e.isNew,
@@ -135,6 +158,7 @@ function exhRow(e: ExhibitionItem): EventRowData {
 
 function festivalRow(f: FestivalItem): EventRowData {
   return {
+    id: festivalItemId(f),
     title: f.name,
     tag: f.tag,
     isNew: f.isNew,
@@ -154,23 +178,26 @@ function festivalRow(f: FestivalItem): EventRowData {
 
 function EventRow({ r }: { r: EventRowData }) {
   const { cal } = r;
+  const fresh = useIsNew(r.id);
   return (
     <tr>
       <td>
         <div className="flex flex-wrap gap-1 pt-px">
-          <NewBadge show={r.isNew} />
-          <TagBadge tag={r.tag} />
+          <NewBadge isNew={r.isNew} fresh={fresh} />
+          <TagBadge tag={r.tag} endDate={cal.endDate} />
         </div>
       </td>
       <td>
-        <div className="text-[15px] font-semibold leading-snug">{r.title}</div>
+        <div className="text-[15px] font-semibold leading-snug">
+          {r.title}
+          {r.category && <span className="ml-2 text-[12.5px] font-normal text-muted-foreground">{r.category}</span>}
+        </div>
         {r.summary && (
           <p className="mt-0.5 line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">{r.summary}</p>
         )}
       </td>
       <td className="text-[13.5px]">{r.place}</td>
       <td className="num text-[13.5px]">{r.period}</td>
-      <td className="text-[13px] text-muted-foreground">{r.category}</td>
       <td>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <SourceLink link={r.link} />
@@ -190,7 +217,7 @@ function EventRow({ r }: { r: EventRowData }) {
   );
 }
 
-const COLS = 6;
+const COLS = 5;
 
 /**
  * 세 섹션이 같은 열 너비를 쓰도록 table-fixed + 고정 colgroup 을 둔다.
@@ -205,7 +232,6 @@ function EventTable({ placeLabel, children }: { placeLabel: string; children: Re
           <col />
           <col className="w-[11rem] 2xl:w-[13.5rem]" />
           <col className="w-[12rem]" />
-          <col className="w-[7rem]" />
           <col className="w-[11rem]" />
         </colgroup>
         <thead>
@@ -214,7 +240,6 @@ function EventTable({ placeLabel, children }: { placeLabel: string; children: Re
             <th>이름</th>
             <th>{placeLabel}</th>
             <th>기간</th>
-            <th>분류</th>
             <th>링크</th>
           </tr>
         </thead>
@@ -328,9 +353,12 @@ export function EventsBoard() {
     }
   }
 
+  // '지난번 본 뒤 신규' — 출처 링크가 있어 화면에 보이는 행사만 센다. 1면도 같은 기준으로 센다.
+  const isNew = useNewMarks("events", snap && !loading ? eventsVisibleItems(snap).map((e) => e.id) : null);
+
   if (loading) return <LoadingState />;
 
-  const updated = snap?.updatedAt ? new Date(snap.updatedAt).toLocaleString("ko-KR") : null;
+  const updated = snap?.updatedAt ? formatWhen(new Date(snap.updatedAt), new Date()) : null;
 
   // 출처(보기) 링크가 없는 항목은 확인이 불가하므로 표시하지 않는다(메일과 동일 기준).
   const shown = snap ? withLinkedItemsOnly(snap) : null;
@@ -341,7 +369,7 @@ export function EventsBoard() {
   const festivals = shown?.festivals ?? [];
   const exhibitionCount = venues.reduce((n, v) => n + v.items.length, 0);
 
-  return (
+  const page = (
     <div>
       <PageToolbar
         actions={
@@ -415,7 +443,7 @@ export function EventsBoard() {
                 <GroupRows
                   key={v.name}
                   label={v.name}
-                  rows={v.items.map(exhRow)}
+                  rows={v.items.map((e) => exhRow(e, v.name))}
                   empty="이번 주 확인된 행사 없음"
                   first={i === 0}
                 />
@@ -439,4 +467,6 @@ export function EventsBoard() {
       )}
     </div>
   );
+  // 행 깊은 곳의 '신규' 표시가 이 탭의 판정을 읽도록 감싼다.
+  return <NewMarksProvider value={isNew}>{page}</NewMarksProvider>;
 }

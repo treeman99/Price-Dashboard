@@ -29,6 +29,7 @@ import {
   shouldAutoMarkWatched,
 } from "@shared/youtube";
 import { api } from "@/lib/api";
+import { formatWhen } from "@/lib/tabConfig";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,6 +48,9 @@ import { NotifyMeta, ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 import { BlockedChannelsDialog } from "@/components/BlockedChannelsDialog";
 import { DismissedVideosDialog } from "@/components/DismissedVideosDialog";
+import { NewTag } from "@/components/NewTag";
+import { youtubeItemId, youtubeVisibleItems } from "@/lib/feed";
+import { NewMarksProvider, useIsNew, useNewMarks } from "@/lib/seen";
 
 /** 프론트 낙관적 제거용 채널 동일성 판정(백엔드 buildBlockMatcher와 동일 규칙). */
 function sameChannel(a: YoutubeVideo, b: YoutubeVideo): boolean {
@@ -220,7 +224,7 @@ function MoveMenu({
                 }}
                 className="flex w-full items-center gap-2 rounded-[3px] px-2 py-1.5 text-left text-sm hover:bg-muted"
               >
-                <span>{d.emoji}</span>
+                <span aria-hidden>{d.emoji}</span>
                 <span className="truncate">{d.label}</span>
               </button>
             ))}
@@ -294,11 +298,14 @@ function VideoRow({
 }) {
   const canRecommend = !!recommendedChannelValue(video.channel, video.channelHandle);
   const videoHref = safeHref(video.url);
+  // 이미 '본영상'으로 체크한 영상은 새 소식이 아니다.
+  const fresh = useIsNew(youtubeItemId(video)) && !video.watched;
   return (
-    <li className={cn("flex gap-4 border-b py-3.5 transition-opacity", video.watched && "opacity-75")}>
+    <li className={cn("group/row flex gap-4 border-b py-3.5 transition-opacity", video.watched && "opacity-75")}>
       <Thumbnail video={video} onOpen={() => onOpenVideo(video)} className="w-36 shrink-0 self-start sm:w-[208px]" />
       <div className="flex min-w-0 flex-1 flex-col">
         <h3 className="line-clamp-2 text-[15px] font-semibold leading-snug" title={video.originalTitle ?? video.title}>
+          {fresh && <NewTag />}
           {video.title}
         </h3>
         {/* 채널 / 날짜 / 조회수 */}
@@ -337,7 +344,9 @@ function VideoRow({
             </span>
           )}
           <WatchedToggle video={video} onToggleWatched={onToggleWatched} />
-          <div className="ml-auto flex items-center gap-0.5">
+          {/* 보조 동작(추천·이동·제외·숨김)은 29행 내내 진하게 깔리면 화면이 시끄럽다 — 평소엔 흐리게,
+              행에 마우스를 올리거나 키보드 포커스가 들어오면 또렷하게(표의 행 동작과 같은 규칙). */}
+          <div className="ml-auto flex items-center gap-0.5 opacity-40 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
             <IconAction
               label={
                 !canRecommend
@@ -435,7 +444,13 @@ function Section({
   return (
     <section className="group/cat mt-12 first:mt-0">
       <SectionHeader
-        title={[def.emoji, def.label].filter(Boolean).join(" ")}
+        // 이모지는 사용자가 고른 표지라 보이게 두되, 스크린리더가 이모지 이름부터 읽지 않게 숨긴다.
+        title={
+          <>
+            {def.emoji && <span aria-hidden>{def.emoji} </span>}
+            {def.label}
+          </>
+        }
         accent={def.color}
         count={items.length}
         actions={
@@ -867,6 +882,9 @@ export function YoutubeBoard() {
     }
   }
 
+  // '지난번 본 뒤 신규' — 화면에 보이는 목록(정의 순서·범위) 기준. 1면도 같은 기준으로 센다.
+  const isNew = useNewMarks("youtube", snap && !loading ? youtubeVisibleItems(snap, defs).map(youtubeItemId) : null);
+
   if (loading) {
     return <LoadingState />;
   }
@@ -875,11 +893,11 @@ export function YoutubeBoard() {
   const itemsByKey = new Map<string, YoutubeVideo[]>();
   snap?.categories.forEach((c) => itemsByKey.set(c.key, c.items));
 
-  const updated = snap?.updatedAt ? new Date(snap.updatedAt).toLocaleString("ko-KR") : null;
+  const updated = snap?.updatedAt ? formatWhen(new Date(snap.updatedAt), new Date()) : null;
   const total = defs.reduce((a, d) => a + (itemsByKey.get(d.key)?.length ?? 0), 0);
   const freshDays = snap?.freshDays ?? 7;
 
-  return (
+  const page = (
     <div>
       <PageToolbar
         actions={
@@ -902,13 +920,12 @@ export function YoutubeBoard() {
       >
         <ScheduleControl tab="youtube" />
         <MetaDot />
-        <Meta>최근 {freshDays}일 이내 영상</Meta>
-        <MetaDot />
-        <Meta>AI·LLM/신제품 리뷰 전문 조사</Meta>
+        {/* 조사 범위는 툴팁으로 둔다. '보고 돌아오면 자동 본영상 체크'는 '영상 보기' 링크의 툴팁에 이미 있다. */}
+        <Meta>
+          <span title="AI·LLM/신제품 리뷰 전문 조사">최근 {freshDays}일 이내 영상</span>
+        </Meta>
         <MetaDot />
         <NotifyMeta notify="youtube" suffix="(지금 갱신 포함)" fallback="수집 시 이메일 발송(지금 갱신 포함)" />
-        <MetaDot />
-        <Meta>영상을 보고 돌아오면 자동 본영상 체크</Meta>
         {updated && (
           <>
             <MetaDot />
@@ -1032,4 +1049,6 @@ export function YoutubeBoard() {
       )}
     </div>
   );
+  // 행 깊은 곳의 '신규' 표시가 이 탭의 판정을 읽도록 감싼다.
+  return <NewMarksProvider value={isNew}>{page}</NewMarksProvider>;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Loader2, PowerOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -11,7 +11,9 @@ import { StockBoard } from "@/components/StockBoard";
 import { HoldingsBoard } from "@/components/HoldingsBoard";
 import { LottoBoard } from "@/components/LottoBoard";
 import { SkillsBoard } from "@/components/SkillsBoard";
+import { FrontPage } from "@/components/FrontPage";
 import { ScrollToTop } from "@/components/ScrollToTop";
+import { failedTabs, loadFeeds, type Feeds } from "@/lib/feed";
 import { ModelControl } from "@/components/ModelControl";
 import { SettingsOverview } from "@/components/SettingsOverview";
 import { localDay } from "@/components/SnapshotNotice";
@@ -30,8 +32,18 @@ interface TabDef {
   label: string;
   /** 탭 고유색(HEX). 헤더 상단 띠·탭 밑줄·색 사각형, 그리고 CSS 변수 --tab 으로 탭 내부 강조색에 쓴다 */
   color: string;
+  /** null 이면 App 이 직접 그린다(1면 — 다른 탭의 정보·데이터를 넘겨받아야 해서). */
   content: ReactNode;
 }
+
+/**
+ * Overview(코드·문서에서는 '1면'이라고도 부른다) — 지난번 본 뒤 각 지면에 새로 들어온 것을 추리는 첫 지면. 주소에 탭이 없으면(북마크) 여기로 연다.
+ * 탭 고유색은 잉크다: 신문 1면에는 섹션 색이 없다.
+ */
+const FRONT_TAB_ID = "front";
+
+/** 탭 내용 영역(role=tabpanel) id. 탭 버튼의 aria-controls 가 가리킨다. */
+const TAB_PANEL_ID = "tab-panel";
 
 // 새 게시판은 여기에 항목만 추가하면 탭이 늘어난다. color는 탭 고유색.
 //
@@ -40,6 +52,7 @@ interface TabDef {
 // 남은 경로는 robots·약관이 금지하는 크롤링뿐이라 기능을 접었다. 과거 가격 이력은
 // DB(price_points/listings)에 그대로 보존돼 있다.
 const TABS: TabDef[] = [
+  { id: FRONT_TAB_ID, label: "Overview", color: "#1b1a17", content: null },
   { id: "news", label: "뉴스", color: "#d97706", content: <NewsBoard /> },
   { id: "youtube", label: "유튜브 소식", color: "#dc2626", content: <YoutubeBoard /> },
   { id: "skills", label: "스킬 랭킹", color: "#2563eb", content: <SkillsBoard /> },
@@ -53,9 +66,79 @@ const TABS: TabDef[] = [
 /** 화면이 서버에 가동 중단 상태를 물어보는 주기. 서버 하트비트(60초)와 같은 해상도로 맞춘다. */
 const DOWNTIME_POLL_MS = 60_000;
 
+/**
+ * 1면·탭 줄 실패 점이 지면 데이터를 다시 읽는 주기. 수집은 하루 몇 번뿐이라 길게 두고,
+ * 대신 탭을 바꿀 때와 창으로 돌아올 때 바로 다시 읽는다.
+ */
+const FEEDS_POLL_MS = 5 * 60_000;
+
+/** 주소의 #탭id. 없거나 모르는 값이면 1면. */
+function tabFromHash(): string {
+  const id = decodeURIComponent(window.location.hash.slice(1));
+  return TABS.some((t) => t.id === id) ? id : FRONT_TAB_ID;
+}
+
 export default function App() {
-  const [active, setActive] = useState(TABS[0].id);
+  const [active, setActive] = useState(tabFromHash);
   const activeTab = TABS.find((t) => t.id === active) ?? TABS[0];
+
+  /**
+   * 활성 탭을 주소(#news)에 남겨 새로고침·서비스 재시작 뒤에도 그 탭에 머문다. 1면은 주소를 비워 둔다
+   * (북마크 = 1면). 탭 전환마다 방문 기록을 쌓지 않도록 replaceState 를 쓴다 — 뒤로 가기는 대시보드 이전 페이지로.
+   */
+  const selectTab = useCallback((id: string, opts?: { scrollTop?: boolean }) => {
+    setActive(id);
+    const { pathname, search } = window.location;
+    window.history.replaceState(null, "", id === FRONT_TAB_ID ? pathname + search : `#${id}`);
+    if (opts?.scrollTop) window.scrollTo({ top: 0 });
+  }, []);
+
+  /** 탭 줄 방향키(WAI-ARIA tabs, 자동 활성화): ←→ 이웃 탭, Home/End 처음·끝. 옮긴 탭으로 포커스도 옮긴다. */
+  function onTabKeyDown(e: KeyboardEvent<HTMLElement>) {
+    const i = TABS.findIndex((t) => t.id === active);
+    const next =
+      e.key === "ArrowRight" ? (i + 1) % TABS.length
+      : e.key === "ArrowLeft" ? (i - 1 + TABS.length) % TABS.length
+      : e.key === "Home" ? 0
+      : e.key === "End" ? TABS.length - 1
+      : null;
+    if (next === null) return;
+    e.preventDefault();
+    selectTab(TABS[next].id);
+    document.getElementById(`tab-${TABS[next].id}`)?.focus();
+  }
+
+  // 주소를 직접 고치거나 #링크(1면의 가운데 클릭 등)로 들어온 경우
+  useEffect(() => {
+    const onHash = () => setActive(tabFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // ── 지면 데이터(1면 + 탭 줄 수집 실패 점) ─────────────────────────────────────
+  // 1면이 아닐 때도 불러 둔다 — 탭 줄의 실패 점은 어느 탭에 있든 보여야 한다.
+  const [feeds, setFeeds] = useState<Feeds | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      loadFeeds()
+        .then((f) => {
+          if (alive) setFeeds(f);
+        })
+        .catch(() => {}); // 지면별 실패는 loadFeeds 가 이미 접는다. 여기 오는 건 예상 밖이라 조용히 다음 주기로.
+    void load();
+    const t = setInterval(() => void load(), FEEDS_POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [active]);
+  const failed = feeds ? failedTabs(feeds) : new Set<string>();
   const today = new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" });
 
   // 활성 탭 고유색을 CSS 변수로 노출한다(text-tab / bg-tab / border-tab). 다이얼로그는 body 포털이라
@@ -192,7 +275,9 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    // overflow-x-clip: 화면 끝에 걸린 툴팁 같은 장식이 페이지 폭을 늘려 가로 스크롤을 만들지 않게 자른다.
+    // (clip 은 스크롤 컨테이너를 만들지 않아 sticky 헤더가 그대로 동작한다)
+    <div className="min-h-screen overflow-x-clip bg-background">
       <header className="sticky top-0 z-20 border-b border-foreground/15 bg-background/95 backdrop-blur-sm">
         {/* 활성 탭 고유색 띠. 탭 정체성은 이 띠·탭 밑줄·색 사각형으로만 드러내고 배경은 종이색 그대로 둔다. */}
         <div aria-hidden className="h-[3px] bg-tab transition-colors duration-300" />
@@ -202,21 +287,28 @@ export default function App() {
             <span className="num hidden text-[13px] text-muted-foreground sm:inline">{today}</span>
           </div>
 
-          {/* 게시판 탭 — 1440px 이상이면 제목 옆 한 줄(탭 7개 + 제목 + 우측 컨트롤 ≈ 1420px), 좁으면 아래 줄로 내려가 가로 스크롤 */}
+          {/* 게시판 탭 — 1480px 이상이면 제목 옆 한 줄(탭 8개 + 제목 + 우측 컨트롤 ≈ 1460px), 좁으면 아래 줄로 내려가 가로 스크롤 */}
           <nav
-            className="order-last -mx-5 flex w-[calc(100%+2.5rem)] items-stretch gap-1 overflow-x-auto overflow-y-hidden border-t px-3 [scrollbar-width:none] lg:-mx-8 lg:w-[calc(100%+4rem)] lg:px-6 min-[1440px]:order-none min-[1440px]:mx-0 min-[1440px]:w-auto min-[1440px]:flex-1 min-[1440px]:border-t-0 min-[1440px]:px-0 [&::-webkit-scrollbar]:hidden"
+            className="order-last -mx-5 flex w-[calc(100%+2.5rem)] items-stretch gap-1 overflow-x-auto overflow-y-hidden border-t px-3 [scrollbar-width:none] lg:-mx-8 lg:w-[calc(100%+4rem)] lg:px-6 min-[1480px]:order-none min-[1480px]:mx-0 min-[1480px]:w-auto min-[1480px]:flex-1 min-[1480px]:border-t-0 min-[1480px]:px-0 [&::-webkit-scrollbar]:hidden"
             role="tablist"
+            aria-label="게시판"
+            onKeyDown={onTabKeyDown}
           >
             {TABS.map((t) => {
               const selected = active === t.id;
+              const tabFailed = failed.has(t.id);
               return (
                 <button
                   key={t.id}
+                  id={`tab-${t.id}`}
                   role="tab"
                   aria-selected={selected}
-                  onClick={() => setActive(t.id)}
+                  aria-controls={TAB_PANEL_ID}
+                  // 탭 줄은 Tab 키로 한 번만 들르고(선택된 탭), 그 안에서는 방향키로 옮긴다.
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => selectTab(t.id)}
                   className={cn(
-                    "relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-3 text-[15px] transition-colors",
+                    "relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-sm px-3 py-3 text-[15px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                     selected ? "font-semibold text-foreground" : "font-medium text-muted-foreground hover:text-foreground"
                   )}
                 >
@@ -226,6 +318,17 @@ export default function App() {
                     style={{ backgroundColor: t.color }}
                   />
                   {t.label}
+                  {/* 오늘 수집 실패 — 그 탭을 열면 경고 띠가 뜨는 경우와 같은 조건(lib/feed.ts). 평소엔 없다. */}
+                  {tabFailed && (
+                    <>
+                      <span
+                        aria-hidden
+                        title="오늘 수집이 실패했습니다"
+                        className="-ml-0.5 h-1.5 w-1.5 shrink-0 self-start rounded-full bg-tone-warn"
+                      />
+                      <span className="sr-only">(오늘 수집 실패)</span>
+                    </>
+                  )}
                   {selected && (
                     <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px]" style={{ backgroundColor: t.color }} />
                   )}
@@ -303,7 +406,13 @@ export default function App() {
             highlightedId={bannerVisible ? bannerEvent?.id : null}
           />
         )}
-        {activeTab.content}
+        <div role="tabpanel" id={TAB_PANEL_ID} aria-labelledby={`tab-${activeTab.id}`}>
+          {activeTab.id === FRONT_TAB_ID ? (
+            <FrontPage tabs={TABS} feeds={feeds} onOpenTab={(id) => selectTab(id, { scrollTop: true })} />
+          ) : (
+            activeTab.content
+          )}
+        </div>
       </main>
 
       {/* 모든 탭 공통: 아래로 스크롤하면 나타나는 '맨 위로' 버튼 */}

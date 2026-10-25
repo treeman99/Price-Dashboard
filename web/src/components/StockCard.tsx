@@ -12,7 +12,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import type { StockAnalysis, StockWatchItem, StockTicker, StockPoint } from "@shared/types";
-import { formatPrice, changeTone } from "@shared/stock";
+import { formatPrice, changeTone, movingAverage, weekChange } from "@shared/stock";
 import { Button } from "@/components/ui/button";
 import { IconAction, StatusTag } from "@/components/ui/page";
 import { StockChart } from "./StockChart";
@@ -23,12 +23,17 @@ import { cn } from "@/lib/utils";
  * 등락 표시 — 한국 증시 관례(상승 빨강 / 하락 파랑 / 보합 회색). 채운 알약 대신 색 글씨로 쓴다.
  * ⚠️ 쇼핑 관점의 배색(하락=싸짐=초록)을 그대로 가져오면 안 된다. 증시는 한국 관례를 따른다.
  */
-function ChangeMark({ pct }: { pct: number | null }) {
+export function ChangeMark({ pct, size = "md" }: { pct: number | null; size?: "sm" | "md" }) {
   const tone = changeTone(pct);
   if (tone === "flat" || pct == null) {
     return (
-      <span className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground">
-        <Minus className="h-3.5 w-3.5" /> 보합
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 font-medium text-muted-foreground",
+          size === "sm" ? "text-[12px]" : "text-sm"
+        )}
+      >
+        <Minus className={size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5"} /> 보합
       </span>
     );
   }
@@ -36,11 +41,12 @@ function ChangeMark({ pct }: { pct: number | null }) {
   return (
     <span
       className={cn(
-        "num inline-flex items-center gap-0.5 text-[15px] font-semibold",
+        "num inline-flex items-center gap-0.5 font-semibold",
+        size === "sm" ? "text-[12px]" : "text-[15px]",
         isUp ? "text-up" : "text-stock-down"
       )}
     >
-      {isUp ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />}
+      {isUp ? <ArrowUp className={size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5"} /> : <ArrowDown className={size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5"} />}
       {Math.abs(pct).toFixed(2)}%
     </span>
   );
@@ -153,6 +159,11 @@ export function StockCard({
   const last = points.length ? points[points.length - 1] : null;
   const close = analysis.close ?? last?.close ?? null;
   const changePct = analysis.changePct ?? last?.changePct ?? null;
+  // 5일 등락·이동평균도 같은 이유로 받아둔 시세에서 계산한다(서버와 같은 식 — shared/stock.ts).
+  // 휴장일·첫 수집 전에 옆 차트엔 한 달 치가 그려져 있는데 이 칸만 '-'이던 것을 메운다.
+  const weekChangePct = analysis.weekChangePct ?? weekChange(points);
+  const ma5 = analysis.ma5 ?? movingAverage(points, 5);
+  const ma20 = analysis.ma20 ?? movingAverage(points, 20);
 
   async function handleAdd() {
     if (!onAdd) return;
@@ -276,15 +287,15 @@ export function StockCard({
           <Stat
             label="5일 등락"
             className={cn(
-              changeTone(analysis.weekChangePct) === "up" && "text-up",
-              changeTone(analysis.weekChangePct) === "down" && "text-stock-down",
-              changeTone(analysis.weekChangePct) === "flat" && "text-muted-foreground"
+              changeTone(weekChangePct) === "up" && "text-up",
+              changeTone(weekChangePct) === "down" && "text-stock-down",
+              changeTone(weekChangePct) === "flat" && "text-muted-foreground"
             )}
           >
-            {analysis.weekChangePct != null ? `${analysis.weekChangePct.toFixed(2)}%` : "-"}
+            {weekChangePct != null ? `${weekChangePct.toFixed(2)}%` : "-"}
           </Stat>
-          <Stat label="5일선">{formatPrice(analysis.ma5, analysis.currency)}</Stat>
-          <Stat label="20일선">{formatPrice(analysis.ma20, analysis.currency)}</Stat>
+          <Stat label="5일선">{formatPrice(ma5, analysis.currency)}</Stat>
+          <Stat label="20일선">{formatPrice(ma20, analysis.currency)}</Stat>
         </div>
 
         {/* 등록 종목에 추가 — onAdd 를 넘긴 섹션('오늘의 관심 종목')에서만 뜬다. */}

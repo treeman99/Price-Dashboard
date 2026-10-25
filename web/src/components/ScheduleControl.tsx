@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Clock, Settings2 } from "lucide-react";
+import { Bell, Clock, Settings2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,15 +11,24 @@ import {
 import { Meta } from "@/components/ui/page";
 import { TabConfigPanel } from "@/components/TabConfigPanel";
 import { cn } from "@/lib/utils";
-import { CHANNEL_LABEL, TAB_CONFIG, formatWhen, type ConfigTabId } from "@/lib/tabConfig";
+import { CHANNEL_LABEL, TAB_CONFIG, compactHourlyTimes, formatWhen, type ConfigTabId } from "@/lib/tabConfig";
 import { reloadTabConfig, useTabConfig } from "@/lib/tabConfigStore";
-import { describeSchedule, nextOccurrence } from "@shared/schedule";
+import { describeRepeat, describeSchedule, nextOccurrence } from "@shared/schedule";
 import type { JobSchedule, NotifyTabId, ScheduleJobId, TabSettingsResponse } from "@shared/types";
 
-/** 스케줄 한 줄 요약(서버와 같은 describeSchedule) + 다음 실행 표기. 꺼짐이면 next 는 null. */
-export function jobSummary(job: JobSchedule, now: Date): { text: string; next: string | null } {
+/**
+ * 스케줄 한 줄 요약 + 다음 실행 표기. 꺼짐이면 next 는 null.
+ * text 는 정각 시각이 많으면 묶은 것("매일 매시 정각(00~06·…시)"), full 은 서버와 같은 describeSchedule 원문이다.
+ */
+export function jobSummary(job: JobSchedule, now: Date): { text: string; full: string; next: string | null } {
   const next = job.enabled ? nextOccurrence(job, now) : null;
-  return { text: job.enabled ? describeSchedule(job) : "꺼짐", next: next ? formatWhen(next, now) : null };
+  const full = job.enabled ? describeSchedule(job) : "꺼짐";
+  const compact = job.enabled ? compactHourlyTimes(job.times) : null;
+  return {
+    text: compact ? `${describeRepeat(job.repeat)} ${compact}` : full,
+    full,
+    next: next ? formatWhen(next, now) : null,
+  };
 }
 
 /** 탭 알림이 실제로 나가는 채널(탭 스위치 AND 전역 스위치). */
@@ -57,7 +66,7 @@ export function ScheduleControl({
   const [open, setOpen] = useState(false);
   const jobId = job ?? TAB_CONFIG[tab].jobs[0];
   const summary = schedule ? jobSummary(schedule.schedule[jobId], new Date()) : null;
-  const full = summary ? `${summary.text}${summary.next ? ` · 다음 ${summary.next}` : ""}` : null;
+  const full = summary ? `${summary.full}${summary.next ? ` · 다음 ${summary.next}` : ""}` : null;
 
   function onOpenChange(v: boolean) {
     setOpen(v);
@@ -134,9 +143,15 @@ export function NotifyMeta({
   if (!settings) return <Meta>{fallback}</Meta>;
   const on = activeChannels(settings, notify);
   if (on.length === 0) return <Meta>알림 꺼짐</Meta>;
+  const channels = on.map((ch) => CHANNEL_LABEL[ch]).join("·");
+  // 툴바에는 어느 채널로 가는지만 둔다. 언제 나가는지(수집 시·지금 갱신 포함)는 매번 읽을 문장이
+  // 아니라 툴팁으로 내린다(UI 검토: 툴바가 운영 설명서가 되어 첫 화면을 차지했다).
   return (
     <Meta>
-      {verb} {on.map((ch) => CHANNEL_LABEL[ch]).join("·")} 발송{suffix}
+      <span className="inline-flex items-center gap-1" title={`${verb} ${channels} 발송${suffix}`}>
+        <Bell aria-hidden className="h-3.5 w-3.5" />
+        알림 {channels}
+      </span>
     </Meta>
   );
 }

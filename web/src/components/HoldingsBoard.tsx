@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw, Trash2, Radio, AlertTriangle, Check } from "lucide-react";
 import type { StockHoldingSummary, StockMarket } from "@shared/types";
 import { marketLabel, formatPrice, changeTone } from "@shared/stock";
-import { formatPnlPct, horizonLabel } from "@shared/holdings";
+import { formatPnlPct, horizonLabel, summarizeGroup } from "@shared/holdings";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +17,7 @@ import {
   EmptyState,
 } from "@/components/ui/page";
 import { cn } from "@/lib/utils";
+import { ChangeMark } from "@/components/StockCard";
 import { AddHoldingDialog } from "@/components/AddHoldingDialog";
 import { EditHoldingDialog } from "@/components/EditHoldingDialog";
 import { ScheduleControl } from "@/components/ScheduleControl";
@@ -87,10 +88,10 @@ function HoldingRow({
       </td>
       <td className="num text-right">
         <div className="font-medium">{formatPrice(h.close, h.currency)}</div>
+        {/* 등락 표기는 증시 탭 카드와 같은 부품(화살표 아이콘 + 절댓값 %)을 쓴다. */}
         {h.changePct != null && (
-          <div className={cn("text-[12px]", toneClass(h.changePct))}>
-            {h.changePct > 0 ? "▲" : h.changePct < 0 ? "▼" : ""}
-            {Math.abs(h.changePct).toFixed(2)}%
+          <div>
+            <ChangeMark pct={h.changePct} size="sm" />
           </div>
         )}
       </td>
@@ -155,7 +156,41 @@ function MarketRows({
       {rows.map((h) => (
         <HoldingRow key={h.id} h={h} onChanged={onChanged} />
       ))}
+      <TotalRow rows={rows} />
     </tbody>
+  );
+}
+
+/**
+ * 시장 한 묶음의 합계(같은 통화끼리만). 평가금액·평가손익·수익률만 의미가 있고 나머지 열은 비운다.
+ * 시세를 못 가져온 종목은 합계에서 빠지므로 그 사실을 같은 줄에 적는다.
+ */
+function TotalRow({ rows }: { rows: StockHoldingSummary[] }) {
+  if (rows.length < 2) return null; // 한 종목이면 합계 = 그 행이라 반복일 뿐이다
+  const currency = rows[0].currency;
+  const t = summarizeGroup(rows);
+  return (
+    <tr className="hover:!bg-transparent [&>td]:border-b-0 [&>td]:border-t [&>td]:border-t-foreground/40">
+      <td className="text-[13px] font-semibold">
+        합계
+        {t.missing > 0 && (
+          <span className="ml-2 font-normal text-muted-foreground">시세 없는 {t.missing}종목 제외</span>
+        )}
+      </td>
+      <td />
+      <td />
+      <td />
+      <td className="num text-right font-semibold">{formatPrice(t.marketValue, currency)}</td>
+      <td className={cn("num text-right leading-tight", toneClass(t.pnlPct))}>
+        <div className="text-lg font-semibold">{formatPnlPct(t.pnlPct)}</div>
+        <div className="text-[12px] font-medium">
+          {t.pnlAmount > 0 ? "+" : t.pnlAmount < 0 ? "-" : ""}
+          {formatPrice(Math.abs(t.pnlAmount), currency)}
+        </div>
+      </td>
+      <td />
+      <td />
+    </tr>
   );
 }
 
@@ -213,18 +248,29 @@ function PulseStatus() {
           )}{" "}
           · 전체 판정 <strong>{state.recent.length}</strong>건
         </Meta>
-        {state.lastRun && (
-          <>
-            <MetaDot />
-            <Meta className="inline-flex items-center gap-1">
-              마지막 실행 <strong>{state.lastRun.slot}</strong>
-              {state.lastRun.ok ? (
+        <MetaDot />
+        {/* '판정 0건'만 있으면 '조용해서 안심'인지 '안 돌았음'인지 모른다 — 마지막 실행과 결과를 말로 적는다.
+            마지막 실행 기록은 서버 메모리에만 있어 서비스를 재시작하면 다음 실행 전까지 비어 있다. 그때도 침묵하지 않는다. */}
+        {state.lastRun ? (
+          <Meta className="inline-flex items-center gap-1">
+            마지막 실행 <strong>{state.lastRun.slot}</strong>
+            {state.lastRun.ok ? (
+              <>
                 <Check className="h-3.5 w-3.5 text-tone-success" />
-              ) : (
-                <span className="text-tone-error">실패({state.lastRun.error})</span>
-              )}
-            </Meta>
-          </>
+                {state.lastRun.impacts > 0 ? (
+                  <span>
+                    판정 <strong>{state.lastRun.impacts}</strong>건
+                  </span>
+                ) : (
+                  <span>영향 소식 없음</span>
+                )}
+              </>
+            ) : (
+              <span className="text-tone-error">실패({state.lastRun.error})</span>
+            )}
+          </Meta>
+        ) : (
+          <Meta>재시작 후 아직 실행 전</Meta>
         )}
         <Button
           size="sm"
@@ -304,9 +350,11 @@ export function HoldingsBoard() {
       <PageToolbar
         actions={
           <>
-            <IconAction label="새로고침" onClick={load} disabled={loading}>
-              {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            </IconAction>
+            {/* 시세·손익만 다시 읽는다(수집이 아니다). 라벨 있는 버튼들 옆에서 아이콘만으로는 정체가 안 보였다. */}
+            <Button variant="outline" onClick={load} disabled={loading}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              시세 새로고침
+            </Button>
             {MARKETS.map((m) => (
               <AddHoldingDialog key={m} market={m} onAdded={load} />
             ))}
@@ -335,7 +383,9 @@ export function HoldingsBoard() {
       )}
 
       {groups.length > 0 && (
-        <div className="overflow-x-auto">
+        // relative: 표 머리의 sr-only '동작' 라벨(absolute)이 이 스크롤 영역 안에 갇히게 한다. 없으면 위치 기준이
+        // 문서 전체가 되어 좁은 화면에서 페이지 폭이 표 폭(980px)까지 늘어났다.
+        <div className="relative overflow-x-auto">
           <table className="dtable min-w-[64rem] table-fixed">
             {/* 종목·목표가 열만 넓히고 나머지 숫자 열은 남는 폭을 고르게 나눠, 넓은 화면에서도 숫자가 한쪽에 몰리지 않게 한다. */}
             <colgroup>
@@ -369,10 +419,11 @@ export function HoldingsBoard() {
         </div>
       )}
 
-      <Notice tone="warn" className="mb-0 mt-8">
-        실시간 취합은 재료의 <strong>영향 방향과 강도만</strong> 판정합니다. 매수·매도 권유가 아니며, 투자 판단과 그
-        결과는 본인 책임입니다.
-      </Notice>
+      {/* 면책은 매일 같은 문장이라 경고 톤이면 경고색이 '사고'라는 뜻을 잃는다 — 증시 탭과 같은 회색 각주. */}
+      <p className="mt-8 border-t pt-4 text-[12px] leading-relaxed text-muted-foreground">
+        실시간 취합은 재료의 <strong className="font-semibold text-foreground">영향 방향과 강도만</strong> 판정합니다.
+        매수·매도 권유가 아니며, 투자 판단과 그 결과는 본인 책임입니다.
+      </p>
     </div>
   );
 }

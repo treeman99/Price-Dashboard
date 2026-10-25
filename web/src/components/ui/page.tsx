@@ -42,7 +42,9 @@ export function PageToolbar({
       <div className="flex min-w-[min(100%,16rem)] flex-1 flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-muted-foreground">
         {children}
       </div>
-      {actions && <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      {/* max-w-full: 버튼이 한 줄에 다 안 들어가는 폭(375px 등)에서는 이 칸이 줄 전체를 차지하고 안에서 줄바꿈된다.
+          없으면 버튼 줄이 화면 밖으로 밀려 페이지 전체가 가로로 스크롤된다. */}
+      {actions && <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
     </div>
   );
 }
