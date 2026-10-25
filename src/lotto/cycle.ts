@@ -1,4 +1,12 @@
 import { log } from "../util/log.ts";
+import { getSchedule } from "../scheduler/schedule-store.ts";
+import {
+  isDueDate,
+  lastOccurrence,
+  nextOccurrence,
+  scheduleBlackoutAt,
+} from "../../shared/schedule.ts";
+import type { JobSchedule } from "../../shared/types.ts";
 import { drawRange, getDraw, listDraws, syncDraws } from "./draws.ts";
 import { generateSets } from "./strategy.ts";
 import {
@@ -31,7 +39,7 @@ import { LOTTO_RECENT_LIMIT, countMatches, winningNumbers } from "../../shared/l
 /**
  * **주간 자동 사이클** — 로또 탭의 유일한 동작이다.
  *
- * 매주 일요일 10:00(스케줄러 cron)에 이 순서로 돈다:
+ * 매주 한 번(스케줄 v2 `getSchedule().lotto`, 기본 일요일 10:00 — 스케줄러 cron)에 이 순서로 돈다:
  *
  *   1. 동행복권에서 새 추첨 결과를 수집한다
  *   2. **지난주에 미리 못박아 둔 추천 번호**를 그 결과로 채점한다
@@ -50,10 +58,17 @@ import { LOTTO_RECENT_LIMIT, countMatches, winningNumbers } from "../../shared/l
  * 1번이며, 지울 것은 애초에 없다. 남은 실행 지점은 cron 하나뿐이다.
  */
 
-/** 사이클이 도는 요일·시각(로컬). cron 식과 아래 경계 계산이 **같은 상수**를 보게 묶어 둔다. */
+/**
+ * @deprecated 스케줄 v2(2026-10-25) 이후 사이클 요일·시각의 정본은 `getSchedule().lotto`
+ * (data/schedule.json, 기본 일요일 10:00 — 이 상수들과 같은 값)다. 스케줄러 cron·아래 경계 계산·
+ * 가동 중단 누락 집계는 더 이상 이 상수를 보지 않는다. 남은 참조 정리 후 coordinator 가 지운다.
+ */
 export const LOTTO_CYCLE_WEEKDAY = 0; // 0 = 일요일
+/** @deprecated 위 주석 참고. */
 export const LOTTO_CYCLE_HOUR = 10;
+/** @deprecated 위 주석 참고. */
 export const LOTTO_CYCLE_CRON = `0 ${LOTTO_CYCLE_HOUR} * * ${LOTTO_CYCLE_WEEKDAY}`;
+/** @deprecated 위 주석 참고 — 표시 문구는 `describeSchedule(schedule.lotto)` 를 쓸 것. */
 export const LOTTO_CYCLE_LABEL = "일요일 10:00";
 
 /**
@@ -73,9 +88,14 @@ let cycling = false;
  */
 interface CycleDeps {
   syncDraws: () => Promise<{ added: number; latest: number }>;
+  /**
+   * 추첨~결과 공개 금지 구간 판정에 쓰는 '지금'. 그 판정만 이 시계를 본다(상태 기록 시각 등은
+   * 실제 시각 그대로). 테스트가 실행 요일·시각에 따라 흔들리지 않게 하려는 주입 지점이다.
+   */
+  now: () => Date;
 }
 
-let deps: CycleDeps = { syncDraws: () => syncDraws() };
+let deps: CycleDeps = { syncDraws: () => syncDraws(), now: () => new Date() };
 
 /** 테스트에서 수집기를 갈아끼운다. 반환된 함수로 반드시 원복할 것(운영 코드는 호출 금지). */
 export function __setCycleDepsForTest(patch: Partial<CycleDeps>): () => void {
@@ -91,40 +111,77 @@ export function isCycleRunning(): boolean {
 }
 
 /**
- * 직전 사이클 시각(로컬 일요일 10:00) 경계.
- *
- * '놓친 실행'을 판정하는 기준선이다. 맥이 일요일 10시에 자고 있었으면 cron 은 통째로
- * 사라지므로(다른 탭의 catch-up 과 같은 문제), 깨어난 뒤 이 경계를 지났는데 그 이후로 사이클을
- * 돈 적이 없으면 즉시 보충한다.
+ * 경계 계산용 스케줄. **켜기/끄기는 무시한다** — 꺼져 있어도 '이번 회차 사이클이 언제부터인가'는
+ * 정의돼야 한다. 꺼짐이 보충을 막는 것은 shouldRunCycle 의 몫이다.
  */
-export function lastCycleBoundary(now: Date = new Date()): Date {
-  const d = new Date(now);
-  d.setHours(LOTTO_CYCLE_HOUR, 0, 0, 0);
-  d.setDate(d.getDate() - ((d.getDay() - LOTTO_CYCLE_WEEKDAY + 7) % 7));
-  // 오늘이 그 요일이지만 아직 시각 전이면 한 주 전이 직전 경계다.
-  if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7);
-  return d;
-}
-
-/** 다음 자동 실행 예정 시각. 화면이 "다음 갱신"으로 보여준다. */
-export function nextCycleAt(now: Date = new Date()): Date {
-  const d = lastCycleBoundary(now);
-  d.setDate(d.getDate() + 7);
-  return d;
+function boundaryJob(job: JobSchedule): JobSchedule {
+  return { ...job, enabled: true };
 }
 
 /**
- * 지금 사이클을 돌아야 하는지. 세 가지 경우다.
+ * 직전 사이클 시각 경계(기본: 로컬 일요일 10:00 — `getSchedule().lotto` 의 lastOccurrence).
+ *
+ * '놓친 실행'을 판정하는 기준선이다. 맥이 그 시각에 자고 있었으면 cron 은 통째로
+ * 사라지므로(다른 탭의 catch-up 과 같은 문제), 깨어난 뒤 이 경계를 지났는데 그 이후로 사이클을
+ * 돈 적이 없으면 보충한다. 정각은 경계에 포함된다.
+ * (유효한 주간 스케줄이면 7일 안에 반드시 걸린다. 만에 하나 null 이면 epoch — '이미 돌았음'으로 접힌다.)
+ */
+export function lastCycleBoundary(
+  now: Date = new Date(),
+  job: JobSchedule = getSchedule().lotto
+): Date {
+  return lastOccurrence(boundaryJob(job), now) ?? new Date(0);
+}
+
+/**
+ * 다음 자동 실행 예정 시각. 화면이 "다음 갱신"으로 보여준다.
+ * ⚠️ 꺼져 있어도 스케줄상 시각을 돌려준다(LottoSnapshot.nextCycleAt 이 string 계약이라).
+ *    '꺼짐' 표시는 GET /api/schedule 의 next.lotto(null) 가 정본이다.
+ */
+export function nextCycleAt(now: Date = new Date(), job: JobSchedule = getSchedule().lotto): Date {
+  return nextOccurrence(boundaryJob(job), now) ?? new Date(0);
+}
+
+/**
+ * 지금이 '추첨 ~ 결과 공개' 금지 구간(토 20:00~24:00)인지. 정의는 shared/schedule.ts 의
+ * SCHEDULE_RULES.lotto.blackout 하나다(저장 검증과 같은 구간).
+ */
+export function inDrawBlackout(now: Date = new Date()): boolean {
+  return scheduleBlackoutAt("lotto", now) !== null;
+}
+
+/**
+ * 지금 (보충) 사이클을 돌아야 하는지. 세 가지 경우다.
  *
  * `hasUpcoming` 이 첫 조건인 이유: 다음 회차 추천 번호가 비어 있으면 화면의 주인공이 없다.
- * 배포 직후나 DB 를 새로 만든 직후가 그 상태이므로, 다음 일요일까지 빈 화면을 두지 않고 즉시
+ * 배포 직후나 DB 를 새로 만든 직후가 그 상태이므로, 다음 실행일까지 빈 화면을 두지 않고 즉시
  * 한 번 돈다(새로 채점할 것이 없으면 에이전트를 부르지 않으므로 수집 + 번호 추출로 끝난다).
+ *
+ * 그 앞에 **꺼짐(enabled=false)** 문이 있다 — 계약상 꺼짐은 정시·보충을 모두 멈춘다.
+ * (추첨~결과 공개 금지 구간은 여기가 아니라 보충 진입점 shouldCatchUpCycle 이 막는다.)
+ *
+ * 경계를 지난 보충은 계약 §1.3 을 따른다: 직전 경계가 **이전 날**이고 오늘이 실행일이면 오늘
+ * 정시를 기다린다(같은 회차에 사이클이 두 번 돌지 않게 — 기본 스케줄에서는 일요일 10시 전의
+ * 일요일 아침만 해당한다).
  */
-export function shouldRunCycle(now: Date, state: LottoState, hasUpcoming: boolean): boolean {
+export function shouldRunCycle(
+  now: Date,
+  state: LottoState,
+  hasUpcoming: boolean,
+  job: JobSchedule = getSchedule().lotto
+): boolean {
+  if (!job.enabled) return false;
   if (!hasUpcoming) return true;
   if (state.retryAt && new Date(state.retryAt).getTime() <= now.getTime()) return true;
   if (!state.lastCycleAt) return true;
-  return new Date(state.lastCycleAt).getTime() < lastCycleBoundary(now).getTime();
+  const boundary = lastCycleBoundary(now, job);
+  if (new Date(state.lastCycleAt).getTime() >= boundary.getTime()) return false;
+  const boundaryIsToday =
+    boundary.getFullYear() === now.getFullYear() &&
+    boundary.getMonth() === now.getMonth() &&
+    boundary.getDate() === now.getDate();
+  if (!boundaryIsToday && isDueDate(job.repeat, now)) return false;
+  return true;
 }
 
 export interface CycleResult {
@@ -140,7 +197,8 @@ export interface CycleResult {
   /**
    * 사이클이 끝난 사유. "ok" · "already-running" · "sync-failed" · "error" 와, 전략 갱신 결과인
    * "usage-limit"(한도 — 미루고 재시도) · "auth-failed"(Claude 인증 — 미루고 재시도) ·
-   * "evolve-failed"(그 외 — 그 주 갱신 포기).
+   * "evolve-failed"(그 외 — 그 주 갱신 포기), 그리고 "draw-window"(추첨~결과 공개 구간이라 다음
+   * 회차 번호 확정을 미룸 — 재시도).
    */
   reason: string;
 }
@@ -246,7 +304,24 @@ export async function runWeeklyCycle(trigger: string): Promise<CycleResult> {
 
     // 4) 다음 회차 번호를 뽑아 못박는다. 3번이 실패했어도 **반드시** 한다 — 한도 소진·인증
     //    실패 때문에 그 주의 번호가 비면 사용자가 볼 것이 없어진다.
-    upcomingRound = writeUpcomingPicks(run, strategy, range.latest + 1);
+    //
+    //    ★ 단, **확정하는 순간**이 추첨~결과 공개 구간(토 20:00~24:00)이면 새로 뽑지 않는다.
+    //    시작 시각만 막아서는 부족하다 — 토요일 19시대 정시 런이 LLM 큐에서 최대 45분을 기다리고
+    //    전략 갱신에 수십 분을 쓰면, 여기 도달하는 시각이 추첨(20:45경) 뒤로 밀린다. 그때 DB 최신이
+    //    아직 지난 회차면 '최신+1' = **방금 추첨된 회차**라, 추첨 후에 고른 번호가 추천으로 박힌다.
+    //    이미 못박힌 번호가 있으면 writeUpcomingPicks 가 덮어쓰지 않으므로 그 경우는 그대로 둔다.
+    //    미룬 확정은 retryAt(4시간 뒤 = 자정 이후)에 catch-up 이 다시 한다.
+    const nextRound = range.latest + 1;
+    if (getUpcoming()?.round !== nextRound && inDrawBlackout(deps.now())) {
+      const msg =
+        "추첨~결과 공개 구간(토 20:00~24:00)이라 다음 회차 번호 확정을 미뤘습니다(자정 이후 재시도).";
+      retry = true;
+      if (reason === "ok") reason = "draw-window";
+      error = error ? `${error} / ${msg}` : msg;
+      log.warn(`로또 ${msg}`);
+    } else {
+      upcomingRound = writeUpcomingPicks(run, strategy, nextRound);
+    }
 
     setLottoState({
       lastCycleAt: new Date().toISOString(),
@@ -258,7 +333,7 @@ export async function runWeeklyCycle(trigger: string): Promise<CycleResult> {
     log.info(
       `로또 주간 사이클 완료 [${trigger}] — 채점 ${scoredRound ?? "없음"} / 세대 v${strategy.version}${
         newVersion ? " (갱신)" : ""
-      } / 다음 ${upcomingRound}회차 (${Date.now() - startedAt}ms)`
+      } / 다음 ${upcomingRound ?? "(확정 미룸)"}회차 (${Date.now() - startedAt}ms)`
     );
     return { scoredRound, newVersion, upcomingRound, usageLimited, error, reason };
   } catch (e) {
@@ -276,10 +351,23 @@ export async function runWeeklyCycle(trigger: string): Promise<CycleResult> {
   }
 }
 
+/**
+ * 보충 사이클을 지금 돌릴지 — **보충 게이트의 정본**이다(스케줄러가 큐 앞에서 같은 함수를 부른다).
+ *
+ * ★ **추첨~결과 공개 구간(토 20:00~24:00)** 에는 어떤 이유로도 보충하지 않는다. 그 사이에는
+ * DB '최신+1' 이 방금 추첨된 회차를 가리킬 수 있어, 추천 번호가 비어 있는 상태(`!hasUpcoming`)나
+ * 재시도 예약(`retryAt`)으로 돌면 **추첨 후에** 그 회차 번호를 뽑게 된다(writeUpcomingPicks 주석의
+ * 계약 위반). 자정이 지나면 다음 30분 틱이 그대로 이어받는다.
+ */
+export function shouldCatchUpCycle(now: Date = deps.now()): boolean {
+  if (inDrawBlackout(now)) return false;
+  return shouldRunCycle(now, getLottoState(), getUpcoming() !== null);
+}
+
 /** 놓친 사이클 보충. 기동 직후와 30분마다 스케줄러가 부른다. */
 export async function catchUpWeeklyCycle(): Promise<void> {
   if (cycling) return;
-  if (!shouldRunCycle(new Date(), getLottoState(), getUpcoming() !== null)) return;
+  if (!shouldCatchUpCycle()) return;
   await runWeeklyCycle("catchup");
 }
 

@@ -21,27 +21,24 @@ import {
 import { refreshStock, snapshotForSlot, isStockCollecting } from "../stock/stock.ts";
 import { runPulse, flushPulseQueue } from "../stock/pulse.ts";
 import { isQuietHour } from "../stock/pulse-gate.ts";
-import { config } from "../config.ts";
+import { getTabSettings } from "../settings/tab-settings.ts";
 import { describeSlotRoles } from "../stock/slot-role.ts";
 import { slotHandled, slotNeedsCatchup } from "../stock/notify-ledger.ts";
 import { localDate } from "../util/date.ts";
 import {
-  LOTTO_CYCLE_CRON,
-  LOTTO_CYCLE_LABEL,
   catchUpWeeklyCycle,
   isCycleRunning,
   runWeeklyCycle,
-  shouldRunCycle,
+  shouldCatchUpCycle,
 } from "../lotto/cycle.ts";
-import { getLottoState, getUpcoming } from "../lotto/store.ts";
 import {
   getSkillsLastAttempt,
   isSkillsCollecting,
   refreshSkills,
-  skillsCoveredThisWeek,
+  skillsCoveredSince,
 } from "../skills/skills.ts";
-import { SKILLS_CYCLE_CRON, SKILLS_CYCLE_LABEL } from "../../shared/skills.ts";
-import type { StockMarket } from "../../shared/types.ts";
+import { describeSchedule, isDueDate, lastOccurrence } from "../../shared/schedule.ts";
+import type { JobSchedule, StockMarket } from "../../shared/types.ts";
 
 function today(): string {
   return localDate();
@@ -51,10 +48,13 @@ function today(): string {
 const RETENTION_LABEL = "04:30";
 const RETENTION_CRON = "30 4 * * *";
 
-/** 보존 정책 1회. DB 오류가 스케줄러를 죽이지 않게 감싼다. */
+/**
+ * 보존 정책 1회. DB 오류가 스케줄러를 죽이지 않게 감싼다.
+ * 보존 일수는 **실행 시점마다** 운영 설정에서 읽는다(계약 §2 — 저장 즉시 반영, 로드 시 캡처 금지).
+ */
 function safePruneOldData() {
   try {
-    const pruned = pruneOldData(config.historyRetentionDays);
+    const pruned = pruneOldData(getTabSettings().stock.historyRetentionDays);
     if (pruned > 0) log.info(`보존 정책: 오래된 증시 시계열 ${pruned}개 삭제`);
   } catch (e) {
     log.error(`보존 정책 실행 오류: ${(e as Error).message}`);
@@ -374,22 +374,23 @@ function noteTabOutcome(label: string, backoff: Backoff, outcome: TabRunOutcome,
 // 뉴스·유튜브·팝업/전시가 같은 모양이라 한 곳으로 모았다. 순수 함수로 떼어 둔 이유는 하나다:
 // **백오프가 catch-up 에만 걸린다**는 성질(정시 cron 과 수동 갱신은 이 함수를 아예 타지 않는다)을
 // 테스트로 못박기 위해서다. 그 성질이 깨지면 사용자가 버튼을 눌러도 먹통이 된다.
-type CatchupDecision =
+type CatchupDecision<S = string> =
   | { run: false; reason: "running" | "backoff" | "covered" }
-  | { run: true; slot: string };
+  | { run: true; slot: S };
 
-function decideCatchup(input: {
+// 슬롯 타입 S 는 기존 테스트의 "HH:mm" 문자열이거나, 스케줄 v2 의 보충 대상 시각(Date)이다.
+function decideCatchup<S>(input: {
   /** 같은 탭의 런이 이미 진행 중인가 */
   running: boolean;
   /** 연속 실패 백오프로 대기 중인가 */
   blocked: boolean;
-  /** 오늘 예정된 시각들 */
-  slots: string[];
+  /** 보충 후보 슬롯들 */
+  slots: S[];
   /** 그 시각이 이미 지났는가 */
-  past: (t: string) => boolean;
+  past: (t: S) => boolean;
   /** 그 시각이 정상 결과물로 커버돼 있는가 */
-  covered: (t: string) => boolean;
-}): CatchupDecision {
+  covered: (t: S) => boolean;
+}): CatchupDecision<S> {
   if (input.running) return { run: false, reason: "running" };
   if (input.blocked) return { run: false, reason: "backoff" };
   for (const t of input.slots) {
@@ -400,6 +401,41 @@ function decideCatchup(input: {
   return { run: false, reason: "covered" };
 }
 
+/** 두 시각이 같은 로컬 날짜인가. */
+function sameLocalDay(a: Date, b: Date): boolean {
+  return localDate(a) === localDate(b);
+}
+
+/**
+ * 스케줄 v2 의 보충 대상 occurrence(계약 §1.3). 없으면 null(= 보충하지 않는다).
+ *
+ * - 대상은 `lastOccurrence(job, now)` 하나다. 꺼진 잡은 lastOccurrence 가 null 이라 보충이 없다.
+ *   (커버 판정은 updatedAt ≥ occurrence 로 단조라, 가장 최근 지난 슬롯이 커버면 그 이전 슬롯도
+ *   전부 커버다 — 예전의 '오늘 지난 슬롯 전부 순회'와 실행 여부가 같다.)
+ * - occurrence 가 **오늘**이면 그대로 대상이다(기존 동작).
+ * - occurrence 가 **이전 날**이면 오늘이 실행일이 아닐 때만 대상이다. 오늘이 실행일이면 오늘 슬롯을
+ *   기다린다 — daily 의 기존 동작 '아침 7시엔 어제 17시를 보충하지 않는다'가 이 규칙의 특수형이다.
+ *   `crossDay: false`(증시 브리핑)면 이전 날 occurrence 는 절대 보충하지 않는다.
+ */
+export function catchupTarget(
+  job: JobSchedule,
+  now: Date,
+  opts: { crossDay?: boolean } = {}
+): Date | null {
+  const occ = lastOccurrence(job, now);
+  if (!occ) return null;
+  if (sameLocalDay(occ, now)) return occ;
+  if (opts.crossDay === false) return null;
+  if (isDueDate(job.repeat, now)) return null;
+  return occ;
+}
+
+/** 로그용 "MM-DD HH:mm"(오늘이면 "HH:mm"). */
+function slotLabel(occ: Date, now: Date = new Date()): string {
+  const hhmm = `${String(occ.getHours()).padStart(2, "0")}:${String(occ.getMinutes()).padStart(2, "0")}`;
+  return sameLocalDay(occ, now) ? hhmm : `${localDate(occ).slice(5)} ${hhmm}`;
+}
+
 const eventsBackoff = createBackoff("팝업/전시", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
 const newsBackoff = createBackoff("뉴스", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
 const youtubeBackoff = createBackoff("유튜브", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
@@ -407,11 +443,11 @@ const youtubeBackoff = createBackoff("유튜브", CATCHUP_BACKOFF_BASE_MS, CATCH
 // 일시적 실패(네트워크 끊김 등)가 그 주 전체를 날린다 — 30분→4시간 간격이면 하루 안에 회복된다.
 const skillsBackoff = createBackoff("스킬 랭킹", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
 
-/** 시도 기록(ISO 문자열)이 오늘 것인지. 어제 성공은 오늘의 커버가 아니다. */
-function attemptIsToday(at: string | undefined): boolean {
+/** 시도 기록(ISO 문자열)이 그 날짜(YYYY-MM-DD) 이후 것인지. 그 전날의 성공은 그날의 커버가 아니다. */
+function attemptOnOrAfter(at: string | undefined, day: string): boolean {
   if (!at) return false;
   const d = new Date(at);
-  return !Number.isNaN(d.getTime()) && localDate(d) === today();
+  return !Number.isNaN(d.getTime()) && localDate(d) >= day;
 }
 
 /** 기록 시각과 런 시작 시각 사이의 밀리초 단위 오차를 흡수하는 여유. */
@@ -482,24 +518,37 @@ async function safeRefreshEvents(trigger: string, notify: boolean) {
  * 그건 성공이 아니다. 두 판정의 'ok' 정의가 나중에 어긋나도 안전한 쪽(재시도)으로 접힌다.
  */
 export function eventsCoveredToday(): boolean {
+  return eventsCoveredOn(new Date());
+}
+
+/**
+ * occurrence 가 속한 **날짜 이후**가 정상 결과로 커버돼 있는지(eventsCoveredToday 의 일반형).
+ *
+ * 팝업/전시는 시각별 스냅샷이 아니라 '그날 하루' 단위라, 계약 §1.3 의 'updatedAt ≥ occurrence'
+ * 대신 **날짜** 단위로 일반화한다(occurrence 가 오늘이면 eventsCoveredToday 와 정확히 같다).
+ * 날짜를 '같음'이 아니라 '이후'로 보는 이유: 주간 잡이면 월요일 occurrence 를 화요일에 판정한다 —
+ * '오늘 것만 커버'로 보면 월요일 성공본이 화요일에 미커버로 읽혀 **매일 보충이 돈다.**
+ */
+export function eventsCoveredOn(occurrence: Date): boolean {
+  const day = localDate(occurrence);
   const snap = getEventsSnapshot();
-  const snapshotOk = snap?.date === today() && snap.source === "llm";
+  const snapshotOk = !!snap && snap.date >= day && snap.source === "llm";
   const attempt = getEventsLastAttempt();
-  if (attempt && attemptIsToday(attempt.at)) return attempt.ok && snapshotOk;
+  if (attempt && attemptOnOrAfter(attempt.at, day)) return attempt.ok && snapshotOk;
   return snapshotOk;
 }
 
 async function checkEventsCatchup() {
-  // 커버 판정이 슬롯과 무관한 '오늘 하루' 단위라, covered 는 인자를 무시한다(동작 불변).
+  const target = catchupTarget(getSchedule().events, new Date());
   const d = decideCatchup({
     running: eventsRunning,
     blocked: eventsBackoff.blocked(), // 연속 실패 백오프 중
-    slots: getSchedule().events,
-    past: pastTime,
-    covered: () => eventsCoveredToday(),
+    slots: target ? [target] : [],
+    past: () => true, // lastOccurrence 는 정의상 이미 지난 시각이다
+    covered: (occ) => eventsCoveredOn(occ),
   });
   if (!d.run) return;
-  log.info(`오늘(${today()}) 팝업/전시 갱신 누락 감지 → catch-up 실행`);
+  log.info(`팝업/전시 ${slotLabel(d.slot)} 갱신 누락 감지 → catch-up 실행`);
   await safeRefreshEvents("catchup", true);
 }
 
@@ -546,10 +595,13 @@ async function safeRefreshNews(trigger: string, notify: boolean) {
  * updatedAt 을 단 빈 스냅샷(source="empty")을 저장할 수 있는데, 날짜·시각만 보는 예전 게이트는
  * 그걸 커버로 인정해 **그날의 뉴스를 통째로 포기**했다(실패 후 재시도가 한 번도 안 돌았다).
  * 이제는 실패가 커버로 안 잡히므로 catch-up 이 다시 돈다 — 무한 재시도는 위쪽 백오프가 막는다.
+ *
+ * 날짜 조건은 '스냅샷 날짜 ≥ 예정 시각의 날짜'다(스케줄 v2). 예정 시각이 오늘이면 예전의
+ * `date === today` 와 같고, 주간 잡의 지난 occurrence(월요일 슬롯을 화요일에 판정)도 답할 수 있다.
  */
 export function newsCoveredAt(scheduled: Date): boolean {
   const snap = getNewsSnapshot();
-  if (snap?.date !== today()) return false;
+  if (!snap || snap.date < localDate(scheduled)) return false;
   if (snap.source !== "llm") return false;
   // updatedAt 이 없는 스냅샷은 이론상 없지만, 있다면 '언제 갱신됐는지 모름'이다.
   // 그 경우는 커버로 본다 — 모른다는 이유로 30분마다 20분짜리 LLM 작업을 돌릴 수는 없다.
@@ -567,19 +619,20 @@ export function scheduledToday(hhmm: string): Date {
 }
 
 /**
- * 뉴스 catch-up: 오늘 예정된 시간 중 하나라도 지났는데 그 시각을 커버하는 정상 스냅샷이
- * 없으면 보충한다.
+ * 뉴스 catch-up: 보충 대상 occurrence(catchupTarget — 기본 매일 스케줄에서는 '오늘 가장 최근에
+ * 지난 시각')를 커버하는 정상 스냅샷이 없으면 보충한다.
  */
 async function checkNewsCatchup() {
+  const target = catchupTarget(getSchedule().news, new Date());
   const d = decideCatchup({
     running: newsRunning,
     blocked: newsBackoff.blocked(), // 연속 실패 백오프 중
-    slots: getSchedule().news,
-    past: pastTime,
-    covered: (t) => newsCoveredAt(scheduledToday(t)),
+    slots: target ? [target] : [],
+    past: () => true, // lastOccurrence 는 정의상 이미 지난 시각이다
+    covered: (occ) => newsCoveredAt(occ),
   });
   if (!d.run) return;
-  log.info(`오늘(${today()}) ${d.slot} 뉴스 다이제스트 갱신 누락 감지 → catch-up 실행`);
+  log.info(`${slotLabel(d.slot)} 뉴스 다이제스트 갱신 누락 감지 → catch-up 실행`);
   await safeRefreshNews("catchup", true);
 }
 
@@ -631,7 +684,8 @@ async function safeRefreshYoutube(trigger: string, notify: boolean) {
  */
 export function youtubeCoveredAt(scheduled: Date): boolean {
   const snap = getYoutubeSnapshot();
-  if (snap?.date !== today()) return false;
+  // 날짜 조건은 newsCoveredAt 과 같다('스냅샷 날짜 ≥ 예정 시각의 날짜').
+  if (!snap || snap.date < localDate(scheduled)) return false;
   if (snap.source !== "llm") return false;
   if (!snap.updatedAt) return true; // 뉴스와 동일: '모름'은 커버로 본다
   const at = new Date(snap.updatedAt);
@@ -639,19 +693,19 @@ export function youtubeCoveredAt(scheduled: Date): boolean {
 }
 
 /**
- * 유튜브 catch-up: 오늘 예정된 시간 중 하나라도 지났는데 그 시각을 커버하는 정상 스냅샷이
- * 없으면 보충한다. (뉴스와 동일 패턴)
+ * 유튜브 catch-up: 보충 대상 occurrence 를 커버하는 정상 스냅샷이 없으면 보충한다. (뉴스와 동일 패턴)
  */
 async function checkYoutubeCatchup() {
+  const target = catchupTarget(getSchedule().youtube, new Date());
   const d = decideCatchup({
     running: youtubeRunning,
     blocked: youtubeBackoff.blocked(), // 연속 실패 백오프 중 — **catch-up 만** 막는다
-    slots: getSchedule().youtube,
-    past: pastTime,
-    covered: (t) => youtubeCoveredAt(scheduledToday(t)),
+    slots: target ? [target] : [],
+    past: () => true, // lastOccurrence 는 정의상 이미 지난 시각이다
+    covered: (occ) => youtubeCoveredAt(occ),
   });
   if (!d.run) return;
-  log.info(`오늘(${today()}) ${d.slot} 유튜브 소식 갱신 누락 감지 → catch-up 실행`);
+  log.info(`${slotLabel(d.slot)} 유튜브 소식 갱신 누락 감지 → catch-up 실행`);
   await safeRefreshYoutube("catchup", true);
 }
 
@@ -700,11 +754,17 @@ async function safeRefreshStock(
  */
 async function checkStockCatchup(market: StockMarket) {
   if (stockRunning[market]) return;
-  const times = market === "kr" ? getSchedule().stockKr : getSchedule().stockUs;
+  const job = market === "kr" ? getSchedule().stockKr : getSchedule().stockUs;
+  // 스케줄 v2(계약 §1.3): 증시 브리핑은 **날을 넘겨 보충하지 않는다** — 지난 브리핑은 가치가 없고
+  // 알림 원장이 일 단위다. 그래서 대상은 언제나 '오늘의 지난 슬롯'뿐이고, 꺼져 있거나 오늘이
+  // 실행일이 아니면 오늘 슬롯 자체가 없다(기본 매일 스케줄에서는 이 문이 항상 열려 있다).
+  if (!job.enabled || !isDueDate(job.repeat, new Date())) return;
+  const times = job.times;
   // ⚠️ 순회는 **시각 오름차순**으로 한다(저장 순서는 건드리지 않는다).
-  // schedule-store 어디에도 정렬이 없고 실제 저장값이 ["17:00","08:00"] 이라, 두 슬롯이
+  // v1 시절 schedule-store 에는 정렬이 없었고 실제 저장값이 ["17:00","08:00"] 이었다. 두 슬롯이
   // 동시에 밀린 날(서비스 재시작 등)에 배열 순서대로 돌면 오후 프리뷰가 먼저 나가고
   // 아침 결산이 30분 뒤에 온다 — 역할이 생긴 뒤로는 사용자에게 시간 역순으로 보인다.
+  // (v2 getSchedule() 은 정렬해 주지만, 이 순회의 안전을 저장 계층에 맡기지 않는다.)
   const ordered = [...times].sort((a, b) => {
     const min = (t: string) => {
       try {
@@ -801,8 +861,9 @@ async function safeFlushPulseQueue(trigger: string) {
 //
 // 다른 탭과 다른 점은 **주 1회**라는 것뿐이다 — 추첨이 토요일 20:45경 한 번뿐이라 매일 도는 건
 // 무의미한 요청이다. 사이클 하나가 수집·채점·전략 갱신·다음 회차 번호 확정을 전부 한다
-// (`src/lotto/cycle.ts`). 시각(일요일 10:00)은 사용자 지시이고, cron 식은 cycle.ts 가 소유한다 —
-// 경계 계산(놓친 실행 판정)이 같은 상수를 봐야 하기 때문이다.
+// (`src/lotto/cycle.ts`). 시각은 스케줄 v2 `getSchedule().lotto`(기본 일요일 10:00, 매주 1회만
+// 허용 · 토 20:00~24:00 저장 금지)이고, cron 게이트와 cycle.ts 의 경계 계산이 **같은 스케줄 값**을
+// 본다 — 어긋나면 보충이 매 틱 돌거나 영영 안 돈다.
 
 async function safeRunLottoCycle(trigger: string) {
   try {
@@ -820,8 +881,8 @@ async function safeRunLottoCycle(trigger: string) {
 }
 
 /**
- * 놓친 사이클 보충. 일요일 10:00 에 맥이 자고 있었으면 cron 이 통째로 사라지므로, 다른 탭과
- * 같은 catch-up 을 붙인다(기동 직후 + 30분마다). 실패해 예약된 재시도도 여기서 걸린다.
+ * 놓친 사이클 보충. 정시(기본 일요일 10:00)에 맥이 자고 있었으면 cron 이 통째로 사라지므로, 다른
+ * 탭과 같은 catch-up 을 붙인다(기동 직후 + 30분마다). 실패해 예약된 재시도도 여기서 걸린다.
  */
 async function safeCatchUpLottoCycle() {
   try {
@@ -838,7 +899,8 @@ async function safeCatchUpLottoCycle() {
     // 여기 것은 그 정본을 그대로 미리 부르는 사본이라, 둘이 어긋나도 최악은 '옛날처럼 빈 슬롯을
     // 한 번 잡는 것'이지 실행 누락이 아니다.
     if (isCycleRunning()) return;
-    if (!shouldRunCycle(new Date(), getLottoState(), getUpcoming() !== null)) return;
+    // 정본 게이트(꺼짐 · 추첨~결과 공개 금지 구간 · 경계/재시도/번호 없음)를 그대로 미리 부른다.
+    if (!shouldCatchUpCycle()) return;
 
     // ⚠️ 슬롯은 **여기서 한 번만** 잡는다. catchUpWeeklyCycle 은 내부에서 runWeeklyCycle 을
     // 부르므로, 그 안쪽에도 슬롯을 걸면 자기 자신을 기다리는 교착이 된다(runLlmJob 주석의
@@ -849,13 +911,12 @@ async function safeCatchUpLottoCycle() {
   }
 }
 
-// ── 스킬 랭킹 주간 회차 ──
+// ── 스킬 랭킹 회차 ──
 //
-// 로또와 같은 **주 1회** 작업이다. 기존 ScheduleSettings(일 단위 HH:mm 배열)에 끼워 넣지 않는
-// 이유가 여기 있다 — 그 구조는 "매일 이 시각들에"를 표현하므로 주간 작업을 넣으면 매일 돌게
-// 되고, 그러면 주간 스냅샷이 하루 간격으로 쌓여 "주간 증가"라는 말 자체가 성립하지 않는다.
-// cron 식과 경계 계산은 shared/skills.ts 의 같은 상수를 본다(어긋나면 보충이 매 틱 돌거나
-// 영영 안 돈다).
+// 로또와 같은 **주 단위 이상** 작업이다(스케줄 v2 `getSchedule().skills`, 기본 매주 월요일 09:00).
+// 반복은 매주(1~4주)·매월만 허용한다 — '매일'을 열면 스냅샷이 하루 간격으로 쌓여 "기간 증가"라는
+// 말 자체가 성립하지 않는다(SCHEDULE_RULES.skills). cron 게이트와 경계 계산(skills.ts 의
+// lastSkillsCycleBoundary)이 같은 스케줄 값을 본다(어긋나면 보충이 매 틱 돌거나 영영 안 돈다).
 
 /**
  * 스케줄러 레벨의 중복 가드.
@@ -903,7 +964,9 @@ async function safeRunSkills(trigger: string, notify: boolean) {
 }
 
 /**
- * 놓친 주간 회차 보충. 월요일 09:00 에 맥이 자고 있었으면 cron 이 통째로 사라진다.
+ * 놓친 회차 보충. 정시(기본 월요일 09:00)에 맥이 자고 있었으면 cron 이 통째로 사라진다.
+ * 보충 대상은 다른 탭과 같은 catchupTarget(계약 §1.3)이다 — 직전 회차가 이전 날이고 오늘이
+ * 실행일이면 오늘 정시를 기다린다(같은 회차를 두 번 돌지 않게).
  *
  * ★★ **보충할 것이 없으면 LLM 슬롯을 잡지 않는다.** (safeCatchUpLottoCycle 이 같은 이유로
  * 같은 모양을 하고 있다.) 주간 작업이라 판정이 참인 순간은 일주일에 한 번뿐이고, 나머지
@@ -916,8 +979,13 @@ async function safeCatchUpSkills() {
   try {
     if (skillsRunning || isSkillsCollecting()) return;
     if (skillsBackoff.blocked()) return; // 연속 실패 백오프 중
-    if (skillsCoveredThisWeek()) return;
-    log.info(`이번 주 스킬 랭킹 갱신 누락 감지 → catch-up 실행 (기준 ${SKILLS_CYCLE_LABEL})`);
+    const job = getSchedule().skills;
+    const target = catchupTarget(job, new Date());
+    if (!target) return; // 꺼짐, 또는 오늘 정시를 기다리는 중
+    if (skillsCoveredSince(target)) return;
+    log.info(
+      `스킬 랭킹 ${slotLabel(target)} 회차 갱신 누락 감지 → catch-up 실행 (${describeSchedule(job)})`
+    );
     await safeRunSkills("catchup", true);
   } catch (e) {
     log.error(`스킬 랭킹 보충 점검 오류: ${(e as Error).message}`);
@@ -934,25 +1002,60 @@ function cronExpr(hhmm: string): string {
 let tasks: ReturnType<typeof cron.schedule>[] = [];
 
 /**
- * 한 탭의 여러 시각을 cron 으로 등록. name 을 (kind,index)로 고정해, 재등록 시
- * node-cron 전역 레지스트리 항목이 무한 누적되지 않고 같은 키로 덮어써지게 한다(누수 방지).
+ * 정시 cron 1회 발화의 게이트(계약 §1.2). 꺼져 있거나 그날이 실행일이 아니면 **실행하지 않고**
+ * false 를 돌려준다.
+ *
+ * 왜 cron 식에 요일을 넣지 않고 매일 cron + 게이트인가: node-cron 식으로는 격주(anchor 기준 주
+ * 차이)·말일(-1)을 표현할 수 없다. 반복 규칙을 cron 식과 isDueDate 두 군데에 나눠 두면 둘이
+ * 어긋나는 순간 "cron 은 도는데 보충 경계는 다른 날" 같은 조용한 불일치가 생기므로, 날짜 판정은
+ * 전부 isDueDate 한 곳에 둔다. (꺼진 잡은 애초에 cron 을 등록하지 않지만, 방어선으로 여기서도 본다.)
+ *
+ * firedAt 은 node-cron 3.x 가 콜백에 넘기는 '매칭된 시각'(Date)이다 — node_modules/node-cron/src/
+ * scheduled-task.js 의 `this.now(now)` → task.js `execution(now)`. 수동 호출이면 "manual" 같은
+ * 문자열이 오므로 그때는 지금 시각을 쓴다.
  */
-// run 은 슬롯 시각 t 를 받는다. 증시만 이 값을 알림 멱등 키로 쓰고(notify-ledger),
-// 나머지 탭은 `() => ...` 그대로 두면 TS 함수 타입 호환으로 인자를 무시한다(동작 불변).
-function scheduleGroup(kind: string, times: string[], label: string, run: (t: string) => void): void {
-  times.forEach((t, i) => {
+function fireIfDue(job: JobSchedule, firedAt: unknown, run: () => void): boolean {
+  const at = firedAt instanceof Date ? firedAt : new Date();
+  if (!job.enabled || !isDueDate(job.repeat, at)) return false;
+  run();
+  return true;
+}
+
+/**
+ * 한 잡의 여러 시각을 '매일 cron + 실행일 게이트'로 등록. name 을 (kind,index)로 고정해, 재등록 시
+ * node-cron 전역 레지스트리(global.scheduledTasks Map) 항목이 무한 누적되지 않고 같은 키로
+ * 덮어써지게 한다(누수 방지). 꺼진 잡은 cron 을 등록하지 않는다.
+ *
+ * run 은 슬롯 시각 t 를 받는다. 증시만 이 값을 알림 멱등 키로 쓰고(notify-ledger),
+ * 나머지 탭은 `() => ...` 그대로 두면 TS 함수 타입 호환으로 인자를 무시한다(동작 불변).
+ * quiet 면 시각별 등록 로그를 생략한다(호출부가 한 줄로 요약한다 — 펄스는 시각이 16개다).
+ */
+function scheduleGroup(
+  kind: string,
+  job: JobSchedule,
+  label: string,
+  run: (t: string) => void,
+  opts: { quiet?: boolean } = {}
+): void {
+  if (!job.enabled) {
+    log.info(`스케줄러: ${label} 꺼짐(자동 실행·누락 보충 없음 — 수동 갱신은 가능)`);
+    return;
+  }
+  job.times.forEach((t, i) => {
     tasks.push(
       cron.schedule(
         cronExpr(t),
-        () => {
-          log.info(`정시 ${label} 수집 (${t})`);
-          run(t);
+        (firedAt) => {
+          fireIfDue(job, firedAt, () => {
+            if (!opts.quiet) log.info(`정시 ${label} 수집 (${t})`);
+            run(t);
+          });
         },
         { name: `dp-${kind}-${i}` }
       )
     );
-    log.info(`스케줄러: ${label} 매일 ${t}`);
   });
+  if (!opts.quiet) log.info(`스케줄러: ${label} ${describeSchedule(job)}`);
 }
 
 /**
@@ -973,20 +1076,22 @@ function registerCrons() {
   scheduleGroup("stock-us", s.stockUs, "증시(미국장)", (t) => void safeRefreshStock("us", "schedule", true, t));
   // 역할 분리 구성을 남긴다. '슬롯을 하나로 줄이거나 같은 밴드에 몰아넣으면 분리가 조용히
   // 꺼진다'는 비자명 동작의 유일한 가시화 수단이라 옵션이 아니다(slot-role.ts 참고).
-  log.info(describeSlotRoles("us", s.stockUs));
+  log.info(describeSlotRoles("us", s.stockUs.times));
 
-  // 펄스는 시각이 16개라 scheduleGroup 의 시각별 로그가 로그를 뒤덮는다 → 한 줄로 요약한다.
-  s.stockPulse.forEach((t, i) => {
-    tasks.push(
-      cron.schedule(cronExpr(t), () => void safeRunPulse(t, "schedule"), {
-        name: `dp-stock-pulse-${i}`,
-      })
-    );
+  // 펄스는 시각이 16개라 시각별 로그가 로그를 뒤덮는다 → 한 줄로 요약한다.
+  scheduleGroup("stock-pulse", s.stockPulse, "증시 펄스", (t) => void safeRunPulse(t, "schedule"), {
+    quiet: true,
   });
-  log.info(`스케줄러: 증시 펄스 매일 ${s.stockPulse.length}회 (${s.stockPulse.join(", ")})`);
+  if (s.stockPulse.enabled) {
+    log.info(`스케줄러: 증시 펄스 ${s.stockPulse.times.length}회 — ${describeSchedule(s.stockPulse)}`);
+  } else {
+    log.info("스케줄러: 증시 펄스 꺼짐");
+  }
 
-  // 야간 보류분 묶음 발송(조용 시간 종료 정각).
-  const flushAt = `${String(config.stockPulse.quietEndHour).padStart(2, "0")}:00`;
+  // 야간 보류분 묶음 발송(조용 시간 종료 정각). 시각은 **등록 시점의** 운영 설정 값이다 —
+  // quietEndHour 를 바꾸면 운영 설정 저장이 rescheduleAll() 을 불러 이 cron 을 다시 건다(계약 §2).
+  // 펄스를 꺼도 이 cron 은 남긴다: 이미 보류된 알림은 '아침에 보내겠다'고 약속한 것이다.
+  const flushAt = `${String(getTabSettings().stockPulse.quietEndHour).padStart(2, "0")}:00`;
   tasks.push(
     cron.schedule(cronExpr(flushAt), () => void safeFlushPulseQueue("schedule"), {
       name: "dp-stock-pulse-flush",
@@ -997,32 +1102,23 @@ function registerCrons() {
   // 보존 정책. 예전에는 가격 수집이 끝날 때마다 pruneOldData 를 불렀는데, 가격 탭을 제거하면서
   // (2026-08-01) 그 유일한 호출자가 사라졌다 — 그대로 뒀다면 증시 시계열과 펄스 원장이 영원히
   // 누적된다. 어느 탭에도 매달지 않고 독립 cron 으로 둔다(수집이 없는 새벽 시간).
+  // 보존 일수는 실행할 때마다 운영 설정에서 읽는다(safePruneOldData). 아래 로그는 등록 시점 값이다.
   tasks.push(
     cron.schedule(RETENTION_CRON, () => safePruneOldData(), { name: "dp-retention" })
   );
   log.info(
-    `스케줄러: 보존 정책 매일 ${RETENTION_LABEL} (증시 ${config.historyRetentionDays}일 초과분 정리)`
+    `스케줄러: 보존 정책 매일 ${RETENTION_LABEL} (증시 ${getTabSettings().stock.historyRetentionDays}일 초과분 정리)`
   );
 
   // ⚠️ 수집 모델 '주간 복귀' cron 은 없다(2026-08-01 제거). Codex 복귀를 요일에 고정하니
   // 그 시각에 맥이 꺼져 있거나 Codex 가 예정과 다르게 살아나면 어긋났다. 지금은 실행할 때마다
   // Codex 를 확인해 그 실행만 대체하므로(agent-query.ts) 되돌릴 스케줄 자체가 필요 없다.
 
-  // 로또 주간 사이클(주 1회). 채점 → 전략 갱신 → 다음 회차 번호 확정까지 한 번에 한다.
-  tasks.push(
-    cron.schedule(LOTTO_CYCLE_CRON, () => void safeRunLottoCycle("schedule"), {
-      name: "dp-lotto-cycle",
-    })
-  );
-  log.info(`스케줄러: 로또 주간 사이클 매주 ${LOTTO_CYCLE_LABEL}`);
+  // 로또 주간 사이클(매주 1회). 채점 → 전략 갱신 → 다음 회차 번호 확정까지 한 번에 한다.
+  scheduleGroup("lotto-cycle", s.lotto, "로또 주간 사이클", () => void safeRunLottoCycle("schedule"));
 
-  // 스킬 랭킹 주간 회차(주 1회). 수집 → 주간 스냅샷 저장 → 차분·랭킹 → 요약 → 알림까지 한 번에.
-  tasks.push(
-    cron.schedule(SKILLS_CYCLE_CRON, () => void safeRunSkills("schedule", true), {
-      name: "dp-skills-cycle",
-    })
-  );
-  log.info(`스케줄러: 스킬 랭킹 주간 회차 매주 ${SKILLS_CYCLE_LABEL}`);
+  // 스킬 랭킹 회차(주 단위 이상). 수집 → 스냅샷 저장 → 차분·랭킹 → 요약 → 알림까지 한 번에.
+  scheduleGroup("skills-cycle", s.skills, "스킬 랭킹 회차", () => void safeRunSkills("schedule", true));
 }
 
 /**
@@ -1173,15 +1269,11 @@ export function startScheduler() {
   // 펄스 자체는 catch-up 하지 않지만(위 주석) **보류 큐는 다르다.** 큐에 있는 건 이미 판정이
   // 끝나 "아침에 보내겠다"고 약속한 알림이라, 07:00 에 서버가 꺼져 있었다면 반드시 보충해야
   // 한다. 그러지 않으면 밤사이 판정이 디스크에 영원히 갇힌다.
-  // 조용 시간 중이면 건너뛴다 — 지금 보내면 그게 바로 새벽 문자다.
+  // 조용 시간 중이면 건너뛴다 — 지금 보내면 그게 바로 새벽 문자다. 조용 시간은 호출 시점의
+  // 운영 설정 값이다(계약 §2).
   // (LLM 큐를 타지 않는다: 발송뿐이라 짧고, 스윕 뒤로 줄 세울 이유가 없다.)
-  if (
-    !isQuietHour(
-      new Date().getHours(),
-      config.stockPulse.quietStartHour,
-      config.stockPulse.quietEndHour
-    )
-  ) {
+  const { quietStartHour, quietEndHour } = getTabSettings().stockPulse;
+  if (!isQuietHour(new Date().getHours(), quietStartHour, quietEndHour)) {
     void safeFlushPulseQueue("startup");
   }
 
@@ -1202,6 +1294,8 @@ export const __testing = {
   createBackoff,
   backoffWaitMs,
   decideCatchup,
+  catchupTarget,
+  fireIfDue,
   shouldNoteBackoff,
   sleepGapMessage,
   formatDuration,

@@ -31,6 +31,7 @@ import { getStockRun } from "../db/repo.ts";
 // schedule-store 는 config/log/types 만 의존해 순환이 없다.
 // ⚠️ scheduler.ts 는 절대 import 하지 말 것 — scheduler.ts 가 stock.ts 를 물고 있어 사이클이 된다.
 import { getSchedule } from "../scheduler/schedule-store.ts";
+import { isDueDate } from "../../shared/schedule.ts";
 import type { StockMarket } from "../../shared/types.ts";
 
 /** 채널별 발송 성공 여부. 슬롯 안의 채널 세분성(부분 실패 재시도)을 유지하기 위한 단위. */
@@ -147,7 +148,8 @@ export function slotHandled(date: string, market: StockMarket, slot: string): bo
 /**
  * 시각 목록 중 now 기준으로 **가장 최근에 지난 슬롯**. 없으면 null.
  *
- * ⚠️ getSchedule() 은 정렬을 보장하지 않는다(실제 data/schedule.json 이 ["17:00","08:00"]).
+ * ⚠️ 인자 목록의 정렬을 가정하지 않는다(v1 시절 data/schedule.json 이 ["17:00","08:00"] 였고,
+ * v2 의 getSchedule() 은 정렬해 주지만 호출부가 늘 그걸 넘긴다는 보장은 없다).
  * 그래서 인덱싱이 아니라 조건 만족 항목의 max 스캔으로 구한다.
  * 항목별 try/catch 로 fail-open — 깨진 항목 하나가 귀속 전체를 막으면 안 된다.
  *
@@ -195,6 +197,10 @@ export function latestPastSlot(times: string[], now: Date): string | null {
 export function resolveSlot(market: StockMarket, slot: string | undefined, now: Date): string {
   if (slot) return slot;
   const s = getSchedule();
-  const times = market === "kr" ? s.stockKr : s.stockUs;
-  return latestPastSlot(times, now) ?? MANUAL_SLOT;
+  const job = market === "kr" ? s.stockKr : s.stockUs;
+  // 스케줄 v2: 꺼져 있거나 오늘이 실행일이 아니면 오늘은 **예정된 슬롯 자체가 없다.** 그런 날의
+  // 수동 갱신이 시각 목록만 보고 '지난 슬롯'에 귀속되면, 돌지도 않을 슬롯의 알림을 새로 만든다
+  // (위 규칙 '지난 슬롯의 누락을 메울 뿐, 새 알림을 만들지 않는다' 위반). 첫 슬롯 이전과 같게 접는다.
+  if (!job.enabled || !isDueDate(job.repeat, now)) return MANUAL_SLOT;
+  return latestPastSlot(job.times, now) ?? MANUAL_SLOT;
 }

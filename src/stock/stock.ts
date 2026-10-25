@@ -655,7 +655,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     // 역할은 슬롯에서 **파생**된다. now 로 유도하면 catch-up 런(실행 시각과 슬롯 시각이 최대
     // 9시간 차)이 뒤집힌다 — slot-role.ts 상단 주석 참고. 슬롯과 함께 런 시작 시점에 한 번만
     // 확정하고 런 전체에 스레딩한다.
-    const times = market === "kr" ? getSchedule().stockKr : getSchedule().stockUs;
+    const times = (market === "kr" ? getSchedule().stockKr : getSchedule().stockUs).times;
     const { role, reason: roleReason } = stockSlotRoleDetail(market, slot, times);
     // 후퇴 방지 가드의 '직전 값'은 반드시 **같은 역할**의 스냅샷이어야 한다. 역할 무관으로
     // 잡으면 프리뷰 수집 실패 시 아침 결산 스냅샷이 prev 로 반환돼 프리뷰 자리에 결산이 남는다.

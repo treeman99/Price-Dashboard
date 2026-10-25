@@ -43,14 +43,17 @@
 import { parseCollectTime } from "../config.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
-import { getSchedule } from "../scheduler/schedule-store.ts";
+import { DEFAULT_LOTTO_SCHEDULE, getSchedule } from "../scheduler/schedule-store.ts";
 // ★ 명세 §8.1 — 스케줄러가 catch-up 판정에 쓰는 바로 그 술어들. 이중화 금지.
 //   여기서 규칙을 다시 구현하면 "화면에는 놓쳤다고 나오는데 스케줄러는 보충하지 않는"
 //   (또는 그 반대) 상태가 조용히 생긴다. 두 판정이 **같은 함수**를 보게 묶어 둔다.
+//   (catchupTarget = 스케줄 v2 의 '스케줄러가 보충할 occurrence' 판정 — 계약 §1.3.)
 import {
   pastTime,
   scheduledToday,
+  catchupTarget,
   eventsCoveredToday,
+  eventsCoveredOn,
   newsCoveredAt,
   youtubeCoveredAt,
 } from "../scheduler/scheduler.ts";
@@ -58,9 +61,9 @@ import { hasSnapshotForSlot } from "../stock/stock.ts";
 import { slotHandled } from "../stock/notify-ledger.ts";
 import { isMarketClosed } from "../stock/calendar.ts";
 import { getLottoState } from "../lotto/store.ts";
-import { LOTTO_CYCLE_HOUR, LOTTO_CYCLE_LABEL, LOTTO_CYCLE_WEEKDAY } from "../lotto/cycle.ts";
+import { isDueDate } from "../../shared/schedule.ts";
 import { MISSED_TAB_LABEL, type MissedSlot, type MissedTab } from "../../shared/uptime.ts";
-import type { ScheduleSettings, StockMarket } from "../../shared/types.ts";
+import type { JobSchedule, ScheduleJobId, StockMarket } from "../../shared/types.ts";
 
 // ────────────────────────────────────────────────────────────────────────────
 // 상수
@@ -95,6 +98,26 @@ const MARKET_CLOSED_TIMEOUT_MS = 2_000;
 /** 과거 날짜 슬롯에 붙는 문구(§8.4). */
 const PAST_DAY_NOTE = "지난 날짜라 보충 대상이 아닙니다";
 
+const WEEKDAY_NAME = ["일", "월", "화", "수", "목", "금", "토"] as const;
+
+/**
+ * `deps.schedule()` 의 모양. 운영은 스케줄 v2 `ScheduleConfig` 그대로다.
+ *
+ * v1 모양(잡 → 시각 배열)도 받아 '매일 그 시각들'로 읽는다 — 저장 파일 호환과 같은 규칙
+ * (docs/customization-contract.md §1.5)이고, **빈 배열은 슬롯 없음**이다. 잡이 아예 없으면 로또는
+ * 기본 스케줄(일요일 10:00, v1 시절 상수와 같은 값), 나머지는 슬롯 없음으로 본다.
+ */
+export type MissedScheduleInput = Partial<Record<ScheduleJobId, JobSchedule | string[]>>;
+
+/** 입력 1건 → v2 잡. 슬롯이 없으면 null. */
+function jobOf(v: JobSchedule | string[] | undefined): JobSchedule | null {
+  if (v === undefined) return null;
+  if (Array.isArray(v)) {
+    return v.length > 0 ? { enabled: true, repeat: { kind: "daily" }, times: v } : null;
+  }
+  return v;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // 의존성 묶음
 // ────────────────────────────────────────────────────────────────────────────
@@ -109,10 +132,15 @@ const PAST_DAY_NOTE = "지난 날짜라 보충 대상이 아닙니다";
 export interface MissedSlotDeps {
   /** "오늘"의 기준 시각. 커버 술어가 오늘 슬롯에만 적용되는 이유는 §8.4. */
   now(): Date;
-  schedule(): ScheduleSettings;
+  schedule(): MissedScheduleInput;
   pastTime(hhmm: string): boolean;
   scheduledToday(hhmm: string): Date;
   eventsCoveredToday(): boolean;
+  /**
+   * 그 occurrence 의 날짜 이후가 커버됐는지(eventsCoveredToday 의 일반형). 지난 날짜 슬롯 중
+   * **스케줄러가 보충하는 것**(주간·월간 잡, 아래 SlotRule.catchupAtMs)만 이것으로 검증한다.
+   */
+  eventsCoveredOn(scheduled: Date): boolean;
   newsCoveredAt(scheduled: Date): boolean;
   youtubeCoveredAt(scheduled: Date): boolean;
   /** `stock.ts` 의 `snapshotForSlot(...) !== null`. 슬롯 기준(역할 기준 아님)이다. */
@@ -134,6 +162,7 @@ const REAL_DEPS: MissedSlotDeps = {
   pastTime,
   scheduledToday,
   eventsCoveredToday,
+  eventsCoveredOn,
   newsCoveredAt,
   youtubeCoveredAt,
   hasStockSnapshotForSlot: hasSnapshotForSlot,
@@ -285,6 +314,17 @@ interface SlotRule {
   slotLabel: string;
   coveredToday: (scheduled: Date) => boolean;
   provenRan: (scheduled: Date) => boolean;
+  /**
+   * 스케줄러가 **보충하는 지난 날짜 슬롯**의 예정 시각(epoch ms), 없으면 null.
+   *
+   * 스케줄 v2(계약 §1.3): 주간·월간 잡은 오늘이 실행일이 아니면 직전 occurrence 를 누락 점검이
+   * 날을 넘겨 보충한다. 그 슬롯에 '지난 날짜라 보충 대상이 아닙니다'를 붙이면 거짓이고, 보충이
+   * 끝나도 목록에서 사라지지 않아 복구 추적(store.ts 의 차집합)도 영영 안 된다. 그래서 그 한
+   * 슬롯만은 오늘 슬롯처럼 `coveredAt` 으로 **검증한다**(술어가 과거 날짜도 답한다).
+   * 매일 잡은 정의상 늘 오늘 슬롯이 대상이라 이 값이 지난 날짜와 겹치지 않는다(기존 동작 그대로).
+   */
+  catchupAtMs: number | null;
+  coveredAt: (scheduled: Date) => boolean;
 }
 
 const never = (): boolean => false;
@@ -298,53 +338,81 @@ const never = (): boolean => false;
  */
 async function rulesForDay(
   day: string,
-  schedule: ScheduleSettings,
+  schedule: MissedScheduleInput,
   deps: MissedSlotDeps
 ): Promise<SlotRule[]> {
   const rules: SlotRule[] = [];
+  const dayDate = scheduledOn(day, "00:00");
+  const now = deps.now();
+
+  // 스케줄 v2: 꺼진 잡과 **그날이 실행일이 아닌** 잡은 후보 자체가 없다(놓친 것이 아니라 원래
+  // 돌 예정이 없었다). 스케줄러의 cron 게이트(enabled && isDueDate)와 같은 판정이다.
+  const due = (job: JobSchedule | null): job is JobSchedule =>
+    job !== null && job.enabled && dayDate !== null && isDueDate(job.repeat, dayDate);
+  const catchupAtMs = (job: JobSchedule): number | null =>
+    catchupTarget(job, now)?.getTime() ?? null;
 
   // ── 팝업·전시: 하루 1회 판정(시각별 스냅샷이 없다) ──
-  for (const t of schedule.events) {
-    rules.push({
-      tab: "events",
-      hhmm: t,
-      slotLabel: t,
-      coveredToday: () => deps.eventsCoveredToday(),
-      provenRan: never, // 어제 커버 여부를 남기는 기록이 없다
-    });
+  const events = jobOf(schedule.events);
+  if (due(events)) {
+    const target = catchupAtMs(events);
+    for (const t of events.times) {
+      rules.push({
+        tab: "events",
+        hhmm: t,
+        slotLabel: t,
+        coveredToday: () => deps.eventsCoveredToday(),
+        provenRan: never, // 어제 커버 여부를 남기는 기록이 없다
+        catchupAtMs: target,
+        coveredAt: (scheduled) => deps.eventsCoveredOn(scheduled),
+      });
+    }
   }
 
   // ── 뉴스 / 유튜브: 스냅샷 updatedAt 이 예정 시각을 넘겼는지로 판정 ──
   //   두 술어 모두 `source !== "llm"` 인 폴백/빈 스냅샷을 커버로 치지 않는다. 그래서
   //   "LLM 이 실패해 빈 스냅샷만 남은 날"이 손실로 정확히 잡힌다(테스트 4번의 계약).
-  for (const t of schedule.news) {
-    rules.push({
-      tab: "news",
-      hhmm: t,
-      slotLabel: t,
-      coveredToday: (scheduled) => deps.newsCoveredAt(scheduled),
-      provenRan: never,
-    });
+  const news = jobOf(schedule.news);
+  if (due(news)) {
+    const target = catchupAtMs(news);
+    for (const t of news.times) {
+      rules.push({
+        tab: "news",
+        hhmm: t,
+        slotLabel: t,
+        coveredToday: (scheduled) => deps.newsCoveredAt(scheduled),
+        provenRan: never,
+        catchupAtMs: target,
+        coveredAt: (scheduled) => deps.newsCoveredAt(scheduled),
+      });
+    }
   }
-  for (const t of schedule.youtube) {
-    rules.push({
-      tab: "youtube",
-      hhmm: t,
-      slotLabel: t,
-      coveredToday: (scheduled) => deps.youtubeCoveredAt(scheduled),
-      provenRan: never,
-    });
+  const youtube = jobOf(schedule.youtube);
+  if (due(youtube)) {
+    const target = catchupAtMs(youtube);
+    for (const t of youtube.times) {
+      rules.push({
+        tab: "youtube",
+        hhmm: t,
+        slotLabel: t,
+        coveredToday: (scheduled) => deps.youtubeCoveredAt(scheduled),
+        provenRan: never,
+        catchupAtMs: target,
+        coveredAt: (scheduled) => deps.youtubeCoveredAt(scheduled),
+      });
+    }
   }
 
   // ── 증시(한국장/미국장): 휴장이면 그 날 그 시장 슬롯 전부 제외 ──
-  const markets: Array<{ tab: MissedTab; market: StockMarket; times: string[] }> = [
-    { tab: "stockKr", market: "kr", times: schedule.stockKr },
-    { tab: "stockUs", market: "us", times: schedule.stockUs },
+  //   증시 브리핑은 날을 넘겨 보충하지 않으므로(계약 §1.3) catchupAtMs 는 늘 null 이다.
+  const markets: Array<{ tab: MissedTab; market: StockMarket; job: JobSchedule | null }> = [
+    { tab: "stockKr", market: "kr", job: jobOf(schedule.stockKr) },
+    { tab: "stockUs", market: "us", job: jobOf(schedule.stockUs) },
   ];
-  for (const { tab, market, times } of markets) {
-    if (times.length === 0) continue;
+  for (const { tab, market, job } of markets) {
+    if (!due(job) || job.times.length === 0) continue;
     if (await marketClosedSafe(deps, market, day)) continue; // ★ 일요일 KR 08:00 이 여기서 죽는다
-    for (const t of times) {
+    for (const t of job.times) {
       rules.push({
         tab,
         hhmm: t,
@@ -355,13 +423,15 @@ async function rulesForDay(
         // 원장은 날짜별 행이라 과거도 정확히 답한다. 휴장 런도 여기서 닫히므로,
         // 원장이 닫혀 있으면 그 슬롯은 확실히 처리가 끝난 것이다.
         provenRan: () => deps.slotHandled(day, market, t),
+        catchupAtMs: null,
+        coveredAt: never,
       });
     }
   }
 
-  // ── 로또: 주 1회. 그 날이 사이클 요일이 아니면 후보 자체가 없다 ──
-  const dayDate = scheduledOn(day, "00:00");
-  if (dayDate && dayDate.getDay() === LOTTO_CYCLE_WEEKDAY) {
+  // ── 로또: 매주 1회. 그 날이 사이클 실행일(기본 일요일)이 아니면 후보 자체가 없다 ──
+  const lotto = jobOf(schedule.lotto) ?? DEFAULT_LOTTO_SCHEDULE;
+  if (due(lotto) && dayDate) {
     const lottoRan = (scheduled: Date): boolean => {
       const last = deps.lottoLastCycleAt();
       if (!last) return false;
@@ -370,14 +440,19 @@ async function rulesForDay(
       if (Number.isNaN(at)) return true;
       return at >= scheduled.getTime();
     };
-    rules.push({
-      tab: "lotto",
-      hhmm: `${pad(LOTTO_CYCLE_HOUR)}:00`,
-      slotLabel: LOTTO_CYCLE_LABEL, // "일요일 10:00"
-      coveredToday: lottoRan,
-      // lastCycleAt 은 단일 타임스탬프라 과거 일요일도 그대로 답한다.
-      provenRan: lottoRan,
-    });
+    const target = catchupAtMs(lotto);
+    for (const t of lotto.times) {
+      rules.push({
+        tab: "lotto",
+        hhmm: t,
+        slotLabel: `${WEEKDAY_NAME[dayDate.getDay()]}요일 ${t}`, // "일요일 10:00"
+        coveredToday: lottoRan,
+        // lastCycleAt 은 단일 타임스탬프라 과거 실행일도 그대로 답한다.
+        provenRan: lottoRan,
+        catchupAtMs: target,
+        coveredAt: lottoRan,
+      });
+    }
   }
 
   // ── ★ 증시 펄스(stockPulse): 영구 제외 ──
@@ -453,6 +528,12 @@ async function collect(
         //   오지도 않은 슬롯이 손실로 잡힌다.** 그때 이 한 줄이 막는다.
         if (!deps.pastTime(rule.hhmm)) continue;
         if (rule.coveredToday(scheduled)) continue;
+        out.push(makeSlot(rule, day, scheduled, true, null));
+      } else if (rule.catchupAtMs === at) {
+        // 스케줄러가 날을 넘겨 보충하는 슬롯(주간·월간 잡 — SlotRule.catchupAtMs 주석). 과거
+        // 날짜지만 커버 술어가 답할 수 있으므로 검증한다. catchupTarget 이 deps.now() 이하만
+        // 돌려주므로 '아직 오지 않은 슬롯' 문제는 없다.
+        if (rule.coveredAt(scheduled)) continue;
         out.push(makeSlot(rule, day, scheduled, true, null));
       } else {
         // §8.4 — 어제 이전 슬롯은 커버 여부를 검증할 수 없다. 목록에는 남기되(그 시각이 공백

@@ -91,7 +91,7 @@ import {
 } from "../skills/skills.ts";
 import { isPulseNotifyEnabled } from "../notify/pulse-imessage.ts";
 import { allRecentPulseAlerts } from "../db/repo.ts";
-import { getSchedule, saveSchedule } from "../scheduler/schedule-store.ts";
+import { getSchedule, getScheduleResponse, saveSchedule } from "../scheduler/schedule-store.ts";
 import { getModelSettings, saveAgentModel } from "../util/model-store.ts";
 import { rescheduleAll, withLlmSlot } from "../scheduler/scheduler.ts";
 // 가동 중단 사후 보고(§11 P1). 화면 상태는 **합성 루트**가 감싼 getDowntimeView() 만 쓴다 —
@@ -108,7 +108,7 @@ import {
 } from "../notify/google-auth.ts";
 import { localDate } from "../util/date.ts";
 import { log } from "../util/log.ts";
-import type { ScheduleSettings, StockMarket } from "../../shared/types.ts";
+import type { ScheduleConfig, StockMarket } from "../../shared/types.ts";
 import type { SkillsSnapshot } from "../../shared/skills.ts";
 
 export const api = Router();
@@ -531,31 +531,25 @@ api.post("/google/disconnect", (_req, res) => {
 
 // ── 탭별 자동 수집 시각 (스케줄) ──
 
-/** 현재 유효 스케줄(.env 기본값 + 사용자 변경 병합). */
+/**
+ * 현재 유효 스케줄 v2(.env 기본값 + 사용자 변경 병합) + 기본값 + 잡별 제약 + 다음 실행 예정.
+ * 응답 형태는 shared/types.ts 의 ScheduleResponse, 의미 규칙은 docs/customization-contract.md §1.
+ */
 api.get("/schedule", (_req, res) => {
-  res.json(getSchedule());
+  res.json(getScheduleResponse());
 });
 
 /**
- * 스케줄 부분 수정. 전달된 탭(price/events/news/youtube/stockKr/stockUs)만 갱신하고
- * 영구 저장한 뒤, 재시작 없이 cron 을 즉시 재등록한다. HH:mm 형식 오류면 400.
- *
- * ⚠️ 탭을 늘리면 이 화이트리스트에도 반드시 추가할 것. 빠뜨리면 UI 저장이
- *    에러 없이 조용히 무시된다(saveSchedule 이 모르는 필드를 그냥 버림).
+ * 스케줄 수정. 본문은 `Partial<ScheduleConfig>` — 보낸 잡만 **잡 단위로 통째 교체**한다.
+ * v1 형식(잡 → 시각 배열)도 '매일'로 받아 준다. 검증·정규화·저장은 saveSchedule 한 곳에서 하고
+ * (모르는 잡 이름·형식 오류·제약 위반 → 400 {error: 한국어 사유}, 아무것도 저장하지 않음),
+ * 성공하면 재시작 없이 cron 을 즉시 재등록한 뒤 최신 ScheduleResponse 를 돌려준다.
  */
 api.put("/schedule", (req, res) => {
   try {
-    const body = (req.body ?? {}) as Partial<ScheduleSettings>;
-    const patch: Partial<ScheduleSettings> = {};
-    if (body.events !== undefined) patch.events = body.events;
-    if (body.news !== undefined) patch.news = body.news;
-    if (body.youtube !== undefined) patch.youtube = body.youtube;
-    if (body.stockKr !== undefined) patch.stockKr = body.stockKr;
-    if (body.stockUs !== undefined) patch.stockUs = body.stockUs;
-    if (body.stockPulse !== undefined) patch.stockPulse = body.stockPulse;
-    const updated = saveSchedule(patch);
+    saveSchedule((req.body ?? {}) as Partial<ScheduleConfig>);
     rescheduleAll();
-    res.json(updated);
+    res.json(getScheduleResponse());
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
@@ -1184,7 +1178,8 @@ api.get("/stock/pulse/status", (_req, res) => {
     running: isPulseRunning(),
     lastRun: getLastPulseRun(),
     notifyEnabled: isPulseNotifyEnabled(),
-    schedule: getSchedule().stockPulse,
+    // 화면 호환을 위해 v1 과 같은 시각 배열(string[]) 그대로 낸다. 켜기/반복은 GET /schedule 이 정본.
+    schedule: getSchedule().stockPulse.times,
     recent: allRecentPulseAlerts(24).map((r) => ({
       id: r.id,
       at: r.createdAt,

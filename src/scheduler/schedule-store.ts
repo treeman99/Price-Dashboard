@@ -2,116 +2,217 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, parseCollectTime } from "../config.ts";
 import { log } from "../util/log.ts";
-import type { ScheduleSettings } from "../../shared/types.ts";
+import {
+  SCHEDULE_JOB_IDS,
+  SCHEDULE_RULES,
+  nextOccurrence,
+  normalizeJobSchedule,
+  toLocalIso,
+} from "../../shared/schedule.ts";
+import type {
+  JobSchedule,
+  ScheduleConfig,
+  ScheduleJobId,
+  ScheduleResponse,
+} from "../../shared/types.ts";
 
 /** 사용자 변경분 저장 위치 (카테고리 설정과 동일한 data 디렉터리). */
 const STORE_PATH = path.join(path.dirname(config.dbPath), "schedule.json");
 
 /**
- * .env 기반 기본값(모두 시각 배열). 설정 파일이 없거나 항목이 비정상일 때 사용.
- * .env 값이 "9:00"처럼 zero-pad 안 됐어도 정규화해, GET 결과가 항상 "HH:mm"이 되게 한다
- * (그래야 프론트 <input type=time>가 표시할 수 있다). config 값은 기동 시 형식 검증됨.
+ * 주간 잡의 기본값. 예전에는 cron 상수(src/lotto/cycle.ts 의 LOTTO_CYCLE_* ·
+ * shared/skills.ts 의 SKILLS_CYCLE_*)가 정본이었다 — 값은 그대로(사용자 지시 시각) 옮겼다.
+ * cycle.ts 를 import 하지 않는 이유: cycle.ts 가 이 모듈을 읽으므로 순환이 된다.
  */
-function defaults(): ScheduleSettings {
-  return {
-    events: normalizeList([config.eventsCollectTime]),
-    news: normalizeList(config.newsCollectTimes),
-    youtube: normalizeList(config.youtubeCollectTimes),
-    stockKr: normalizeList(config.stockKrCollectTimes),
-    stockUs: normalizeList(config.stockUsCollectTimes),
-    stockPulse: normalizeList(config.stockPulseTimes),
-  };
-}
+export const DEFAULT_SKILLS_SCHEDULE: JobSchedule = {
+  enabled: true,
+  repeat: { kind: "weekly", days: [1], intervalWeeks: 1 }, // 월요일
+  times: ["09:00"],
+};
+export const DEFAULT_LOTTO_SCHEDULE: JobSchedule = {
+  enabled: true,
+  repeat: { kind: "weekly", days: [0], intervalWeeks: 1 }, // 일요일
+  times: ["10:00"],
+};
 
 /**
- * HH:mm 형식·범위 검증 + 정규화(zero-pad). "9:00"→"09:00" 처럼 표기가 달라도
- * 같은 시각이면 같은 문자열로 만들어 중복 등록을 막는다. 형식 오류면 throw.
+ * 읽기 경로에서 격주 기준일(anchorDate)이 빠진 저장값을 만났을 때 쓰는 **고정** 기준.
+ *
+ * ⚠️ normalizeJobSchedule 은 기준일이 비면 `now` 의 날짜로 채운다(쓰기 경로용 규칙). 읽을 때마다
+ * 오늘 날짜를 넣으면 매일 기준 주가 바뀌어 '쉬는 주'와 '도는 주'가 하루 단위로 뒤집힌다.
+ * 저장(PUT)은 항상 기준일을 채우므로 정상 경로에서는 쓰이지 않는다 — 손으로 고친 파일 방어선이다.
  */
-function normalizeTime(t: string): string {
-  const { hour, minute } = parseCollectTime(String(t)); // 형식/범위 오류 시 throw
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-}
+const READ_ANCHOR_NOW = new Date(2026, 0, 5); // 2026-01-05(월)
 
-/** 정규화 + 중복 제거(정규화 후 기준). */
-function normalizeList(times: string[]): string[] {
-  return Array.from(new Set(times.map(normalizeTime)));
-}
-
-/** 복수 시각 관대 정규화: 유효·정규화된 것만, 하나도 없으면 fallback. (읽기 경로 — throw 안 함) */
-function lenientMulti(v: unknown, fallback: string[]): string[] {
-  if (!Array.isArray(v)) return fallback;
-  const times: string[] = [];
+/** 유효한 시각만 zero-pad 정규화·중복 제거·오름차순으로(읽기 경로 — throw 안 함). */
+function lenientTimes(v: unknown[]): string[] {
+  const out = new Set<string>();
   for (const t of v) {
     try {
-      times.push(normalizeTime(String(t)));
+      const { hour, minute } = parseCollectTime(String(t));
+      out.add(`${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`);
     } catch {
       /* 잘못된 항목은 조용히 스킵 */
     }
   }
-  const unique = Array.from(new Set(times));
-  return unique.length ? unique : fallback;
+  return [...out].sort();
 }
 
-/** 복수 시각 엄격 검증: 하나라도 형식 오류면 throw, 빈 목록도 거부. (쓰기 경로) */
-function strictMulti(v: unknown, label: string): string[] {
-  if (!Array.isArray(v)) throw new Error(`${label}: 시간 배열이 필요합니다.`);
-  const times = normalizeList(v.map((t) => String(t)));
-  if (times.length === 0) throw new Error(`${label}: 최소 1개 시간이 필요합니다.`);
-  return times;
+/**
+ * .env 시각 목록 → 매일 스케줄. config.ts 가 기동 시 HH:mm 형식을 이미 검증했지만, 개수 상한
+ * (rules.maxTimes)은 모른다 — 그 경우에도 기본값 계산이 서버를 죽이면 안 되므로 상한 없이 쓴다.
+ */
+function envDaily(id: ScheduleJobId, times: string[]): JobSchedule {
+  try {
+    return normalizeJobSchedule(times, id);
+  } catch (e) {
+    warnOnce(`.env 의 ${id} 기본 시각이 제약을 벗어남(그대로 사용): ${(e as Error).message}`);
+    return { enabled: true, repeat: { kind: "daily" }, times: lenientTimes(times) };
+  }
 }
 
-/** JSON.parse 결과가 '평범한 객체'일 때만 그대로, 아니면(배열/스칼라/null) 빈 객체. */
-function asPlainObject(v: unknown): Partial<ScheduleSettings> {
-  return v && typeof v === "object" && !Array.isArray(v) ? (v as Partial<ScheduleSettings>) : {};
+/**
+ * .env 기반 기본값. events/news/youtube/증시 3종은 '매일 .env 시각'(v1 과 같은 동작),
+ * 스킬 랭킹·로또는 기존 주간 cron 과 같은 시각이다.
+ */
+function defaults(): ScheduleConfig {
+  return {
+    events: envDaily("events", [config.eventsCollectTime]),
+    news: envDaily("news", config.newsCollectTimes),
+    youtube: envDaily("youtube", config.youtubeCollectTimes),
+    stockKr: envDaily("stockKr", config.stockKrCollectTimes),
+    stockUs: envDaily("stockUs", config.stockUsCollectTimes),
+    stockPulse: envDaily("stockPulse", config.stockPulseTimes),
+    skills: DEFAULT_SKILLS_SCHEDULE,
+    lotto: DEFAULT_LOTTO_SCHEDULE,
+  };
 }
 
-/** 저장 파일의 원본(사용자가 명시적으로 바꾼 필드만) 로드. 없거나 깨졌으면 빈 객체. */
-function readStored(): Partial<ScheduleSettings> {
+/**
+ * 같은 경고를 한 번만 남긴다. getSchedule() 은 30분 틱·증시 런·누락 집계마다 불려서, 깨진 저장값
+ * 하나가 하루 수백 줄의 같은 경고로 로그를 덮는다.
+ */
+const warned = new Set<string>();
+function warnOnce(msg: string) {
+  if (warned.has(msg)) return;
+  warned.add(msg);
+  log.warn(msg);
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** 저장 파일의 원본(사용자가 명시적으로 바꾼 잡만) 로드. 없거나 깨졌으면 빈 객체. */
+function readStored(): Record<string, unknown> {
   try {
     if (fs.existsSync(STORE_PATH)) {
-      return asPlainObject(JSON.parse(fs.readFileSync(STORE_PATH, "utf8")));
+      const parsed: unknown = JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
+      return isPlainObject(parsed) ? parsed : {};
     }
   } catch (e) {
-    log.warn(`schedule.json 읽기 실패 → 기본값 사용: ${(e as Error).message}`);
+    warnOnce(`schedule.json 읽기 실패 → 기본값 사용: ${(e as Error).message}`);
   }
   return {};
 }
 
 /**
- * 현재 유효 스케줄. 저장 파일(부분 override) 위에 .env 기본값을 병합.
- * 파일이 깨졌거나 없어도 항상 유효한 값을 반환(스케줄러가 죽지 않게).
- * 저장 파일에 없는 필드는 계속 .env 를 따른다.
+ * 저장값 1건을 관대하게 읽는다(읽기 경로 — throw 안 함).
+ *
+ * - v1(시각 배열, 실제 data/schedule.json 형식) → 매일 + 그 시각들.
+ * - v2 객체 → 엄격 정규화를 그대로 통과시킨다(금지 구간·개수 상한도 여기서 다시 지킨다 —
+ *   손으로 고친 파일이 로또를 토요일 21시에 돌게 만들면 안 된다).
+ * - 실패하면 깨진 **시각 항목만** 걸러 한 번 더 해 보고(v1 시절 lenientMulti 와 같은 관용도),
+ *   그래도 안 되면 그 잡만 기본값이다. 파일 하나가 깨져도 스케줄러는 죽지 않는다.
  */
-export function getSchedule(): ScheduleSettings {
-  const def = defaults();
-  const raw = readStored();
-  return {
-    events: lenientMulti(raw.events, def.events),
-    news: lenientMulti(raw.news, def.news),
-    youtube: lenientMulti(raw.youtube, def.youtube),
-    stockKr: lenientMulti(raw.stockKr, def.stockKr),
-    stockUs: lenientMulti(raw.stockUs, def.stockUs),
-    stockPulse: lenientMulti(raw.stockPulse, def.stockPulse),
-  };
+function lenientJob(raw: unknown, id: ScheduleJobId, fallback: JobSchedule): JobSchedule {
+  if (raw === undefined) return fallback;
+  try {
+    return normalizeJobSchedule(raw, id, READ_ANCHOR_NOW);
+  } catch {
+    /* 아래에서 구제 시도 */
+  }
+  try {
+    const salvaged = Array.isArray(raw)
+      ? lenientTimes(raw)
+      : isPlainObject(raw) && Array.isArray(raw.times)
+        ? { ...raw, times: lenientTimes(raw.times) }
+        : raw;
+    return normalizeJobSchedule(salvaged, id, READ_ANCHOR_NOW);
+  } catch (e) {
+    warnOnce(`schedule.json 의 ${id} 값이 올바르지 않아 기본값을 씁니다: ${(e as Error).message}`);
+    return fallback;
+  }
 }
 
 /**
- * 부분 수정 저장. 전달된 필드만 저장 파일에 override 로 기록하고(sparse), 나머지는
- * .env 를 계속 따르게 둔다. HH:mm 유효성을 엄격 검증·정규화(형식 오류 시 throw → 라우트 400).
- * 성공 시 최종(병합) 설정 반환.
+ * 현재 유효 스케줄. 저장 파일(잡 단위 override) 위에 .env 기본값을 병합.
+ * 파일이 깨졌거나 없어도 항상 유효한 값을 반환한다(스케줄러가 죽지 않게).
+ * 저장 파일에 없는 잡은 계속 .env 를 따른다. 호출마다 파일을 다시 읽는다(캐시 없음).
  */
-export function saveSchedule(patch: Partial<ScheduleSettings>): ScheduleSettings {
-  const stored = readStored();
+export function getSchedule(): ScheduleConfig {
+  const def = defaults();
+  const raw = readStored();
+  const out = {} as ScheduleConfig;
+  for (const id of SCHEDULE_JOB_IDS) out[id] = lenientJob(raw[id], id, def[id]);
+  return out;
+}
 
-  if (patch.events !== undefined) stored.events = strictMulti(patch.events, "events");
-  if (patch.news !== undefined) stored.news = strictMulti(patch.news, "news");
-  if (patch.youtube !== undefined) stored.youtube = strictMulti(patch.youtube, "youtube");
-  if (patch.stockKr !== undefined) stored.stockKr = strictMulti(patch.stockKr, "stockKr");
-  if (patch.stockUs !== undefined) stored.stockUs = strictMulti(patch.stockUs, "stockUs");
-  if (patch.stockPulse !== undefined)
-    stored.stockPulse = strictMulti(patch.stockPulse, "stockPulse");
+/** 정규화된 두 스케줄이 같은가(키 순서가 같은 정규형이라 직렬화 비교로 충분하다). */
+function sameJob(a: JobSchedule, b: JobSchedule): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * 잡 단위 전체 교체 저장. 전달된 잡만 저장 파일에 override 로 기록하고(sparse), 나머지는
+ * 그대로 둔다(v1 배열로 남아 있는 잡도 손대지 않는다 — 읽기가 호환한다).
+ *
+ * 쓰기는 엄격하다: 모르는 잡 이름·형식 오류·제약 위반이면 **아무것도 쓰지 않고** throw
+ * (라우트가 400 으로 돌려준다). v1 배열이 와도 매일 스케줄로 받아 준다.
+ * 정규화 결과가 .env 기본값과 같으면 override 를 지운다 — 화면의 '기본값으로 되돌리기'가
+ * 기본값을 그대로 PUT 하면, 그 잡은 다시 .env 를 따르게 된다.
+ *
+ * @returns 최종(병합) 스케줄
+ */
+export function saveSchedule(patch: Partial<ScheduleConfig>, now: Date = new Date()): ScheduleConfig {
+  if (!isPlainObject(patch)) {
+    throw new Error("스케줄 변경 내용은 { 잡 이름: 스케줄 } 형식의 객체여야 합니다.");
+  }
+  const unknownKeys = Object.keys(patch).filter(
+    (k) => !(SCHEDULE_JOB_IDS as readonly string[]).includes(k)
+  );
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `알 수 없는 스케줄 항목: ${unknownKeys.join(", ")} (가능: ${SCHEDULE_JOB_IDS.join(", ")})`
+    );
+  }
+
+  // 전부 검증한 뒤에 쓴다 — 두 번째 잡에서 실패하면 첫 번째 잡도 저장되지 않는다.
+  const normalized: Partial<ScheduleConfig> = {};
+  for (const id of SCHEDULE_JOB_IDS) {
+    const v = (patch as Record<string, unknown>)[id];
+    if (v !== undefined) normalized[id] = normalizeJobSchedule(v, id, now);
+  }
+
+  const def = defaults();
+  const stored = readStored();
+  for (const [id, job] of Object.entries(normalized) as [ScheduleJobId, JobSchedule][]) {
+    if (sameJob(job, def[id])) delete stored[id];
+    else stored[id] = job;
+  }
 
   fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
   fs.writeFileSync(STORE_PATH, JSON.stringify(stored, null, 2), "utf8");
   return getSchedule();
+}
+
+/** GET/PUT /api/schedule 응답. next 는 로컬 오프셋 ISO, 꺼진 잡은 null. */
+export function getScheduleResponse(now: Date = new Date()): ScheduleResponse {
+  const schedule = getSchedule();
+  const next = {} as Record<ScheduleJobId, string | null>;
+  for (const id of SCHEDULE_JOB_IDS) {
+    const at = nextOccurrence(schedule[id], now);
+    next[id] = at ? toLocalIso(at) : null;
+  }
+  return { schedule, defaults: defaults(), rules: SCHEDULE_RULES, next };
 }

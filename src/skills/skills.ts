@@ -22,7 +22,9 @@ import {
 import { pruneDeadLinks, type PruneResult } from "./verify.ts";
 import { attachAccess, scanRepos, type RepoScan } from "./scan.ts";
 import { sendSkillsEmail, sendSkillsIMessage } from "../notify/skills-email.ts";
-import { SKILLS_CYCLE_HOUR, SKILLS_CYCLE_WEEKDAY } from "../../shared/skills.ts";
+import { getSchedule } from "../scheduler/schedule-store.ts";
+import { lastOccurrence, nextOccurrence } from "../../shared/schedule.ts";
+import type { JobSchedule } from "../../shared/types.ts";
 import type { SkillRepo, SkillsSnapshot } from "../../shared/skills.ts";
 
 /**
@@ -165,42 +167,60 @@ export function getSkillsLastAttempt(): { ok: boolean; at: string; source: strin
   return deriveSkillsAttempt(getSkillsSnapshot());
 }
 
-// ── 주간 경계 (스케줄러 catch-up 판정) ────────────────────────────────────────
+// ── 회차 경계 (스케줄러 catch-up 판정) ────────────────────────────────────────
 //
-// 로또 사이클(src/lotto/cycle.ts)의 lastCycleBoundary 와 같은 계산이다. cron 식과 경계 계산이
-// **같은 상수**(shared/skills.ts)를 보게 묶어 둔다 — 어긋나면 "cron 은 09:00 에 도는데 경계는
-// 10:00 로 계산"되어 매 틱마다 보충이 돌거나 영영 안 돈다.
+// 스케줄 v2 이후 회차 시각은 `getSchedule().skills`(기본 매주 월요일 09:00)가 정본이다. 예전에는
+// cron 식과 경계 계산이 shared/skills.ts 의 SKILLS_CYCLE_* 상수를 같이 봤는데, 이제는 스케줄러의
+// cron 게이트(isDueDate)와 이 경계(lastOccurrence)가 **같은 스케줄 값**을 본다 — 어긋나면
+// "cron 은 09:00 에 도는데 경계는 10:00 로 계산"되어 매 틱마다 보충이 돌거나 영영 안 돈다.
 
-/** 직전 회차 시각(로컬 월요일 09:00) 경계. '놓친 실행'을 판정하는 기준선이다. */
-export function lastSkillsCycleBoundary(now: Date = new Date()): Date {
-  const d = new Date(now);
-  d.setHours(SKILLS_CYCLE_HOUR, 0, 0, 0);
-  d.setDate(d.getDate() - ((d.getDay() - SKILLS_CYCLE_WEEKDAY + 7) % 7));
-  // 오늘이 그 요일이지만 아직 시각 전이면 한 주 전이 직전 경계다.
-  if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7);
-  return d;
-}
-
-/** 다음 자동 실행 예정 시각. 화면이 "다음 갱신"으로 보여준다. */
-export function nextSkillsCycleAt(now: Date = new Date()): Date {
-  const d = lastSkillsCycleBoundary(now);
-  d.setDate(d.getDate() + 7);
-  return d;
+/**
+ * 경계 계산용 스케줄. **켜기/끄기는 무시한다** — 꺼져 있어도 '이번 회차가 언제부터인가'는
+ * 정의돼야 한다(꺼짐의 의미는 '자동으로 돌지 않음'이고, 보충을 막는 것은 스케줄러의 몫이다).
+ */
+function boundaryJob(job: JobSchedule): JobSchedule {
+  return { ...job, enabled: true };
 }
 
 /**
- * 이번 주 회차가 **성공적으로** 커버돼 있는지.
+ * 직전 회차 시각 경계(기본: 로컬 월요일 09:00). '놓친 실행'을 판정하는 기준선이다.
+ * 유효한 스케줄이면 400일 안에 반드시 걸리므로 null 은 나오지 않지만, 만에 하나면 epoch 로
+ * 접는다(= 무엇이든 커버로 본다 — 매 틱 20분짜리 보충이 도는 쪽보다 안전하다).
+ */
+export function lastSkillsCycleBoundary(
+  now: Date = new Date(),
+  job: JobSchedule = getSchedule().skills
+): Date {
+  return lastOccurrence(boundaryJob(job), now) ?? new Date(0);
+}
+
+/** 다음 자동 실행 예정 시각. 화면이 "다음 갱신"으로 보여준다. */
+export function nextSkillsCycleAt(
+  now: Date = new Date(),
+  job: JobSchedule = getSchedule().skills
+): Date {
+  return nextOccurrence(boundaryJob(job), now) ?? new Date(0);
+}
+
+/**
+ * occurrence(예정 시각) 이후의 회차가 **성공적으로** 커버돼 있는지(계약 §1.3 — 정상 결과의
+ * updatedAt ≥ occurrence).
  *
  * ⚠️ 날짜만 비교하지 않는다. 실패 스냅샷(source="error")이 이번 주 날짜를 달고 있으면 날짜만
  *    보는 게이트는 그걸 커버로 오인해 그 주 재시도를 통째로 봉인한다(뉴스 탭 실측 사고).
- *    보호가 걸린 회차는 updatedAt 이 지난주 것이라 여기서 자연히 '미커버'로 잡히고,
+ *    보호가 걸린 회차는 updatedAt 이 지난 회차 것이라 여기서 자연히 '미커버'로 잡히고,
  *    무한 재시도는 스케줄러의 백오프가 막는다.
  */
-export function skillsCoveredThisWeek(now: Date = new Date()): boolean {
+export function skillsCoveredSince(occurrence: Date): boolean {
   const snap = getSkillsSnapshot();
   if (!isSkillsSuccess(snap)) return false;
   const at = new Date(snap!.updatedAt).getTime();
-  return Number.isFinite(at) && at >= lastSkillsCycleBoundary(now).getTime();
+  return Number.isFinite(at) && at >= occurrence.getTime();
+}
+
+/** 이번 회차(직전 경계 이후)가 성공적으로 커버돼 있는지. */
+export function skillsCoveredThisWeek(now: Date = new Date()): boolean {
+  return skillsCoveredSince(lastSkillsCycleBoundary(now));
 }
 
 // ── 스냅샷 보호 ──────────────────────────────────────────────────────────────

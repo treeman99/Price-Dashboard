@@ -99,7 +99,7 @@ export interface StockSlotRoleDecision {
 /**
  * 이 런의 역할을 확정한다. 반드시 **런 시작 시점에 확정된 슬롯 문자열**을 넘길 것.
  *
- * @param times 해당 시장의 전체 슬롯 목록(getSchedule()). 분리 활성 게이트 판정에 쓴다.
+ * @param times 해당 시장의 전체 슬롯 목록(getSchedule().stockKr/stockUs 의 .times). 분리 활성 게이트 판정에 쓴다.
  */
 export function stockSlotRoleDetail(
   market: StockMarket,
