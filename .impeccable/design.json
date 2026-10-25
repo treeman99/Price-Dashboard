@@ -1,0 +1,601 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-25T12:44:14.511Z",
+  "title": "Design System: Daily Dashboard",
+  "extensions": {
+    "colorMeta": {
+      "press-ink": {
+        "role": "primary",
+        "displayName": "윤전 잉크",
+        "canonical": "hsl(45 8% 10%)",
+        "oklch": "oklch(22.0% 0.006 91.6)",
+        "tonalRamp": [
+          "oklch(15% 0.006 91.6)",
+          "oklch(26% 0.006 91.6)",
+          "oklch(37% 0.006 91.6)",
+          "oklch(48% 0.006 91.6)",
+          "oklch(60% 0.006 91.6)",
+          "oklch(72% 0.006 91.6)",
+          "oklch(84% 0.006 91.6)",
+          "oklch(95% 0.006 91.6)"
+        ]
+      },
+      "newsprint": {
+        "role": "neutral",
+        "displayName": "신문지",
+        "canonical": "hsl(45 29% 95%)",
+        "oklch": "oklch(96.7% 0.008 91.5)",
+        "tonalRamp": [
+          "oklch(15% 0.008 91.5)",
+          "oklch(26% 0.008 91.5)",
+          "oklch(37% 0.008 91.5)",
+          "oklch(48% 0.008 91.5)",
+          "oklch(60% 0.008 91.5)",
+          "oklch(72% 0.008 91.5)",
+          "oklch(84% 0.008 91.5)",
+          "oklch(95% 0.008 91.5)"
+        ]
+      },
+      "sheet": {
+        "role": "neutral",
+        "displayName": "낱장",
+        "canonical": "hsl(48 33% 99%)",
+        "oklch": "oklch(99.4% 0.002 95.1)",
+        "tonalRamp": [
+          "oklch(15% 0.002 95.1)",
+          "oklch(26% 0.002 95.1)",
+          "oklch(37% 0.002 95.1)",
+          "oklch(48% 0.002 95.1)",
+          "oklch(60% 0.002 95.1)",
+          "oklch(72% 0.002 95.1)",
+          "oklch(84% 0.002 95.1)",
+          "oklch(95% 0.002 95.1)"
+        ]
+      },
+      "sunken": {
+        "role": "neutral",
+        "displayName": "눌린 바탕",
+        "canonical": "hsl(43 22% 91%)",
+        "oklch": "oklch(93.8% 0.010 88.9)",
+        "tonalRamp": [
+          "oklch(15% 0.010 88.9)",
+          "oklch(26% 0.010 88.9)",
+          "oklch(37% 0.010 88.9)",
+          "oklch(48% 0.010 88.9)",
+          "oklch(60% 0.010 88.9)",
+          "oklch(72% 0.010 88.9)",
+          "oklch(84% 0.010 88.9)",
+          "oklch(95% 0.010 88.9)"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "흐린 잉크",
+        "canonical": "hsl(40 6% 40%)",
+        "oklch": "oklch(51.9% 0.014 84.6)",
+        "tonalRamp": [
+          "oklch(15% 0.014 84.6)",
+          "oklch(26% 0.014 84.6)",
+          "oklch(37% 0.014 84.6)",
+          "oklch(48% 0.014 84.6)",
+          "oklch(60% 0.014 84.6)",
+          "oklch(72% 0.014 84.6)",
+          "oklch(84% 0.014 84.6)",
+          "oklch(95% 0.014 84.6)"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "헤어라인",
+        "canonical": "hsl(43 18% 84%)",
+        "oklch": "oklch(88.7% 0.015 88.9)",
+        "tonalRamp": [
+          "oklch(15% 0.015 88.9)",
+          "oklch(26% 0.015 88.9)",
+          "oklch(37% 0.015 88.9)",
+          "oklch(48% 0.015 88.9)",
+          "oklch(60% 0.015 88.9)",
+          "oklch(72% 0.015 88.9)",
+          "oklch(84% 0.015 88.9)",
+          "oklch(95% 0.015 88.9)"
+        ]
+      },
+      "field-stroke": {
+        "role": "neutral",
+        "displayName": "입력 테두리",
+        "canonical": "hsl(43 14% 76%)",
+        "oklch": "oklch(82.6% 0.018 88.9)",
+        "tonalRamp": [
+          "oklch(15% 0.018 88.9)",
+          "oklch(26% 0.018 88.9)",
+          "oklch(37% 0.018 88.9)",
+          "oklch(48% 0.018 88.9)",
+          "oklch(60% 0.018 88.9)",
+          "oklch(72% 0.018 88.9)",
+          "oklch(84% 0.018 88.9)",
+          "oklch(95% 0.018 88.9)"
+        ]
+      },
+      "tab-news": {
+        "role": "secondary",
+        "displayName": "탭 고유색 · 뉴스",
+        "canonical": "#d97706",
+        "oklch": "oklch(66.6% 0.157 58.3)",
+        "tonalRamp": [
+          "oklch(15% 0.087 58.3)",
+          "oklch(26% 0.157 58.3)",
+          "oklch(37% 0.157 58.3)",
+          "oklch(48% 0.157 58.3)",
+          "oklch(60% 0.157 58.3)",
+          "oklch(72% 0.157 58.3)",
+          "oklch(84% 0.157 58.3)",
+          "oklch(95% 0.087 58.3)"
+        ]
+      },
+      "tab-youtube": {
+        "role": "secondary",
+        "displayName": "탭 고유색 · 유튜브 소식",
+        "canonical": "#dc2626",
+        "oklch": "oklch(57.7% 0.215 27.3)",
+        "tonalRamp": [
+          "oklch(15% 0.105 27.3)",
+          "oklch(26% 0.200 27.3)",
+          "oklch(37% 0.200 27.3)",
+          "oklch(48% 0.200 27.3)",
+          "oklch(60% 0.200 27.3)",
+          "oklch(72% 0.200 27.3)",
+          "oklch(84% 0.200 27.3)",
+          "oklch(95% 0.105 27.3)"
+        ]
+      },
+      "tab-skills": {
+        "role": "secondary",
+        "displayName": "탭 고유색 · 스킬 랭킹",
+        "canonical": "#2563eb",
+        "oklch": "oklch(54.6% 0.215 262.9)",
+        "tonalRamp": [
+          "oklch(15% 0.105 262.9)",
+          "oklch(26% 0.200 262.9)",
+          "oklch(37% 0.200 262.9)",
+          "oklch(48% 0.200 262.9)",
+          "oklch(60% 0.200 262.9)",
+          "oklch(72% 0.200 262.9)",
+          "oklch(84% 0.200 262.9)",
+          "oklch(95% 0.105 262.9)"
+        ]
+      },
+      "tab-stock": {
+        "role": "secondary",
+        "displayName": "탭 고유색 · 증시",
+        "canonical": "#059669",
+        "oklch": "oklch(59.6% 0.127 163.2)",
+        "tonalRamp": [
+          "oklch(15% 0.078 163.2)",
+          "oklch(26% 0.127 163.2)",
+          "oklch(37% 0.127 163.2)",
+          "oklch(48% 0.127 163.2)",
+          "oklch(60% 0.127 163.2)",
+          "oklch(72% 0.127 163.2)",
+          "oklch(84% 0.127 163.2)",
+          "oklch(95% 0.078 163.2)"
+        ]
+      },
+      "tab-events": {
+        "role": "secondary",
+        "displayName": "탭 고유색 · 팝업·전시",
+        "canonical": "#db2777",
+        "oklch": "oklch(59.2% 0.218 0.6)",
+        "tonalRamp": [
+          "oklch(15% 0.105 0.6)",
+          "oklch(26% 0.200 0.6)",
+          "oklch(37% 0.200 0.6)",
+          "oklch(48% 0.200 0.6)",
+          "oklch(60% 0.200 0.6)",
+          "oklch(72% 0.200 0.6)",
+          "oklch(84% 0.200 0.6)",
+          "oklch(95% 0.105 0.6)"
+        ]
+      },
+      "tab-holdings": {
+        "role": "secondary",
+        "displayName": "탭 고유색 · 보유 주식",
+        "canonical": "#0d9488",
+        "oklch": "oklch(60.0% 0.104 184.7)",
+        "tonalRamp": [
+          "oklch(15% 0.071 184.7)",
+          "oklch(26% 0.104 184.7)",
+          "oklch(37% 0.104 184.7)",
+          "oklch(48% 0.104 184.7)",
+          "oklch(60% 0.104 184.7)",
+          "oklch(72% 0.104 184.7)",
+          "oklch(84% 0.104 184.7)",
+          "oklch(95% 0.071 184.7)"
+        ]
+      },
+      "tab-lotto": {
+        "role": "secondary",
+        "displayName": "탭 고유색 · 로또",
+        "canonical": "#7c3aed",
+        "oklch": "oklch(54.1% 0.247 293.0)",
+        "tonalRamp": [
+          "oklch(15% 0.114 293.0)",
+          "oklch(26% 0.200 293.0)",
+          "oklch(37% 0.200 293.0)",
+          "oklch(48% 0.200 293.0)",
+          "oklch(60% 0.200 293.0)",
+          "oklch(72% 0.200 293.0)",
+          "oklch(84% 0.200 293.0)",
+          "oklch(95% 0.114 293.0)"
+        ]
+      },
+      "tone-error": {
+        "role": "tertiary",
+        "displayName": "신호색 · 붉은 벽돌(오류)",
+        "canonical": "hsl(4 76% 40%)",
+        "oklch": "oklch(49.9% 0.182 29.4)",
+        "tonalRamp": [
+          "oklch(15% 0.095 29.4)",
+          "oklch(26% 0.182 29.4)",
+          "oklch(37% 0.182 29.4)",
+          "oklch(48% 0.182 29.4)",
+          "oklch(60% 0.182 29.4)",
+          "oklch(72% 0.182 29.4)",
+          "oklch(84% 0.182 29.4)",
+          "oklch(95% 0.095 29.4)"
+        ]
+      },
+      "tone-warn": {
+        "role": "tertiary",
+        "displayName": "신호색 · 짙은 호박(경고)",
+        "canonical": "hsl(28 92% 36%)",
+        "oklch": "oklch(55.5% 0.140 52.0)",
+        "tonalRamp": [
+          "oklch(15% 0.082 52.0)",
+          "oklch(26% 0.140 52.0)",
+          "oklch(37% 0.140 52.0)",
+          "oklch(48% 0.140 52.0)",
+          "oklch(60% 0.140 52.0)",
+          "oklch(72% 0.140 52.0)",
+          "oklch(84% 0.140 52.0)",
+          "oklch(95% 0.082 52.0)"
+        ]
+      },
+      "tone-info": {
+        "role": "tertiary",
+        "displayName": "신호색 · 남청(정보)",
+        "canonical": "hsl(216 78% 45%)",
+        "oklch": "oklch(51.4% 0.181 259.3)",
+        "tonalRamp": [
+          "oklch(15% 0.094 259.3)",
+          "oklch(26% 0.181 259.3)",
+          "oklch(37% 0.181 259.3)",
+          "oklch(48% 0.181 259.3)",
+          "oklch(60% 0.181 259.3)",
+          "oklch(72% 0.181 259.3)",
+          "oklch(84% 0.181 259.3)",
+          "oklch(95% 0.094 259.3)"
+        ]
+      },
+      "tone-success": {
+        "role": "tertiary",
+        "displayName": "신호색 · 짙은 녹색(성공)",
+        "canonical": "hsl(158 89% 24%)",
+        "oklch": "oklch(49.3% 0.109 160.4)",
+        "tonalRamp": [
+          "oklch(15% 0.073 160.4)",
+          "oklch(26% 0.109 160.4)",
+          "oklch(37% 0.109 160.4)",
+          "oklch(48% 0.109 160.4)",
+          "oklch(60% 0.109 160.4)",
+          "oklch(72% 0.109 160.4)",
+          "oklch(84% 0.109 160.4)",
+          "oklch(95% 0.073 160.4)"
+        ]
+      },
+      "market-up": {
+        "role": "tertiary",
+        "displayName": "증시 상승 빨강",
+        "canonical": "#c23224",
+        "oklch": "oklch(53.9% 0.183 29.8)",
+        "tonalRamp": [
+          "oklch(15% 0.095 29.8)",
+          "oklch(26% 0.183 29.8)",
+          "oklch(37% 0.183 29.8)",
+          "oklch(48% 0.183 29.8)",
+          "oklch(60% 0.183 29.8)",
+          "oklch(72% 0.183 29.8)",
+          "oklch(84% 0.183 29.8)",
+          "oklch(95% 0.095 29.8)"
+        ]
+      },
+      "market-down": {
+        "role": "tertiary",
+        "displayName": "증시 하락 파랑",
+        "canonical": "#1f5fd6",
+        "oklch": "oklch(52.0% 0.194 261.5)",
+        "tonalRamp": [
+          "oklch(15% 0.098 261.5)",
+          "oklch(26% 0.194 261.5)",
+          "oklch(37% 0.194 261.5)",
+          "oklch(48% 0.194 261.5)",
+          "oklch(60% 0.194 261.5)",
+          "oklch(72% 0.194 261.5)",
+          "oklch(84% 0.194 261.5)",
+          "oklch(95% 0.098 261.5)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "지수·종가 같은 큰 숫자 헤드라인(증시 탭). 종목 띠에서는 1.75rem."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "섹션 제목. 같은 계열로 제호(1.35rem 700)와 다이얼로그 제목(18px 600)."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "행 제목과 탭 이름. 탭은 평소 500, 선택 시 600."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "페이지 기본 글씨. word-break: keep-all."
+      },
+      "body-sm": {
+        "displayName": "Body Small",
+        "purpose": "표 셀·안내 띠·요약(요약은 잉크 80%)."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "출처·날짜·건수·툴바 메타(12.5~13px 흐린 잉크)."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "표 머리. StatusTag 11px 600 이 시스템 최소 크기."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "종목코드·시각·순위·회차·건수·축 눈금(11~13px)."
+      }
+    },
+    "shadows": [
+      {
+        "name": "floating-sheet",
+        "value": "0 24px 60px -20px rgba(27,26,23,0.35)",
+        "purpose": "다이얼로그. 뒤에 잉크 40% 덮개 + 1px 블러."
+      },
+      {
+        "name": "toast",
+        "value": "0 12px 32px -12px rgba(27,26,23,0.35)",
+        "purpose": "화면 아래 가운데 토스트."
+      },
+      {
+        "name": "menu",
+        "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        "purpose": "버튼에서 펼쳐지는 작은 선택 목록(Tailwind shadow-lg)."
+      },
+      {
+        "name": "tooltip",
+        "value": "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
+        "purpose": "아이콘 동작의 즉시 라벨(Tailwind shadow-md)."
+      },
+      {
+        "name": "switch-thumb",
+        "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        "purpose": "토글 손잡이(Tailwind shadow-sm)."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-standard",
+        "value": "cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "색·투명도 전환 기본 곡선(Tailwind 기본)."
+      },
+      {
+        "name": "duration-state",
+        "value": "150ms",
+        "purpose": "hover·focus 색 전환, 툴팁 등장."
+      },
+      {
+        "name": "duration-reveal",
+        "value": "200ms",
+        "purpose": "'맨 위로' 버튼이 12px 아래에서 떠오르는 등장."
+      },
+      {
+        "name": "duration-tab",
+        "value": "300ms",
+        "purpose": "헤더 3px 띠·'맨 위로' 띠가 활성 탭 색으로 바뀌는 전환."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      },
+      {
+        "name": "2xl",
+        "value": "1536px"
+      },
+      {
+        "name": "header-inline-tabs",
+        "value": "1480px"
+      },
+      {
+        "name": "four-columns",
+        "value": "2200px"
+      },
+      {
+        "name": "max-content",
+        "value": "2400px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Solid Button",
+      "kind": "button",
+      "refersTo": "button-solid",
+      "description": "잉크로 채운 단색 버튼. 지면에서 가장 무거운 동작 하나에만.",
+      "html": "<button class=\"ds-btn-solid\">저장</button>",
+      "css": ".ds-btn-solid { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 4px; font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 14px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 150ms cubic-bezier(0.4,0,0.2,1), border-color 150ms cubic-bezier(0.4,0,0.2,1), color 150ms cubic-bezier(0.4,0,0.2,1); border: 0; background: hsl(var(--foreground, 45 8% 10%)); color: hsl(var(--primary-foreground, 45 29% 97%)); } .ds-btn-solid:hover { background: hsl(var(--foreground, 45 8% 10%) / 0.9); } .ds-btn-solid:focus-visible { outline: none; box-shadow: 0 0 0 1px hsl(var(--background, 45 29% 95%)), 0 0 0 3px hsl(var(--foreground, 45 8% 10%)); }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "탭 툴바 동작('지금 갱신', '카테고리 추가')의 기본형.",
+      "html": "<button class=\"ds-btn-outline\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5\"/><path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\"/><path d=\"M8 16H3v5\"/></svg>지금 갱신</button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 4px; font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 14px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 150ms cubic-bezier(0.4,0,0.2,1), border-color 150ms cubic-bezier(0.4,0,0.2,1), color 150ms cubic-bezier(0.4,0,0.2,1); border: 1px solid hsl(var(--input, 43 14% 76%)); background: transparent; color: hsl(var(--foreground, 45 8% 10%)); } .ds-btn-outline svg { width: 16px; height: 16px; flex-shrink: 0; } .ds-btn-outline:hover { border-color: hsl(var(--foreground, 45 8% 10%) / 0.4); background: hsl(var(--muted, 43 22% 91%)); } .ds-btn-outline:focus-visible { outline: none; box-shadow: 0 0 0 1px hsl(var(--background, 45 29% 95%)), 0 0 0 3px hsl(var(--foreground, 45 8% 10%)); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "헤더 전역 컨트롤처럼 물러나 있어야 하는 보조 동작.",
+      "html": "<button class=\"ds-btn-ghost\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14\"/><path d=\"M12 5v14\"/></svg>종목 추가</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 4px; font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 14px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 150ms cubic-bezier(0.4,0,0.2,1), border-color 150ms cubic-bezier(0.4,0,0.2,1), color 150ms cubic-bezier(0.4,0,0.2,1); border: 0; background: transparent; color: hsl(var(--muted-foreground, 40 6% 40%)); } .ds-btn-ghost svg { width: 16px; height: 16px; flex-shrink: 0; } .ds-btn-ghost:hover { background: hsl(var(--muted, 43 22% 91%)); color: hsl(var(--foreground, 45 8% 10%)); } .ds-btn-ghost:focus-visible { outline: none; box-shadow: 0 0 0 1px hsl(var(--background, 45 29% 95%)), 0 0 0 3px hsl(var(--foreground, 45 8% 10%)); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "낱장 바탕 입력창. 포커스는 2px 잉크 링.",
+      "html": "<input class=\"ds-input\" placeholder=\"종목코드 또는 이름\" />",
+      "css": ".ds-input { display: flex; width: 260px; height: 36px; padding: 4px 12px; border: 1px solid hsl(var(--input, 43 14% 76%)); border-radius: 4px; background: hsl(var(--card, 48 33% 99%)); color: hsl(var(--foreground, 45 8% 10%)); font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 14px; transition: box-shadow 150ms cubic-bezier(0.4,0,0.2,1); } .ds-input::placeholder { color: hsl(var(--muted-foreground, 40 6% 40%)); } .ds-input:focus-visible { outline: none; box-shadow: 0 0 0 2px hsl(var(--foreground, 45 8% 10%)); }"
+    },
+    {
+      "name": "Masthead & Tabs",
+      "kind": "nav",
+      "refersTo": "nav-tab",
+      "description": "제호 + 게시판 탭. 맨 위 3px 탭 색 띠, 선택 탭은 잉크 semibold + 2px 탭 색 밑줄.",
+      "html": "<header class=\"ds-nav\"><div class=\"ds-nav-band\"></div><div class=\"ds-nav-row\"><span class=\"ds-nav-title\">Daily Dashboard</span><span class=\"ds-nav-date\">10월 25일 일요일</span><nav class=\"ds-nav-tabs\" role=\"tablist\"><button class=\"ds-nav-tab\" role=\"tab\" aria-selected=\"true\"><span class=\"ds-nav-sq\" style=\"background:#d97706\"></span>뉴스</button><button class=\"ds-nav-tab\" role=\"tab\" aria-selected=\"false\"><span class=\"ds-nav-sq\" style=\"background:#dc2626\"></span>유튜브 소식</button><button class=\"ds-nav-tab\" role=\"tab\" aria-selected=\"false\"><span class=\"ds-nav-sq\" style=\"background:#059669\"></span>증시</button></nav></div></header>",
+      "css": ".ds-nav { background: hsl(var(--background, 45 29% 95%) / 0.95); border-bottom: 1px solid hsl(var(--foreground, 45 8% 10%) / 0.15); font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; } .ds-nav-band { height: 3px; background: #d97706; } .ds-nav-row { display: flex; align-items: stretch; gap: 32px; padding: 0 20px; } .ds-nav-title { align-self: center; font-family: Hahmlet, 'Apple Myungjo', serif; font-size: 1.35rem; font-weight: 700; line-height: 1; letter-spacing: -0.02em; color: hsl(var(--foreground, 45 8% 10%)); } .ds-nav-date { align-self: center; margin-left: -20px; font-size: 13px; color: hsl(var(--muted-foreground, 40 6% 40%)); font-variant-numeric: tabular-nums; } .ds-nav-tabs { display: flex; gap: 4px; } .ds-nav-tab { position: relative; display: inline-flex; align-items: center; gap: 8px; padding: 12px; border: 0; background: transparent; font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 15px; font-weight: 500; color: hsl(var(--muted-foreground, 40 6% 40%)); cursor: pointer; transition: color 150ms cubic-bezier(0.4,0,0.2,1); } .ds-nav-tab:hover { color: hsl(var(--foreground, 45 8% 10%)); } .ds-nav-tab:focus-visible { outline: none; box-shadow: 0 0 0 1px hsl(var(--background, 45 29% 95%)), 0 0 0 3px hsl(var(--foreground, 45 8% 10%)); } .ds-nav-sq { width: 8px; height: 8px; border-radius: 2px; opacity: 0.4; } .ds-nav-tab[aria-selected=\"true\"] { font-weight: 600; color: hsl(var(--foreground, 45 8% 10%)); } .ds-nav-tab[aria-selected=\"true\"] .ds-nav-sq { opacity: 1; } .ds-nav-tab[aria-selected=\"true\"]::after { content: \"\"; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; background: #d97706; }"
+    },
+    {
+      "name": "Segmented",
+      "kind": "chip",
+      "refersTo": "segmented-option",
+      "description": "탭 안의 보기 전환. 선택된 칸만 잉크로 채운다.",
+      "html": "<div class=\"ds-seg\" role=\"tablist\"><button class=\"ds-seg-opt\" role=\"tab\" aria-selected=\"true\">한국장</button><button class=\"ds-seg-opt\" role=\"tab\" aria-selected=\"false\">미국장</button></div>",
+      "css": ".ds-seg { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid hsl(var(--foreground, 45 8% 10%) / 0.2); border-radius: 4px; } .ds-seg-opt { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border: 0; border-radius: 3px; background: transparent; color: hsl(var(--muted-foreground, 40 6% 40%)); font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 150ms cubic-bezier(0.4,0,0.2,1), color 150ms cubic-bezier(0.4,0,0.2,1); } .ds-seg-opt:hover { background: hsl(var(--muted, 43 22% 91%)); color: hsl(var(--foreground, 45 8% 10%)); } .ds-seg-opt:focus-visible { outline: none; box-shadow: 0 0 0 1px hsl(var(--background, 45 29% 95%)), 0 0 0 3px hsl(var(--foreground, 45 8% 10%)); } .ds-seg-opt[aria-selected=\"true\"] { background: hsl(var(--foreground, 45 8% 10%)); color: hsl(var(--background, 45 29% 95%)); }"
+    },
+    {
+      "name": "Status Tag",
+      "kind": "chip",
+      "refersTo": "status-tag",
+      "description": "색을 채우지 않은 짧은 상태 표시. 신호색 글씨 + 얇은 테두리.",
+      "html": "<span class=\"ds-tag ds-tag-new\">신규</span> <span class=\"ds-tag ds-tag-urgent\">종료임박</span> <span class=\"ds-tag ds-tag-soon\">오픈예정</span> <span class=\"ds-tag ds-tag-neutral\">상시</span>",
+      "css": ".ds-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border: 1px solid; border-radius: 3px; font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 11px; font-weight: 600; line-height: 1; white-space: nowrap; } .ds-tag-new { color: hsl(var(--tone-success, 158 89% 24%)); border-color: hsl(var(--tone-success, 158 89% 24%) / 0.4); } .ds-tag-urgent { color: hsl(var(--tone-error, 4 76% 40%)); border-color: hsl(var(--tone-error, 4 76% 40%) / 0.4); } .ds-tag-soon { color: hsl(var(--tone-info, 216 78% 45%)); border-color: hsl(var(--tone-info, 216 78% 45%) / 0.4); } .ds-tag-neutral { color: hsl(var(--muted-foreground, 40 6% 40%)); border-color: hsl(var(--foreground, 45 8% 10%) / 0.2); }"
+    },
+    {
+      "name": "Notice",
+      "kind": "custom",
+      "refersTo": "notice",
+      "description": "상자형 안내 대신 쓰는 안내 띠. 왼쪽 3px 신호색 선 + 옅은 바탕, 글씨는 잉크.",
+      "html": "<div class=\"ds-notice\" role=\"status\"><span class=\"ds-notice-icon\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 16v-4\"/><path d=\"M12 8h.01\"/></svg></span><div class=\"ds-notice-body\">2026-10-25 주말 휴장 — 다음 거래일 브리핑을 기다립니다.</div></div>",
+      "css": ".ds-notice { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-left: 3px solid hsl(var(--tone-info, 216 78% 45%)); background: hsl(var(--tone-info, 216 78% 45%) / 0.06); color: hsl(var(--foreground, 45 8% 10%)); font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 14px; line-height: 1.625; } .ds-notice-icon { margin-top: 3px; flex-shrink: 0; color: hsl(var(--tone-info, 216 78% 45%)); } .ds-notice-icon svg { width: 16px; height: 16px; display: block; } .ds-notice-body { min-width: 0; flex: 1; }"
+    },
+    {
+      "name": "Section with Table",
+      "kind": "custom",
+      "refersTo": "section-header",
+      "description": "서명 부품. 2px 잉크 괘선 + 명조 제목 + Mono 건수, 그 아래 헤어라인 표. 행 동작은 hover 때 또렷해진다.",
+      "html": "<section class=\"ds-sec\"><div class=\"ds-sec-head\"><h2 class=\"ds-sec-title\"><span class=\"ds-sec-acc\"></span>팝업스토어</h2><span class=\"ds-sec-count\">12</span><span class=\"ds-sec-note\">경기 등 서울 외</span></div><table class=\"ds-table\"><thead><tr><th>이름</th><th>장소</th><th class=\"ds-num\">남은 날</th><th></th></tr></thead><tbody><tr><td>가을 굿즈 팝업</td><td class=\"ds-muted\">성수</td><td class=\"ds-num\">3</td><td class=\"ds-act\"><button class=\"ds-icon-btn\" aria-label=\"삭제\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 6h18\"/><path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\"/><path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\"/><line x1=\"10\" x2=\"10\" y1=\"11\" y2=\"17\"/><line x1=\"14\" x2=\"14\" y1=\"11\" y2=\"17\"/></svg></button></td></tr><tr><td>북 페어 특별전 <a class=\"ds-link\" href=\"#\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/></svg>원문 보기</a></td><td class=\"ds-muted\">코엑스</td><td class=\"ds-num\">12</td><td class=\"ds-act\"><button class=\"ds-icon-btn\" aria-label=\"삭제\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 6h18\"/><path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\"/><path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\"/><line x1=\"10\" x2=\"10\" y1=\"11\" y2=\"17\"/><line x1=\"14\" x2=\"14\" y1=\"11\" y2=\"17\"/></svg></button></td></tr></tbody></table></section>",
+      "css": ".ds-sec { width: 560px; font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; color: hsl(var(--foreground, 45 8% 10%)); } .ds-sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; padding-top: 10px; border-top: 2px solid hsl(var(--foreground, 45 8% 10%)); } .ds-sec-title { display: flex; align-items: baseline; gap: 8px; margin: 0; font-family: Hahmlet, 'Apple Myungjo', serif; font-size: 1.3rem; font-weight: 600; line-height: 1.25; letter-spacing: -0.01em; } .ds-sec-acc { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: #db2777; transform: translateY(-0.1em); } .ds-sec-count { font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace; font-size: 13px; color: hsl(var(--muted-foreground, 40 6% 40%)); font-variant-numeric: tabular-nums; } .ds-sec-note { font-size: 13px; color: hsl(var(--muted-foreground, 40 6% 40%)); } .ds-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; } .ds-table th { padding: 4px 12px 8px; border-bottom: 1px solid hsl(var(--foreground, 45 8% 10%) / 0.8); font-size: 12px; font-weight: 500; color: hsl(var(--muted-foreground, 40 6% 40%)); white-space: nowrap; } .ds-table td { padding: 10px 12px; border-bottom: 1px solid hsl(var(--border, 43 18% 84%)); vertical-align: top; } .ds-table tbody tr { transition: background-color 150ms cubic-bezier(0.4,0,0.2,1); } .ds-table tbody tr:hover { background: hsl(var(--muted, 43 22% 91%) / 0.6); } .ds-num { text-align: right; font-variant-numeric: tabular-nums; } .ds-muted { color: hsl(var(--muted-foreground, 40 6% 40%)); } .ds-act { width: 1%; } .ds-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: hsl(var(--muted-foreground, 40 6% 40%) / 0.7); opacity: 0.4; cursor: pointer; transition: opacity 150ms cubic-bezier(0.4,0,0.2,1), background-color 150ms cubic-bezier(0.4,0,0.2,1), color 150ms cubic-bezier(0.4,0,0.2,1); } .ds-icon-btn svg { width: 16px; height: 16px; } .ds-table tr:hover .ds-icon-btn, .ds-icon-btn:focus-visible { opacity: 1; } .ds-icon-btn:hover { background: hsl(var(--muted, 43 22% 91%)); color: hsl(var(--tone-error, 4 76% 40%)); } .ds-icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px hsl(var(--foreground, 45 8% 10%)); } .ds-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12.5px; color: hsl(var(--muted-foreground, 40 6% 40%)); text-decoration: none; text-underline-offset: 3px; transition: color 150ms cubic-bezier(0.4,0,0.2,1); } .ds-link svg { width: 14px; height: 14px; } .ds-link:hover { color: hsl(var(--foreground, 45 8% 10%)); text-decoration: underline; }"
+    },
+    {
+      "name": "Lotto Ball",
+      "kind": "custom",
+      "refersTo": "lotto-ball",
+      "description": "Mono 숫자 원. 추천=탭 색 테두리, 적중=탭 색 채움, 빗나감=흐린 잉크, 보너스=호박.",
+      "html": "<span class=\"ds-ball ds-ball-pick\">6</span> <span class=\"ds-ball ds-ball-hit\">14</span> <span class=\"ds-ball ds-ball-miss\">27</span> <span class=\"ds-ball ds-ball-draw\">42</span> <span class=\"ds-ball ds-ball-bonus\">24</span>",
+      "css": ".ds-ball { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid; border-radius: 9999px; font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace; font-size: 12px; line-height: 1; font-variant-numeric: tabular-nums; } .ds-ball-pick { border-color: #7c3aed; color: #7c3aed; font-weight: 500; } .ds-ball-hit { border-color: #7c3aed; background: #7c3aed; color: #fff; font-weight: 600; } .ds-ball-miss { border-color: hsl(var(--foreground, 45 8% 10%) / 0.15); color: hsl(var(--muted-foreground, 40 6% 40%)); } .ds-ball-draw { border: 1.5px solid hsl(var(--foreground, 45 8% 10%)); color: hsl(var(--foreground, 45 8% 10%)); font-weight: 600; } .ds-ball-bonus { border: 1.5px solid hsl(var(--tone-warn, 28 92% 36%)); background: hsl(var(--tone-warn, 28 92% 36%) / 0.1); color: hsl(var(--tone-warn, 28 92% 36%)); font-weight: 600; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "조간 브리핑",
+    "overview": "이 화면은 아침 신문 한 면이다. 신문지 바탕에 윤전 잉크로 글씨와 괘선을 찍고, 정보는 상자에 담지 않고 괘선과 헤어라인으로 나눈다. 분위기는 **단정·정확·건조**하다. 사실을 먼저 전하고 감정 톤은 뺀다. 강조는 크기나 장식이 아니라 잉크의 농도(굵기, 회색 대 잉크색)로 한다. 색은 의미가 있을 때만 쓴다.\n\n밀도는 높다. 하루 중 수시로 들여다보는 화면이므로 한눈에 훑을 수 있어야 한다. 표, 행 목록, 다단 배치로 화면 폭(최대 2400px)을 끝까지 쓰고, 빈 칸이나 내부 스크롤 상자로 정보를 숨기지 않는다. 섹션은 위쪽 2px 잉크 괘선과 명조 제목 하나로 시작한다. 그 밖의 구분은 모두 1px 헤어라인이다.\n\n부품은 **조용하고 정확하게** 움직인다. 평소에는 회색 글씨와 얇은 선으로 물러나 있다가, 손이 닿으면(hover·focus) 잉크색으로 또렷해진다. 크기나 그림자가 바뀌는 효과는 없다.\n\n이 방향은 2026-10-24 리디자인에서 '기본 AI 템플릿 느낌'을 걷어 내며 확정했다. 그 리디자인이 명시적으로 버린 것은 다음과 같다. 항목마다 그림자 카드를 씌우는 것, 카드 왼쪽의 굵은 컬러 테두리, auto-fill 카드 그리드, 고정 높이 카드 안의 내부 스크롤, 제목 앞 이모지, 색을 채운 알약 배지, 색 상자 안내문, 하드코딩된 링크 색. 이 시스템은 **라이트 전용**이다.",
+    "keyCharacteristics": [
+      "신문지 바탕 + 윤전 잉크 글씨. 지면 위에는 그림자 없이 괘선과 헤어라인만 쓴다.",
+      "섹션 머리는 2px 잉크 괘선과 명조(Hahmlet) 제목이다.",
+      "본문은 IBM Plex Sans KR, 기계적인 값은 IBM Plex Mono와 tabular 숫자로 쓴다.",
+      "색은 탭 고유색, 신호색(오류·경고·정보·성공), 증시 상승·하락 세 가지 용도로만 쓴다.",
+      "모서리는 4px 이하로 각지게 한다. 동그라미는 로또 공과 점에만 쓴다.",
+      "행 동작은 평소 흐리게 있다가 hover·focus 때 또렷해진다."
+    ],
+    "rules": [
+      {
+        "name": "The Meaningful Color Rule",
+        "body": "색은 탭 고유색, 신호색, 증시 상승·하락 세 가지 용도로만 쓴다. 장식용 색 배경, 팔레트 직접 지정(`text-slate-500`, `bg-blue-50`), 하드코딩된 링크 색은 쓰지 않는다.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tab Color Footprint Rule",
+        "body": "탭 고유색은 작은 면적에만 칠한다: 헤더 맨 위 3px 띠, 활성 탭 2px 밑줄, 탭·섹션 앞 2px 모서리 사각형, 켜진 스위치, 로또 공, '맨 위로' 버튼 아래 3px 띠. 넓은 바탕을 칠하지 않는다. `--tab`은 hex 변수라 `/50` 같은 투명도 수식어가 붙지 않는다.",
+        "section": "colors"
+      },
+      {
+        "name": "The Light Only Rule",
+        "body": "이 시스템은 신문지 바탕 하나로 정의한다. `index.css`에 `.dark` 토큰이 남아 있지만 켜지는 곳이 없고 시스템의 일부가 아니다. 다크 변형이나 `dark:` 유틸리티를 만들지 않는다.",
+        "section": "colors"
+      },
+      {
+        "name": "The Serif Is For Headlines Rule",
+        "body": "명조는 제호, 섹션 제목, 다이얼로그 제목, 큰 숫자 헤드라인에만 쓴다. 본문·버튼·표에는 쓰지 않는다.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Numbers Rule",
+        "body": "숫자가 세로로 줄을 서는 곳(가격, 건수, 날짜, 표의 숫자 열)에는 `.num`(tabular-nums)을 붙이고 오른쪽 정렬한다.",
+        "section": "typography"
+      },
+      {
+        "name": "The 11px Floor Rule",
+        "body": "11px 미만의 글씨는 쓰지 않는다.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Paper Rule",
+        "body": "지면 위의 요소(행, 섹션, 표, 버튼)에는 그림자가 없다. hover는 눌린 바탕(60%)을 까는 것으로만 표시하고, 크기·그림자·위치를 바꾸지 않는다.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Square Corners Rule",
+        "body": "모서리는 4px 이하로 둔다(다이얼로그만 6px). `rounded-full`은 숫자 공·점·아바타 전용이다.",
+        "section": "shapes"
+      },
+      {
+        "name": "The Rule, Not Box Rule",
+        "body": "영역 구분은 괘선과 헤어라인으로 한다. 섹션이나 행을 테두리 상자로 감싸지 않는다.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "**Do** 섹션을 SectionHeader의 2px 잉크 괘선 하나로 시작하고, 그 안의 행은 1px 헤어라인(`divide-y`)으로 나눈다.",
+      "**Do** 같은 속성을 가진 항목은 `.dtable` 표로 만들고, 숫자 열에 `.num` + 오른쪽 정렬을 붙인다.",
+      "**Do** 색은 토큰으로만 쓴다: `text-muted-foreground`, `bg-muted`, `tone-*`, `text-tab`, `text-up`/`text-stock-down`.",
+      "**Do** 안내는 Notice, 짧은 상태는 StatusTag, 보조 링크는 TextLink, 아이콘 동작은 IconAction, 보기 전환은 Segmented로 쓴다.",
+      "**Do** 행 동작은 평소 투명도 40%로 두고, 행 hover·focus-within 때 100%로 올린다.",
+      "**Do** 다단 배치를 고르기 전에 최대 분량 데이터로 한 단의 높이를 재 본다.",
+      "**Do** 1680×1050과 1280×800 두 크기에서 렌더링을 확인한다."
+    ],
+    "donts": [
+      "**Don't** 항목마다 카드 상자 + 그림자 + hover 그림자를 씌우지 않는다. `ui/card.tsx`는 남아 있지만 이 시스템에서 쓰지 않는다.",
+      "**Don't** 카드 왼쪽에 굵은 컬러 테두리(`border-l-4` + 색)를 두지 않는다. 색은 제목 앞 작은 사각형 하나로만 쓴다.",
+      "**Don't** `repeat(auto-fill, minmax(300px, 1fr))` 카드 그리드로 짧은 목록을 펼쳐 오른쪽을 텅 비게 두지 않는다.",
+      "**Don't** 고정 높이 상자 안에 내부 스크롤(`h-[20rem] overflow-y-auto`)을 만들지 않는다. 내용 높이 그대로 두고 필요하면 `line-clamp`를 쓴다.",
+      "**Don't** 제목 앞에 이모지를 붙이지 않는다. 사용자가 입력한 데이터(카테고리 emoji 등)는 그대로 둔다.",
+      "**Don't** 색을 채운 알약 배지(초록·빨강·파랑 바탕)나 `bg-amber-50 border-amber-300` 류 색 상자 안내를 쓰지 않는다.",
+      "**Don't** 링크 색(`text-[#4361ee]`)이나 팔레트 값(`text-slate-500`, `bg-blue-50`)을 직접 쓰지 않는다.",
+      "**Don't** 4px보다 둥근 모서리를 쓰지 않는다(다이얼로그 6px 예외). `rounded-full`은 숫자 공·점·아바타에만 쓴다.",
+      "**Don't** hover 때 크기·그림자·위치를 바꾸지 않는다.",
+      "**Don't** 11px 미만 글씨를 쓰지 않고, 본문·버튼에 명조를 쓰지 않는다.",
+      "**Don't** 다크 변형이나 `dark:` 유틸리티를 만들지 않는다."
+    ]
+  }
+}
