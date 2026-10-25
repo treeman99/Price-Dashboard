@@ -4,7 +4,8 @@ import { isMailConfigured, sendMail } from "./mailer.ts";
 import { sendIMessage } from "./imessage.ts";
 import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
-import { SKILLS_CYCLE_LABEL } from "../../shared/skills.ts";
+import { getSchedule } from "../scheduler/schedule-store.ts";
+import { describeSchedule } from "../../shared/schedule.ts";
 import type { SkillRankEntry, SkillsSnapshot } from "../../shared/skills.ts";
 
 /**
@@ -125,7 +126,17 @@ function tableHtml(rows: string): string {
  * 증가 섹션은 window 가 있을 때만 그린다. 그 대신 첫 회차에는 "왜 없는지"를 한 줄로 설명한다 —
  * 설명 없이 섹션만 사라지면 사용자는 기능이 고장 난 줄 안다.
  */
-export function buildSkillsEmailHtml(s: SkillsSnapshot): string {
+/**
+ * 머리줄의 갱신 주기 문구. 정본은 스케줄(getSchedule().skills, 대시보드에서 요일·주기·시각 변경 가능)이다 —
+ * 예전 상수(SKILLS_CYCLE_LABEL "월요일 09:00")는 사용자가 회차를 바꾸면 거짓말이 된다.
+ * 예: "매주 월요일 09:00 갱신" / "격주 월요일 09:00 갱신" / "매월 1일 09:00 갱신" / "자동 갱신 꺼짐".
+ */
+export function skillsCycleLabel(): string {
+  const job = getSchedule().skills;
+  return job.enabled ? `${describeSchedule(job)} 갱신` : "자동 갱신 꺼짐";
+}
+
+export function buildSkillsEmailHtml(s: SkillsSnapshot, cycleLabel: string = skillsCycleLabel()): string {
   const starRows = s.byStars
     .slice(0, SKILLS_EMAIL_TOP)
     .map((e) => entryRow(e, `⭐ ${n(e.repo.stars)}`))
@@ -142,8 +153,9 @@ export function buildSkillsEmailHtml(s: SkillsSnapshot): string {
   <p style="color:#888;font-size:12px;margin:6px 0 0 0;">비교 구간: ${escapeHtml(s.window.fromDate)} → ${escapeHtml(s.window.toDate)} (${s.window.days}일)</p>
   ${tableHtml(rows)}`;
   } else {
-    growthSection = `<h2 style="color:#e07a5f;margin-top:36px;border-bottom:2px solid #e07a5f;padding-bottom:8px;">📈 주간 증가</h2>
-  <p style="color:#666;font-size:13px;line-height:1.6;">비교할 지난 스냅샷이 없어 이번 회차에는 증가 랭킹이 없습니다. GitHub 이 과거 star 수를 제공하지 않아, 증가분은 매주 쌓는 스냅샷을 직접 차분해야만 구할 수 있습니다 — 다음 회차부터 채워집니다.</p>`;
+    // 회차 주기는 사용자가 바꿀 수 있어(격주·매월) '주간'으로 못 박지 않는다.
+    growthSection = `<h2 style="color:#e07a5f;margin-top:36px;border-bottom:2px solid #e07a5f;padding-bottom:8px;">📈 기간 증가</h2>
+  <p style="color:#666;font-size:13px;line-height:1.6;">비교할 지난 스냅샷이 없어 이번 회차에는 증가 랭킹이 없습니다. GitHub 이 과거 star 수를 제공하지 않아, 증가분은 회차마다 쌓는 스냅샷을 직접 차분해야만 구할 수 있습니다 — 다음 회차부터 채워집니다.</p>`;
   }
 
   const notes = s.notes
@@ -152,7 +164,7 @@ export function buildSkillsEmailHtml(s: SkillsSnapshot): string {
 
   return `<html><body style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:700px;margin:0 auto;padding:20px;background-color:#ffffff;">
   <h1 style="color:#1a1a2e;border-bottom:3px solid #4361ee;padding-bottom:10px;">🧩 스킬 랭킹</h1>
-  <p style="color:#666;margin-bottom:4px;">${escapeHtml(s.date)} | 매주 ${escapeHtml(SKILLS_CYCLE_LABEL)} 갱신 | 추적 ${n(s.trackedCount)}개 저장소</p>
+  <p style="color:#666;margin-bottom:4px;">${escapeHtml(s.date)} | ${escapeHtml(cycleLabel)} | 추적 ${n(s.trackedCount)}개 저장소</p>
   <p style="color:#888;font-size:13px;margin-bottom:24px;">출처: GitHub 검색 API (topic 기반) · 숫자는 전부 API 실측값이며 설명만 AI 요약입니다.</p>
 
   <h2 style="color:#4361ee;margin-top:28px;border-bottom:2px solid #4361ee;padding-bottom:8px;">⭐ star 총합 TOP ${Math.min(SKILLS_EMAIL_TOP, s.byStars.length)}</h2>
