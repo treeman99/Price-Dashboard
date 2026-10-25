@@ -1,7 +1,8 @@
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { isMailConfigured, sendMail } from "./mailer.ts";
-import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
+import { sendIMessage } from "./imessage.ts";
+import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { NewsSnapshot, NewsItem, NewsCategory } from "../../shared/types.ts";
 
@@ -17,9 +18,9 @@ export function newsIMessageText(s: NewsSnapshot): string {
   return lines.join("\n");
 }
 
-/** 뉴스 다이제스트를 본인 iMessage 로 발송. off/미설정/0건이면 false. 절대 throw 안 함. */
+/** 뉴스 다이제스트를 본인 iMessage 로 발송. off(전역·탭)/미설정/0건이면 false. 절대 throw 안 함. */
 export async function sendNewsIMessage(s: NewsSnapshot): Promise<boolean> {
-  if (!isIMessageConfigured()) return false;
+  if (!isTabNotifyEnabled("news", "imessage")) return false;
   if (!s.categories.some((c) => c.items.length)) return false;
   try {
     await sendIMessage(newsIMessageText(s));
@@ -85,6 +86,10 @@ export async function sendNewsEmail(s: NewsSnapshot): Promise<boolean> {
   if (!config.notify.email) return false;
   if (!isMailConfigured()) {
     log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 뉴스 이메일 건너뜀");
+    return false;
+  }
+  if (!isTabNotifyEnabled("news", "email")) {
+    log.info("뉴스 메일 알림 꺼짐(대시보드 운영 설정) → 건너뜀");
     return false;
   }
 

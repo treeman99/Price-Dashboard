@@ -1,7 +1,8 @@
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { isMailConfigured, sendMail } from "./mailer.ts";
-import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
+import { sendIMessage } from "./imessage.ts";
+import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import { SKILLS_CYCLE_LABEL } from "../../shared/skills.ts";
 import type { SkillRankEntry, SkillsSnapshot } from "../../shared/skills.ts";
@@ -72,9 +73,9 @@ export function skillsIMessageText(s: SkillsSnapshot): string {
   return lines.join("\n");
 }
 
-/** 스킬 랭킹을 본인 iMessage 로 발송. off/미설정/0건이면 false. 절대 throw 안 함. */
+/** 스킬 랭킹을 본인 iMessage 로 발송. off(전역·탭)/미설정/0건이면 false. 절대 throw 안 함. */
 export async function sendSkillsIMessage(s: SkillsSnapshot): Promise<boolean> {
-  if (!isIMessageConfigured()) return false;
+  if (!isTabNotifyEnabled("skills", "imessage")) return false;
   if (!s.byStars.length) return false;
   try {
     await sendIMessage(skillsIMessageText(s));
@@ -170,6 +171,10 @@ export async function sendSkillsEmail(s: SkillsSnapshot): Promise<boolean> {
   if (!s.byStars.length) return false;
   if (!isMailConfigured()) {
     log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 스킬 이메일 건너뜀");
+    return false;
+  }
+  if (!isTabNotifyEnabled("skills", "email")) {
+    log.info("스킬 메일 알림 꺼짐(대시보드 운영 설정) → 건너뜀");
     return false;
   }
 

@@ -3,7 +3,8 @@ import { log } from "../util/log.ts";
 import { isMailConfigured, sendMail } from "./mailer.ts";
 import { googleCalendarUrl } from "../../shared/calendar.ts";
 import { splitPopupsByRegion, withLinkedItemsOnly, POPUP_GROUPS } from "../../shared/events.ts";
-import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
+import { sendIMessage } from "./imessage.ts";
+import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { EventsSnapshot, PopupItem, ExhibitionItem, FestivalItem } from "../../shared/types.ts";
 
@@ -27,9 +28,9 @@ export function eventsIMessageText(raw: EventsSnapshot): string {
   return lines.join("\n");
 }
 
-/** 팝업/전시/축제를 본인 iMessage 로 발송. off/미설정/전부 0건이면 false. 절대 throw 안 함. */
+/** 팝업/전시/축제를 본인 iMessage 로 발송. off(전역·탭)/미설정/전부 0건이면 false. 절대 throw 안 함. */
 export async function sendEventsIMessage(raw: EventsSnapshot): Promise<boolean> {
-  if (!isIMessageConfigured()) return false;
+  if (!isTabNotifyEnabled("events", "imessage")) return false;
   // 전부 0건이면 무의미한 '팝업 0·전시 0·축제 0' 푸시를 보내지 않는다(유튜브/뉴스와 일관).
   // 표시 대상(링크 있는 항목) 기준으로 세야 '0건 메시지'를 제대로 막는다.
   const s = withLinkedItemsOnly(raw);
@@ -182,6 +183,10 @@ export async function sendEventsEmail(s: EventsSnapshot): Promise<boolean> {
   if (!config.notify.email) return false;
   if (!isMailConfigured()) {
     log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 이벤트 이메일 건너뜀");
+    return false;
+  }
+  if (!isTabNotifyEnabled("events", "email")) {
+    log.info("이벤트 메일 알림 꺼짐(대시보드 운영 설정) → 건너뜀");
     return false;
   }
 

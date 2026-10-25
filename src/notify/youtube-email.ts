@@ -1,7 +1,8 @@
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { isMailConfigured, sendMail } from "./mailer.ts";
-import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
+import { sendIMessage } from "./imessage.ts";
+import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategory } from "../../shared/types.ts";
 
@@ -17,9 +18,9 @@ export function youtubeIMessageText(s: YoutubeSnapshot): string {
   return lines.join("\n");
 }
 
-/** 유튜브 소식을 본인 iMessage 로 발송. off/미설정/0건이면 false. 절대 throw 안 함. */
+/** 유튜브 소식을 본인 iMessage 로 발송. off(전역·탭)/미설정/0건이면 false. 절대 throw 안 함. */
 export async function sendYoutubeIMessage(s: YoutubeSnapshot): Promise<boolean> {
-  if (!isIMessageConfigured()) return false;
+  if (!isTabNotifyEnabled("youtube", "imessage")) return false;
   if (!s.categories.some((c) => c.items.length)) return false;
   try {
     await sendIMessage(youtubeIMessageText(s));
@@ -96,6 +97,10 @@ export async function sendYoutubeEmail(s: YoutubeSnapshot): Promise<boolean> {
   if (!config.notify.email) return false;
   if (!isMailConfigured()) {
     log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 유튜브 이메일 건너뜀");
+    return false;
+  }
+  if (!isTabNotifyEnabled("youtube", "email")) {
+    log.info("유튜브 메일 알림 꺼짐(대시보드 운영 설정) → 건너뜀");
     return false;
   }
 

@@ -1,6 +1,6 @@
-import { config } from "../config.ts";
 import { log } from "../util/log.ts";
-import { isIMessageConfigured, sendIMessage } from "./imessage.ts";
+import { sendIMessage } from "./imessage.ts";
+import { getTabSettings, isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import {
   DIRECTION_EMOJI,
   DIRECTION_LABEL,
@@ -106,7 +106,7 @@ export function pulseDigestText(records: PulseAlertRecord[]): string {
  * 알림 하나가 펄스 실행 전체를 깨면 나머지 판정까지 잃는다.
  */
 export async function sendPulseIMessage(i: PulseImpact): Promise<boolean> {
-  if (!isIMessageConfigured()) return false;
+  if (!isPulseNotifyEnabled()) return false;
   try {
     await sendIMessage(pulseIMessageText(i));
     return true;
@@ -119,7 +119,7 @@ export async function sendPulseIMessage(i: PulseImpact): Promise<boolean> {
 /** 묶음 발송. 빈 목록이면 아무것도 하지 않고 false. */
 export async function sendPulseDigest(records: PulseAlertRecord[]): Promise<boolean> {
   if (!records.length) return false;
-  if (!isIMessageConfigured()) return false;
+  if (!isPulseNotifyEnabled()) return false;
   try {
     await sendIMessage(pulseDigestText(records));
     log.info(`펄스 야간 보류 ${records.length}건 묶음 발송 완료`);
@@ -137,21 +137,27 @@ export async function sendPulseDigest(records: PulseAlertRecord[]): Promise<bool
  * ⚠️ 이 판정으로 펄스를 끄면 **원장도 안 쌓여서** 일일 브리핑의 24시간 요약도 빈다.
  *    그래도 끄는 쪽이 맞다 — 사용자가 알림을 안 켰다는 건 이 기능을 안 쓴다는 뜻이고,
  *    쓰지도 않는 기능이 하루 16회 토큰을 태우면 안 된다.
+ *
+ * 전역(NOTIFY_IMESSAGE+IMESSAGE_TO) AND 대시보드 탭 스위치(notify.stockPulse.imessage)다.
+ * 탭 스위치만 꺼도 같은 이유로 실행을 건너뛴다 — 실행 자체를 멈추는 정본 스위치는 스케줄의 enabled 다.
  */
 export function isPulseNotifyEnabled(): boolean {
-  return isIMessageConfigured();
+  return isTabNotifyEnabled("stockPulse", "imessage");
 }
 
 /** 면책 문구는 브리핑과 같은 출처를 쓴다(문구가 채널마다 갈라지지 않게). */
 export { STOCK_DISCLAIMER };
 
-/** 설정된 문턱. 검증·폴백은 config 가 한다(env 접근은 config.ts 로 일원화). */
+/**
+ * 설정된 문턱. 대시보드 값 우선, 없으면 .env. 검증·폴백은 tab-settings 가 한다
+ * (깨진 값은 '덜 보내는 쪽'으로 접는다 — config.ts pulseThreshold 주석과 같은 원칙).
+ * 호출 시점마다 읽는다 — 저장 즉시 다음 펄스부터 반영된다.
+ */
 export function pulseThreshold(): "urgent" | "important" | "info" {
-  return config.stockPulse.threshold;
+  return getTabSettings().stockPulse.threshold;
 }
 
-export const PULSE_CAPS = () => ({
-  perSymbolCap: config.stockPulse.perSymbolCap,
-  dailyCap: config.stockPulse.dailyCap,
-  macroCap: config.stockPulse.macroCap,
-});
+export const PULSE_CAPS = () => {
+  const p = getTabSettings().stockPulse;
+  return { perSymbolCap: p.perSymbolCap, dailyCap: p.dailyCap, macroCap: p.macroCap };
+};

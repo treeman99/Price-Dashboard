@@ -2,7 +2,8 @@ import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { renderLineChartPng } from "./chart.ts";
 import { isMailConfigured, sendMail, type MailAttachment } from "./mailer.ts";
-import { sendIMessage, isIMessageConfigured } from "./imessage.ts";
+import { sendIMessage } from "./imessage.ts";
+import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
 import { listStocks } from "../stock/tickers.ts";
 import {
@@ -461,11 +462,11 @@ function truncate(s: string, max: number): string {
 }
 
 /**
- * 증시 브리핑을 본인 iMessage 로 발송. off/미설정이면 false.
+ * 증시 브리핑을 본인 iMessage 로 발송. off(전역·탭)/미설정이면 false.
  * 절대 throw 하지 않는다(수집 흐름을 막지 않음) — 실패는 로깅 후 false.
  */
 export async function sendStockIMessage(s: StockSnapshot): Promise<boolean> {
-  if (!isIMessageConfigured()) return false;
+  if (!isTabNotifyEnabled("stock", "imessage")) return false;
   try {
     await sendIMessage(stockIMessageText(s));
     return true;
@@ -483,6 +484,10 @@ export async function sendStockEmail(s: StockSnapshot): Promise<boolean> {
   if (!config.notify.email) return false;
   if (!isMailConfigured()) {
     log.warn("메일 설정 미완료(GMAIL_ADDRESS / GOOGLE_CLIENT_*) → 증시 이메일 건너뜀");
+    return false;
+  }
+  if (!isTabNotifyEnabled("stock", "email")) {
+    log.info("증시 메일 알림 꺼짐(대시보드 운영 설정) → 건너뜀");
     return false;
   }
 

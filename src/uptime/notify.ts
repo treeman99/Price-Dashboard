@@ -26,8 +26,8 @@
  * 명세: §7(알림 정책) · §3.5(손실 게이트) · §6.3(문자 본문) · §5.2(notified 스키마).
  */
 
-import { config } from "../config.ts";
-import { isIMessageConfigured, sendIMessage } from "../notify/imessage.ts";
+import { sendIMessage } from "../notify/imessage.ts";
+import { getTabSettings, isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { isQuietHour } from "../stock/pulse-gate.ts";
 import { log } from "../util/log.ts";
 import { downtimeIMessageText } from "./narrate.ts";
@@ -148,7 +148,7 @@ export function decideDowntimeNotify(
 
   // 4. 채널 미설정 (§7-2)
   if (!configured) {
-    return { action: "skip", reason: "iMessage 미설정", queuedUntil: null };
+    return { action: "skip", reason: "iMessage 미설정 또는 꺼짐", queuedUntil: null };
   }
 
   // 5. 복구 유예 (§7-6) — 재평가 2회차(+15분)에 도달했거나, 그 전에 복구 상태가 확정되면 발송.
@@ -173,7 +173,8 @@ export function decideDowntimeNotify(
   }
 
   // 6. 조용시간 게이트 (§7-5) — 기본 23~07시. 10시간 자다 새벽 3시에 깨어나면 그게 새벽 문자다.
-  const { quietStartHour, quietEndHour } = config.stockPulse;
+  //    펄스와 같은 조용 시간을 쓴다(대시보드 운영 설정 우선, 판정 시점마다 읽음).
+  const { quietStartHour, quietEndHour } = getTabSettings().stockPulse;
   if (isQuietHour(now.getHours(), quietStartHour, quietEndHour)) {
     const until = nextQuietEnd(now, quietEndHour);
     return {
@@ -243,13 +244,22 @@ export interface DowntimeNotifyResult {
   changed: boolean;
 }
 
+/**
+ * 가동 중단 문자를 보낼 수 있는가 = 전역 iMessage 설정(NOTIFY_IMESSAGE+IMESSAGE_TO) AND 대시보드
+ * 운영 설정의 '가동 중단 알림' 스위치. 호출 시점마다 읽어 저장 즉시 반영된다.
+ * 합성 루트(index.ts)의 스윕·일지 "알림:" 줄도 같은 판정을 써야 갈라지지 않는다.
+ */
+export function uptimeIMessageEnabled(): boolean {
+  return isTabNotifyEnabled("uptime", "imessage");
+}
+
 /** 테스트·특수 호출용 주입점. 운영에서는 전부 기본값을 쓴다. */
 export interface DowntimeNotifyDeps {
   /** 판정 기준 시각. 기본 `new Date()`. */
   now?: Date;
   /** 실제 발송기. 기본 `sendIMessage`. */
   send?: (text: string) => Promise<void>;
-  /** 채널 설정 여부. 기본 `isIMessageConfigured`. */
+  /** 채널 설정 여부. 기본 = 전역 iMessage 설정 AND 대시보드 '가동 중단 알림' 스위치. */
   configured?: () => boolean;
 }
 
@@ -271,7 +281,7 @@ export async function notifyDowntimeEvent(
 ): Promise<DowntimeNotifyResult> {
   try {
     const now = deps.now ?? new Date();
-    const configured = (deps.configured ?? isIMessageConfigured)();
+    const configured = (deps.configured ?? uptimeIMessageEnabled)();
     const decision = decideDowntimeNotify(ev, now, configured);
 
     if (decision.action === "skip") {
