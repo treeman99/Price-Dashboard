@@ -4,6 +4,7 @@ import type { LottoRecentRound, LottoSnapshot } from "@shared/lotto";
 import { upcomingToText, winningNumbers } from "@shared/lotto";
 import { api } from "@/lib/api";
 import { ScheduleControl } from "@/components/ScheduleControl";
+import { useTabConfig } from "@/lib/tabConfigStore";
 import { Button } from "@/components/ui/button";
 import {
   PageToolbar,
@@ -305,6 +306,11 @@ export function LottoBoard() {
    * 이 매 갱신마다 새로 만들어지고, 그걸 보는 useEffect 가 다시 load 를 부르는 무한 루프가 된다.
    */
   const prevSigRef = useRef<string | null>(null);
+  /**
+   * 다음 실행은 스케줄 응답(next.lotto)이 정본이다. snap.nextCycleAt 은 string 계약이라 자동 실행을
+   * 꺼도 스케줄상 시각을 내므로, 스케줄을 못 불러왔을 때의 폴백으로만 쓴다(null = 꺼짐).
+   */
+  const { schedule } = useTabConfig();
 
   /** manual=true 는 사용자가 버튼을 누른 경우. 최초 자동 로드에는 안내를 띄우지 않는다. */
   const load = useCallback(async (manual = false) => {
@@ -363,6 +369,8 @@ export function LottoBoard() {
     );
   }
 
+  const nextCycle = schedule ? schedule.next.lotto : snap.nextCycleAt;
+
   return (
     <div>
       <PageToolbar
@@ -391,13 +399,13 @@ export function LottoBoard() {
           <strong>로또 6/45</strong>
         </Meta>
         <MetaDot />
-        {/* 다음 실행은 바로 뒤 서버 기준 '다음'(nextCycleAt)이 이미 보여 주므로 버튼에서는 뺀다. */}
+        {/* 다음 실행은 바로 뒤 '다음'(nextCycle — 스케줄 next.lotto 우선)이 이미 보여 주므로 버튼에서는 뺀다. */}
         <ScheduleControl tab="lotto" label="자동 갱신" showNext={false} />
         <MetaDot />
         <Meta>새 추첨 결과로 지난 회차를 채점하고 다음 회차 번호를 뽑습니다.</Meta>
         <MetaDot />
         <Meta>
-          다음 <strong>{fmtWhen(snap.nextCycleAt)}</strong>
+          다음 <strong>{nextCycle ? fmtWhen(nextCycle) : "자동 실행 꺼짐"}</strong>
         </Meta>
         {snap.state.lastCycleAt && (
           <>
