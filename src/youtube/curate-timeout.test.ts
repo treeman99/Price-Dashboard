@@ -17,6 +17,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "price-youtube-timeout-"));
 process.env.DB_PATH = path.join(tmpDir, "price.db");
 process.env.YOUTUBE_TIMEOUT_MS = "222000"; // 다른 탭·공용 값과 겹치지 않는 표식값
 process.env.AGENT_QUERY_TIMEOUT_MS = "999000";
+process.env.YOUTUBE_FRESH_DAYS = "11"; // .env 기본 신선도 표식값(운영 설정 저장값 5 와 겹치지 않게)
 // 추천 채널이 없는 카테고리 1개만 둔다. 발굴 결과까지 비우면 RSS 하베스트(harvestFreshUploads)가
 // 아예 돌지 않아 이 테스트는 네트워크를 전혀 타지 않는다.
 fs.writeFileSync(
@@ -61,4 +62,33 @@ test("유튜브: 큐레이션은 youtubeTimeoutMs, 채널 발굴은 전용 상�
   // 발굴은 탭 예산과 별개인 곁가지 예산이다(상수 선언부 주석 참고). 탭 예산을 따라가면 안 된다.
   assert.equal(discovery.timeoutMs, CHANNEL_DISCOVERY_TIMEOUT_MS);
   assert.equal(discovery.timeoutMs, 240_000);
+});
+
+test("유튜브: 대시보드 운영 설정 저장 직후 다음 수집이 새 신선도·타임아웃을 쓴다(재시작 불필요)", async () => {
+  const { saveTabSettings } = await import("../settings/tab-settings.ts");
+  saveTabSettings({ youtube: { freshDays: 5 }, timeouts: { youtubeMin: 7 } });
+
+  const calls: { label: string; prompt: string; system: string; timeoutMs: number }[] = [];
+  const record = async (prompt: string, options: unknown, timeoutMs: number, label: string) => {
+    calls.push({ label, prompt, system: String((options as { systemPrompt?: string }).systemPrompt), timeoutMs });
+    return label.includes("채널 발굴") ? '{"channels":{}}' : '{"categories":{}}';
+  };
+  const restore = __setAgentQueryDepsForTest({
+    runClaude: record,
+    runCodex: record,
+    recordFallback: () => false,
+    clearFallback: () => false,
+  });
+  try {
+    await curateYoutube("2026-08-02");
+  } finally {
+    restore();
+  }
+
+  const curation = calls.find((c) => c.label === "유튜브 큐레이션");
+  assert.ok(curation, "큐레이션 호출이 없다");
+  assert.equal(curation.timeoutMs, 7 * 60_000);
+  assert.match(curation.prompt, /최근 5일 이내/);
+  assert.match(curation.system, /최근 5일 이내/);
+  assert.doesNotMatch(curation.prompt, new RegExp(`최근 ${config.youtubeFreshDays}일 이내`));
 });

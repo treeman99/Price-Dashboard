@@ -52,3 +52,26 @@ test("증시: 브리핑은 stockBriefTimeoutMs, 펄스는 stockPulseTimeoutMs �
   assert.equal(calls[1].timeoutMs, config.stockPulseTimeoutMs);
   assert.equal(calls[1].timeoutMs, 555_000);
 });
+
+test("증시: 대시보드 운영 설정(분)을 저장하면 다음 실행부터 그 값(ms)으로 실행한다", async () => {
+  const { saveTabSettings } = await import("../settings/tab-settings.ts");
+  saveTabSettings({ timeouts: { stockBriefMin: 9, stockPulseMin: 7 } });
+  const calls: number[] = [];
+  const record = async (_prompt: string, _options: unknown, timeoutMs: number) => {
+    calls.push(timeoutMs);
+    return "{}";
+  };
+  const restore = __setAgentQueryDepsForTest({
+    runClaude: record,
+    runCodex: record,
+    recordFallback: () => false,
+    clearFallback: () => false,
+  });
+  try {
+    await runStockAgent({ mode: "briefing", prompt: "테스트", label: "한국장" });
+    await runStockAgent({ mode: "pulse", prompt: "테스트", label: "13:00" });
+  } finally {
+    restore();
+  }
+  assert.deepEqual(calls, [9 * 60_000, 7 * 60_000]);
+});

@@ -28,6 +28,20 @@ end run`;
 
 export class IMessageError extends Error {}
 
+/**
+ * 테스트 전용 발송기. 지정되면 osascript 대신 이걸 부른다(입력 검증은 그대로 거친다).
+ * 탭 알림 게이트를 발송 함수 단위로 검증하려면 '전역 켜짐' 상태를 만들어야 하는데, 그때 게이트가
+ * 틀리면 실제 Messages.app 으로 문자가 나간다 — 그 사고를 구조적으로 막는 주입점이다.
+ */
+let transportForTest: ((recipient: string, body: string) => Promise<void>) | null = null;
+
+/** 테스트 전용 — 발송기를 갈아끼운다(null 이면 원복). 운영 코드에서 부르지 말 것. */
+export function __setIMessageTransportForTest(
+  fn: ((recipient: string, body: string) => Promise<void>) | null
+): void {
+  transportForTest = fn;
+}
+
 /** iMessage 설정 완료 여부(스위치 ON + 수신자 지정). */
 export function isIMessageConfigured(): boolean {
   return config.notify.imessage && !!config.notify.imessageTo;
@@ -43,6 +57,7 @@ export async function sendIMessage(text: string, to?: string): Promise<void> {
   const body = (text ?? "").trim();
   if (!recipient) throw new IMessageError("수신자(imessageTo)가 지정되지 않았습니다.");
   if (!body) throw new IMessageError("발송할 본문이 비어 있습니다.");
+  if (transportForTest) return transportForTest(recipient, body);
   if (process.platform !== "darwin")
     throw new IMessageError("iMessage 발송은 macOS(darwin)에서만 가능합니다.");
 
