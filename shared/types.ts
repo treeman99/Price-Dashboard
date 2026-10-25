@@ -7,8 +7,9 @@
 // 경로가 사라졌기 때문이다. 과거 이력은 DB(price_points/listings/reviews)에 그대로 남아 있다.
 
 /**
- * 탭별 자동 수집(갱신) 시각. 모두 24시간 "HH:mm" 목록(하루 여러 번 가능).
- * .env 기본값 위에 사용자가 대시보드에서 +/-로 바꾼 값이 병합된다.
+ * 스케줄 v1(2026-10-25 이전) — 잡별 '매일 이 시각들'. **레거시 파일 형식 읽기 호환 전용**이다.
+ * 실제 data/schedule.json 이 아직 이 모양일 수 있어 schedule-store·uptime/missed 가 v1 을 '매일'로
+ * 읽는다. 새 코드는 아래 스케줄 v2(`ScheduleConfig`/`JobSchedule`)를 쓴다.
  */
 export interface ScheduleSettings {
   events: string[];
@@ -30,7 +31,7 @@ export interface ScheduleSettings {
 
 // ── 탭별 자동 실행 스케줄 v2 (시각 + 요일 + 주기 + 켜기/끄기) ──
 //
-// 위 ScheduleSettings(v1: '매일 이 시각들')를 대체한다. 소비처 이전이 끝나면 v1 은 지운다.
+// 위 ScheduleSettings(v1: '매일 이 시각들')를 대체한다. v1 은 레거시 파일 읽기 호환용으로만 남는다.
 // 의미 규칙(보충 판정·금지 구간 등)은 docs/customization-contract.md 가 정본이다.
 // 순수 계산(다음 실행·설명 문구·검증)은 shared/schedule.ts 한 곳에 두고 서버와 화면이 함께 쓴다.
 

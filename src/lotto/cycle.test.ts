@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  LOTTO_CYCLE_CRON,
   historyBefore,
   inDrawBlackout,
   lastCycleBoundary,
@@ -64,10 +63,6 @@ const SUN10: JobSchedule = {
   repeat: { kind: "weekly", days: [0], intervalWeeks: 1 },
   times: ["10:00"],
 };
-
-test("cron 식과 경계 계산이 같은 시각(일요일 10:00)을 가리킨다", () => {
-  assert.equal(LOTTO_CYCLE_CRON, "0 10 * * 0");
-});
 
 test("직전 경계는 지나간 가장 최근의 일요일 10:00 이다", () => {
   // 2026-07-30 은 목요일 → 직전 경계는 7/26(일) 10:00

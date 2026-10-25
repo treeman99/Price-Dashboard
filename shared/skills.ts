@@ -47,17 +47,8 @@ export const SKILLS_RANK_SIZE = 50;
  */
 export const SKILLS_TRACK_POOL = 400;
 
-/**
- * @deprecated 스케줄 v2(2026-10-25) 이후 회차 시각의 정본은 `getSchedule().skills`
- * (data/schedule.json, 기본 매주 월요일 09:00)다. 스케줄러·경계 계산은 더 이상 아래 상수를 보지
- * 않는다. 메일 문구·화면이 아직 SKILLS_CYCLE_LABEL 을 쓰고 있어 남겨 둔다 — 소비처 이전 후
- * coordinator 가 일괄 정리한다. 표시 문구는 `describeSchedule(schedule.skills)` 로 바꿀 것.
- */
-export const SKILLS_CYCLE_WEEKDAY = 1; // 0=일요일 → 1=월요일
-export const SKILLS_CYCLE_HOUR = 9;
-export const SKILLS_CYCLE_CRON = `0 ${SKILLS_CYCLE_HOUR} * * ${SKILLS_CYCLE_WEEKDAY}`;
-/** @deprecated 위 주석 참고 — 사용자가 시각을 바꾸면 이 문구는 틀린다. `describeSchedule()` 을 쓸 것. */
-export const SKILLS_CYCLE_LABEL = "월요일 09:00";
+// 회차 요일·주기·시각은 상수가 아니라 스케줄(`getSchedule().skills`, 기본 매주 월요일 09:00)이 정본이다
+// (2026-10-25 스케줄 v2). 표시 문구는 `describeSchedule(schedule.skills)` 로 만든다.
 
 /** 저장소 1건 = 목록의 한 줄. */
 export interface SkillRepo {

@@ -58,18 +58,8 @@ import { LOTTO_RECENT_LIMIT, countMatches, winningNumbers } from "../../shared/l
  * 1번이며, 지울 것은 애초에 없다. 남은 실행 지점은 cron 하나뿐이다.
  */
 
-/**
- * @deprecated 스케줄 v2(2026-10-25) 이후 사이클 요일·시각의 정본은 `getSchedule().lotto`
- * (data/schedule.json, 기본 일요일 10:00 — 이 상수들과 같은 값)다. 스케줄러 cron·아래 경계 계산·
- * 가동 중단 누락 집계는 더 이상 이 상수를 보지 않는다. 남은 참조 정리 후 coordinator 가 지운다.
- */
-export const LOTTO_CYCLE_WEEKDAY = 0; // 0 = 일요일
-/** @deprecated 위 주석 참고. */
-export const LOTTO_CYCLE_HOUR = 10;
-/** @deprecated 위 주석 참고. */
-export const LOTTO_CYCLE_CRON = `0 ${LOTTO_CYCLE_HOUR} * * ${LOTTO_CYCLE_WEEKDAY}`;
-/** @deprecated 위 주석 참고 — 표시 문구는 `describeSchedule(schedule.lotto)` 를 쓸 것. */
-export const LOTTO_CYCLE_LABEL = "일요일 10:00";
+// 사이클 요일·시각은 상수가 아니라 스케줄(`getSchedule().lotto`, 기본 일요일 10:00)이 정본이다
+// (2026-10-25 스케줄 v2). 스케줄러 cron·아래 경계 계산·가동 중단 누락 집계가 모두 그 값을 본다.
 
 /**
  * 실패(수집 오류·토큰 한도·Claude 인증) 후 재시도까지 기다리는 시간.
