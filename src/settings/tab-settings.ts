@@ -119,8 +119,19 @@ const FIELD_LABEL: Record<string, string> = {
 
 const SEVERITIES: PulseSeverity[] = ["urgent", "important", "info"];
 
-/** .env(config.ts) 기본값. 타임아웃은 ms → 분(반올림하지 않는다 — 기본값은 .env 그대로여야 한다). */
-function defaults(): TabSettings {
+/**
+ * .env(config.ts) 기본값. 타임아웃은 ms → 분. 숫자는 NUMBER_RULES 범위로 자르고 정수로 반올림한다.
+ *
+ * 왜 자르는가: 기본값은 화면의 '기본값으로'와 sparse 저장(기본값과 같으면 키 삭제)의 기준이라
+ * **언제나 저장·복원 가능**해야 한다. 규칙 밖이거나 분 환산이 비정수인 .env 값(NEWS_TIMEOUT_MS=90000
+ * → 1.5분, HISTORY_RETENTION_DAYS=7)을 그대로 내보내면 엄격한 쓰기 검증에 걸려 기본값 재전송조차 400 이
+ * 되고, 화면은 저장 때 그 탭의 숫자 칸을 모두 검증하므로 무관한 스케줄 저장까지 막혔다(2026-10-25 QA L1).
+ * 읽기 경로(lenientLeaf)의 클램프 원칙과 같다. 대가로 그런 .env 값은 잘린 값으로 동작하며(1.5분 → 2분),
+ * 기동 시 경고 1줄로 남긴다(warnClampedDefaults).
+ *
+ * @param clamped 넘기면 잘린 항목을 "키 원값→값" 으로 모은다.
+ */
+function defaults(clamped?: string[]): TabSettings {
   const notify = {} as TabSettings["notify"];
   for (const tab of NOTIFY_TABS) {
     // 현재 동작과 같게 '모두 켜짐' — 실제 on/off 는 전역 .env 스위치가 결정한다.
@@ -128,7 +139,7 @@ function defaults(): TabSettings {
     notify[tab] = { email: NOTIFY_CHANNELS[tab].includes("email"), imessage: NOTIFY_CHANNELS[tab].includes("imessage") };
   }
   const min = (ms: number) => ms / 60_000;
-  return {
+  const out: TabSettings = {
     notify,
     youtube: {
       freshDays: config.youtubeFreshDays,
@@ -151,6 +162,26 @@ function defaults(): TabSettings {
       skillsBudgetMin: min(config.skillsSummaryBudgetMs),
     },
   };
+  const sections = out as unknown as Record<string, Record<string, number>>;
+  for (const [key, rule] of Object.entries(NUMBER_RULES)) {
+    const [section, field] = key.split(".");
+    const raw = sections[section][field];
+    const v = Math.min(rule.max, Math.max(rule.min, Math.round(raw)));
+    if (v !== raw) {
+      sections[section][field] = v;
+      clamped?.push(`${key} ${raw}→${v}`);
+    }
+  }
+  return out;
+}
+
+/** 기동 시 1회: .env 기본값을 잘라 쓰는 항목이 있으면 경고 1줄(defaults 주석). */
+function warnClampedDefaults(): void {
+  const clamped: string[] = [];
+  defaults(clamped);
+  if (clamped.length) {
+    log.warn(`운영 설정: .env 기본값이 허용 범위 밖·비정수 → 범위로 맞춰 사용 (${clamped.join(", ")})`);
+  }
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -365,3 +396,5 @@ export function isTabNotifyEnabled(tab: NotifyTabId, channel: NotifyChannel): bo
 export function tabTimeoutMs(key: keyof TabSettings["timeouts"]): number {
   return Math.round(getTabSettings().timeouts[key] * 60_000);
 }
+
+warnClampedDefaults();

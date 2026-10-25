@@ -140,6 +140,32 @@ test("기본값과 같은 값을 보내면 저장분에서 빠져 다시 .env �
   assert.equal(ts.tabTimeoutMs("newsMin"), 30 * 60_000);
 });
 
+test(".env 기본값이 규칙 밖·분 환산 비정수여도 기본값은 저장·복원 가능하다(범위로 자르고 반올림)", () => {
+  // QA L1: NEWS_TIMEOUT_MS=90000(1.5분)·HISTORY_RETENTION_DAYS=7(규칙 30~3650)이면 기본값 재전송이 400 이었고,
+  // 화면은 저장 때 그 탭의 숫자 칸을 모두 보내므로 무관한 스케줄 저장까지 막혔다.
+  const saved = { news: config.newsTimeoutMs, retention: config.historyRetentionDays };
+  config.newsTimeoutMs = 90_000;
+  config.historyRetentionDays = 7;
+  try {
+    const d = ts.getTabSettingsResponse().defaults;
+    assert.equal(d.timeouts.newsMin, 2, "분은 정수로 반올림");
+    assert.equal(d.stock.historyRetentionDays, 30, "하한으로 자른다");
+    assert.deepEqual(ts.getTabSettings(), d);
+
+    // '기본값으로'(기본값 재전송) → 통과하고 sparse 저장에서 빠진다.
+    ts.saveTabSettings({ timeouts: { newsMin: d.timeouts.newsMin }, stock: { historyRetentionDays: 30 } });
+    assert.deepEqual(readStore(), {});
+    // 화면이 탭 숫자 칸을 통째로 보내는 저장도 통과한다.
+    const { notify: _n, ...numbers } = d;
+    ts.saveTabSettings(numbers);
+    assert.deepEqual(readStore(), {});
+    assert.equal(ts.tabTimeoutMs("newsMin"), 2 * 60_000, "소비처도 자른 값을 쓴다");
+  } finally {
+    config.newsTimeoutMs = saved.news;
+    config.historyRetentionDays = saved.retention;
+  }
+});
+
 test("탭에 없는 채널(stockPulse.email)은 타입만 확인하고 무시한다", () => {
   const s = ts.saveTabSettings({ notify: { stockPulse: { email: true } } });
   assert.equal(s.notify.stockPulse.email, false);
