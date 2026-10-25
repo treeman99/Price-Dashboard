@@ -134,12 +134,25 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 |---|---|---|
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 팝업·전시에 필수 | 네이버 검색 API(webkr/blog). 팝업·전시 원본 코퍼스 = LLM 씨앗 + 링크 진실원 + 폴백. 없으면 그 탭이 빈 화면이 된다(다른 탭은 무관) |
 | `ANTHROPIC_API_KEY` | 선택 | Opus 5.5 큐레이션용. Codex 선택 시에는 불필요 |
-| `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`. 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
+| `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`(**대시보드 설정에서도 변경 가능, 대시보드 값 우선**). 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
-| `EVENTS_COLLECT_TIME` | 기본 10:00 | 매일 팝업/전시 갱신 시각(로컬) |
-| `NOTIFY_EMAIL` / `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | 선택 | 이메일 리포트 알림 |
+| `EVENTS_COLLECT_TIME` · `NEWS_COLLECT_TIMES` · `YOUTUBE_COLLECT_TIMES` · `STOCK_KR/US_COLLECT_TIMES` · `STOCK_PULSE_TIMES` | 기본 10:00 · 08:00,17:00 · 08:30 · 08:00 / 18:00 · 장중 매시 | 탭별 자동 수집 시각(로컬). **대시보드 설정에서도 변경 가능(대시보드 값 우선)** — 화면에서는 요일·격주·매월까지 |
+| `YOUTUBE_FRESH_DAYS` / `YOUTUBE_WATCHED_EXCLUDE_DAYS` | 기본 7(권장 3) / 7 | 유튜브 신선도(최근 N일 게시만) / '본영상' 제외 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
+| `EVENTS_NEW_GAP_DAYS` / `EVENTS_NEW_SHOW_DAYS` | 기본 7 / 3 | 팝업·전시 '신규' 판정 공백 / 배지 유지 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
+| `STOCK_PULSE_THRESHOLD` · `_PER_SYMBOL_CAP` · `_DAILY_CAP` · `_MACRO_CAP` · `_DEDUP_HOURS` · `_QUIET_START` · `_QUIET_END` | 기본 important · 3 · 10 · 2 · 24 · 23 · 7 | 펄스 문자 문턱·하루 상한·중복 억제·조용 시간(가동 중단 알림도 같은 조용 시간). **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
+| `HISTORY_RETENTION_DAYS` | 기본 90 | 증시 시계열·펄스 원장 보존 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
+| `NEWS_TIMEOUT_MS` · `YOUTUBE_TIMEOUT_MS` · `EVENTS_TIMEOUT_MS` · `STOCK_BRIEF_TIMEOUT_MS` · `STOCK_PULSE_TIMEOUT_MS` · `SKILLS_SUMMARY_TIMEOUT_MS` · `SKILLS_SUMMARY_BUDGET_MS` | 기본 20 · 20 · 20 · 15 · 10 · 5 · 20분 | 탭별 LLM 1회 최대 대기(ms). **대시보드 설정에서도 변경 가능(대시보드 값 우선, 분 단위, 다음 실행부터)** |
+| `NOTIFY_EMAIL` / `GMAIL_ADDRESS` / `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 선택 | 이메일 리포트 알림 **전역 스위치**·발신 계정·OAuth 클라이언트(.env 에서만) |
+| `NOTIFY_IMESSAGE` / `IMESSAGE_TO` | 선택 | iMessage 알림 **전역 스위치**·수신자(.env 에서만) |
 
 > 알림 자격증명이 없으면 이메일 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
+>
+> **대시보드 값 우선**: 위 표에서 '대시보드 설정에서도 변경 가능' 항목은 탭별 '자동 수집·설정' 버튼
+> 또는 헤더 '설정'에서 바꿀 수 있고, 저장한 값(`data/tab-settings.json`, 스케줄은 `data/schedule.json`)이
+> `.env` 보다 우선한다. 저장 즉시 반영된다(재시작 불필요, 타임아웃은 다음 실행부터). 바꾼 항목만 저장되고
+> 나머지는 계속 `.env` 를 따른다 — '기본값으로 되돌리기'는 그 항목을 다시 `.env` 로 돌린다.
+> 탭별 알림 스위치는 전역 스위치(`NOTIFY_EMAIL` / `NOTIFY_IMESSAGE`+`IMESSAGE_TO`)와 **AND** 다:
+> 전역이 꺼져 있으면 탭에서 켜도 나가지 않는다. 비밀값·경로·포트·수신자는 `.env` 에서만 바꾼다.
 >
 > **AI 에이전트 선택**: 대시보드 상단에서 `Codex 6.1 Sol`(기본) · `Opus 5.5` 중 고른다.
 > Codex는 `codex login status`가 `Logged in using ChatGPT`일 때만 실행하며,

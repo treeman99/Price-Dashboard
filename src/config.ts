@@ -57,9 +57,13 @@ export interface AppConfig {
   /**
    * 펄스 1회 최대 대기(ms). **공용 타임아웃과 별개여야 한다** — 매시간 도는 작업에
    * 60분을 물리면 실행이 다음 정시를 넘겨 겹친다(src/stock/agent.ts timeoutFor 주석).
+   * ⚠️ 대시보드 운영 설정의 **.env 기본값**이다 — 런타임 값은 `getTabSettings()`(src/settings/tab-settings.ts, 대시보드 값 우선)로 읽을 것.
    */
   stockPulseTimeoutMs: number;
-  /** 펄스 알림 정책. 인터뷰에서 확정한 값들 — docs/stock-agent-v2.md §6 참고. */
+  /**
+   * 펄스 알림 정책. 인터뷰에서 확정한 값들 — docs/stock-agent-v2.md §6 참고.
+   * ⚠️ 대시보드 운영 설정의 **.env 기본값**이다 — 런타임 값은 `getTabSettings()`(src/settings/tab-settings.ts, 대시보드 값 우선)로 읽을 것.
+   */
   stockPulse: {
     /** 종목 1개당 하루 최대 문자 건수. */
     perSymbolCap: number;
@@ -76,6 +80,8 @@ export interface AppConfig {
     /** 야간 종료 = 보류분 묶음 발송 시각. 예: 7 */
     quietEndHour: number;
   };
+  // ⚠️ 아래 4개(youtubeFreshDays ~ eventsNewShowDays)는 대시보드 운영 설정의 **.env 기본값**이다 —
+  //    런타임 값은 `getTabSettings()`(src/settings/tab-settings.ts, 대시보드 값 우선)로 읽을 것.
   youtubeFreshDays: number; // 최근 N일 이내 게시 영상만 채택
   /** '본영상' 체크된 유튜브 영상을 이만큼(일) 동안 수집·검색에서 제외 */
   youtubeWatchedExcludeDays: number;
@@ -98,6 +104,9 @@ export interface AppConfig {
    * 실측 정상 소요는 7분이다. 공용 60분은 8배 과대해서, 잘못된 실행 하나가 한 시간을 통째로
    * 붙들고 그 사이 다음 정시·catch-up 을 전부 밀어냈다(2026-08-02 사고). 정상의 약 3배는
    * 카테고리가 늘거나 웹이 느린 날을 흡수하면서도, 죽은 실행을 한 시간씩 끌고 가지 않는다.
+   *
+   * ⚠️ newsTimeoutMs ~ skillsSummaryBudgetMs(탭별 타임아웃 6종)는 대시보드 운영 설정(분 단위)의
+   *    **.env 기본값**이다 — 런타임 값은 `tabTimeoutMs()`(src/settings/tab-settings.ts)로 읽을 것.
    */
   newsTimeoutMs: number;
   /**
@@ -136,6 +145,7 @@ export interface AppConfig {
   githubToken: string;
   dbPath: string;
   legacyHistoryJson: string;
+  /** 증시 시계열·펄스 원장 보존 일수. 대시보드 운영 설정(stock.historyRetentionDays)의 .env 기본값. */
   historyRetentionDays: number;
   /**
    * 네이버 후보 링크의 '사망'(판매중지/삭제/잘못된 상품번호) 검증 on/off. 기본 on.
@@ -149,7 +159,7 @@ export interface AppConfig {
     python: string;
     maxAttempts: number;
   };
-  /** 팝업/전시 큐레이션 시 insane-engine 으로 실제 페이지 날짜 검증 on/off */
+  /** 팝업/전시 큐레이션 시 insane-engine 으로 실제 페이지 날짜 검증 on/off. 대시보드 운영 설정(events.verifyDates)의 .env 기본값. */
   eventsVerifyDates: boolean;
   anthropicApiKey: string;
   notify: {
@@ -171,7 +181,10 @@ export interface AppConfig {
     googleClientId: string;
     /** Google OAuth2 클라이언트 시크릿(GOOGLE_CLIENT_SECRET). 로그에 절대 찍지 말 것. */
     googleClientSecret: string;
-    /** iMessage 알림 사용 여부(macOS Messages.app osascript 발송). 기본 off. */
+    /**
+     * iMessage 알림 사용 여부(macOS Messages.app osascript 발송). 기본 off.
+     * email 과 함께 **전역 스위치**다 — 대시보드 탭별 알림 스위치와 AND(`isTabNotifyEnabled`).
+     */
     imessage: boolean;
     /** iMessage 수신자(본인 전화번호 E.164 예: +8210… 또는 Apple ID 이메일). */
     imessageTo: string;
