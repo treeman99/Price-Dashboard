@@ -6,6 +6,7 @@ import {
   expandInterval,
   isDueDate,
   lastOccurrence,
+  mondayOf,
   nextOccurrence,
   normalizeJobSchedule,
   scheduleBlackoutAt,
@@ -131,6 +132,26 @@ test("describeSchedule — 계약 §1.6 문구", () => {
   assert.equal(describeSchedule(job({ kind: "monthly", dates: [-1] }, ["09:00"])), "매월 말일 09:00");
   assert.equal(describeSchedule(job({ kind: "monthly", dates: [1, -1] }, ["09:00"])), "매월 1일·말일 09:00");
   assert.equal(describeSchedule(job({ kind: "daily" }, ["08:00"], false)), "꺼짐");
+});
+
+test("describeSchedule — 요일 7개 + N주 간격은 '격주 매일'(모순) 대신 '격주(그 주 매일)'", () => {
+  // QA L4: 화면에서 매주 → 프리셋 '매일' → 격주로 만들 수 있다. 뜻은 '실행 주에는 7일 내내'.
+  const all = [0, 1, 2, 3, 4, 5, 6];
+  assert.equal(describeSchedule(job(weekly(all, 2, "2026-10-26"), ["09:00"])), "격주(그 주 매일) 09:00");
+  assert.equal(describeSchedule(job(weekly([6, 0, 1, 2, 3, 4, 5], 4, "2026-10-26"), ["08:00", "17:00"])), "4주마다(그 주 매일) 08:00, 17:00");
+  assert.equal(describeSchedule(job(weekly(all), ["09:00"])), "매일 09:00", "매주면 그냥 매일");
+  // 평일·주말 묶음은 간격과 부딪히지 않아 그대로 둔다.
+  assert.equal(describeSchedule(job(weekly([1, 2, 3, 4, 5], 2, "2026-10-26"), ["08:00"])), "격주 평일 08:00");
+  assert.equal(describeSchedule(job(weekly([6, 0], 3, "2026-10-26"), ["10:00"])), "3주마다 주말 10:00");
+});
+
+test("mondayOf — 주는 월요일 시작(일요일은 그 주 마지막 날), weekOffset 주만큼 이동, 시각은 00:00", () => {
+  const sun = d(2026, 10, 25, 18, 30);
+  assert.deepEqual(mondayOf(sun), d(2026, 10, 19));
+  assert.deepEqual(mondayOf(sun, 1), d(2026, 10, 26));
+  assert.deepEqual(mondayOf(d(2026, 10, 26)), d(2026, 10, 26));
+  assert.deepEqual(mondayOf(d(2026, 11, 1), 0), d(2026, 10, 26), "월말을 넘는 주");
+  assert.deepEqual(mondayOf(d(2027, 1, 1), -1), d(2026, 12, 21), "해 넘김 + 음수 offset");
 });
 
 // ── expandInterval ──

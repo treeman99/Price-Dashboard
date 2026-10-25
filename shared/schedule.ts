@@ -157,9 +157,9 @@ function parseLocalDate(s: unknown): Date | null {
   return ymd(d) === s ? d : null;
 }
 
-/** 그날이 속한 주(월요일 시작)의 월요일 00:00. */
-function mondayOf(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+/** 그날이 속한 주(월요일 시작)의 월요일 00:00 + weekOffset 주. 화면(격주 시작 주 고르기)도 이걸 쓴다. */
+export function mondayOf(d: Date, weekOffset = 0): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7) + weekOffset * 7);
 }
 
 function isLastDayOfMonth(d: Date): boolean {
@@ -264,7 +264,9 @@ function mondayFirst(days: readonly number[]): number[] {
   return [...new Set(days)].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
 }
 
-/** 반복 규칙만의 문구: "매일" / "평일" / "매주 월요일" / "격주 월·목요일" / "매월 1·15일·말일". */
+/**
+ * 반복 규칙만의 문구: "매일" / "평일" / "매주 월요일" / "격주 월·목요일" / "격주(그 주 매일)" / "매월 1·15일·말일".
+ */
 export function describeRepeat(repeat: ScheduleRepeat): string {
   switch (repeat.kind) {
     case "daily":
@@ -283,7 +285,10 @@ export function describeRepeat(repeat: ScheduleRepeat): string {
       }
       const n = Math.floor(repeat.intervalWeeks);
       if (!(n > 1)) return standalone ? label : `매주 ${label}`;
-      return `${n === 2 ? "격주" : `${n}주마다`} ${label}`;
+      const every = n === 2 ? "격주" : `${n}주마다`;
+      // 요일 7개 + N주 간격 = '실행 주에는 7일 내내'. "격주 매일"은 두 말이 부딪혀 모순으로 읽힌다.
+      if (days.length === 7) return `${every}(그 주 매일)`;
+      return `${every} ${label}`;
     }
     case "monthly": {
       const regular = [...new Set(repeat.dates.filter((d) => d > 0))].sort((a, b) => a - b);

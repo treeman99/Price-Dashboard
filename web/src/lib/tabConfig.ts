@@ -8,6 +8,9 @@ import type {
   ScheduleJobId,
   TabSettings,
 } from "@shared/types";
+// ⚠️ 별칭(@shared) 대신 상대 경로: 이 파일의 단위 테스트는 루트에서 tsx 로 도는데(npm test), 루트 tsconfig 에는
+//    web 의 paths 별칭이 없어 런타임 import 를 못 푼다(타입 import 는 지워져서 괜찮다). 가리키는 파일은 같다.
+import { mondayOf } from "../../../shared/schedule";
 
 /**
  * 탭 ↔ '자동 수집·설정' 다이얼로그 내용 매핑과, 그 다이얼로그가 쓰는 작은 순수 함수들.
@@ -260,13 +263,8 @@ export function ymd(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** now 가 속한 주(월요일 시작)의 월요일 + weekOffset 주. 시각은 00:00(로컬). */
-export function mondayOf(now: Date, weekOffset = 0): Date {
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const sinceMonday = (d.getDay() + 6) % 7; // 월=0 … 일=6
-  d.setDate(d.getDate() - sinceMonday + weekOffset * 7);
-  return d;
-}
+/** now 가 속한 주(월요일 시작)의 월요일 + weekOffset 주(00:00 로컬). 격주 판정과 같은 계산이라 서버 것을 그대로 쓴다. */
+export { mondayOf };
 
 /** 그 주의 7일(월~일). */
 export function weekDays(now: Date, weekOffset = 0): Date[] {
