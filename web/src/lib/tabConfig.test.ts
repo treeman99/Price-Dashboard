@@ -4,6 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  MANUAL_RUN_LABEL,
   TAB_CONFIG,
   buildSchedulePatch,
   buildSettingsPatch,
@@ -71,6 +72,16 @@ test("탭 ↔ 잡 매핑: 증시는 시장별 브리핑 2개, 로또는 운영 �
   // 8개 잡이 빠짐없이 어느 한 탭에 속한다.
   const all = Object.values(TAB_CONFIG).flatMap((d) => d.jobs).sort();
   assert.deepEqual(all, ["events", "lotto", "news", "skills", "stockKr", "stockPulse", "stockUs", "youtube"]);
+});
+
+test("MANUAL_RUN_LABEL: 스케줄 '꺼짐' 안내의 수동 실행 문구는 화면 버튼이 실제로 있는 잡에만", () => {
+  // QA L2: 로또·스킬 랭킹에는 화면 수동 갱신이 없는데 "'지금 갱신'은 그대로 됩니다"가 떴다.
+  assert.equal(MANUAL_RUN_LABEL.lotto, undefined);
+  assert.equal(MANUAL_RUN_LABEL.skills, undefined);
+  assert.equal(MANUAL_RUN_LABEL.stockPulse, "지금 실행", "보유 주식 탭 버튼 문구");
+  for (const id of ["events", "news", "youtube", "stockKr", "stockUs"] as const) {
+    assert.equal(MANUAL_RUN_LABEL[id], "지금 갱신", id);
+  }
 });
 
 test("setAtPath 는 원본을 바꾸지 않고 중간 객체를 만든다", () => {

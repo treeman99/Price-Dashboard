@@ -141,6 +141,20 @@ export const CHANNEL_LABEL: Record<NotifyChannel, string> = {
   imessage: "iMessage",
 };
 
+/**
+ * 화면에 수동 실행 버튼이 있는 잡 → 그 버튼 이름(각 Board 의 실제 문구). 스케줄 '꺼짐' 안내에서
+ * "수동으로는 그대로 된다"를 알릴 때만 쓴다. 스킬 랭킹·로또는 화면 수동 갱신이 없어 빠져 있다
+ * (SkillsBoard 머리 주석 · LottoBoard 의 [새로고침]은 저장된 결과를 다시 읽을 뿐 사이클을 돌리지 않는다).
+ */
+export const MANUAL_RUN_LABEL: Partial<Record<ScheduleJobId, string>> = {
+  events: "지금 갱신",
+  news: "지금 갱신",
+  youtube: "지금 갱신",
+  stockKr: "지금 갱신",
+  stockUs: "지금 갱신",
+  stockPulse: "지금 실행", // 보유 주식 탭
+};
+
 // ── 점 경로 읽기/쓰기 ─────────────────────────────────────────────────────────
 
 /** "youtube.freshDays" 처럼 점 경로로 값을 읽는다. 없으면 undefined. */

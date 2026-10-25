@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { IconAction, Notice, Segmented } from "@/components/ui/page";
 import { cn } from "@/lib/utils";
-import { formatWhen, mondayOf, sameValue, weekDays, ymd } from "@/lib/tabConfig";
+import { MANUAL_RUN_LABEL, formatWhen, mondayOf, sameValue, weekDays, ymd } from "@/lib/tabConfig";
 import {
   describeSchedule,
   expandInterval,
@@ -500,7 +500,8 @@ export function ScheduleEditor({
             <p className="text-tone-error">{invalid}</p>
           ) : normalized && !normalized.enabled ? (
             <p className="text-muted-foreground">
-              꺼짐 — 정시 실행과 누락 보충을 하지 않습니다. &lsquo;지금 갱신&rsquo;은 그대로 됩니다.
+              꺼짐 — 정시 실행과 누락 보충을 하지 않습니다.
+              {MANUAL_RUN_LABEL[id] && <> &lsquo;{MANUAL_RUN_LABEL[id]}&rsquo;은 그대로 됩니다.</>}
             </p>
           ) : normalized ? (
             <>
