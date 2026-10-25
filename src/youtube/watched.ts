@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.ts";
+import { getTabSettings } from "../settings/tab-settings.ts";
 import { log } from "../util/log.ts";
 import type { WatchedVideo, YoutubeSnapshot, YoutubeVideo } from "../../shared/types.ts";
 
@@ -115,7 +116,7 @@ export function unmarkWatched(videoId: string): boolean {
 export function buildWatchedMatcher(): (videoId: string | null | undefined) => boolean {
   const list = loadWatched();
   const now = Date.now();
-  const days = config.youtubeWatchedExcludeDays;
+  const days = getTabSettings().youtube.watchedExcludeDays;
   const pruned = pruneWatched(list, now, days);
   if (pruned.length !== list.length) {
     save(pruned);
@@ -126,7 +127,7 @@ export function buildWatchedMatcher(): (videoId: string | null | undefined) => b
 
 /** 수집 프롬프트 힌트/디버그용: 현재 제외 활성인 본영상 목록(만료 제외). */
 export function activeWatched(): WatchedVideo[] {
-  return pruneWatched(loadWatched(), Date.now(), config.youtubeWatchedExcludeDays);
+  return pruneWatched(loadWatched(), Date.now(), getTabSettings().youtube.watchedExcludeDays);
 }
 
 /**

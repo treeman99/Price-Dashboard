@@ -1,5 +1,5 @@
 import { log } from "../util/log.ts";
-import { config } from "../config.ts";
+import { getTabSettings, tabTimeoutMs } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { getAgentModel } from "../util/model-store.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
@@ -409,7 +409,7 @@ function emptySnapshot(date: string, note: string): YoutubeSnapshot {
     date,
     updatedAt: new Date().toISOString(),
     source: "empty",
-    freshDays: config.youtubeFreshDays,
+    freshDays: getTabSettings().youtube.freshDays,
     categories: loadCategories().map((c) => toCategory(c, [])),
     notes: note,
   };
@@ -434,7 +434,7 @@ function rssToVideo(r: RssVideo): YoutubeVideo {
 }
 
 /**
- * 채널 발굴 1회 예산(ms). **탭 예산(config.youtubeTimeoutMs)과 별개인 곁가지 예산**이라
+ * 채널 발굴 1회 예산(ms). **탭 예산(운영 설정 timeouts.youtubeMin)과 별개인 곁가지 예산**이라
  * config 로 올리지 않고 여기 둔다 — 실패해도 fail-open(추천 채널만으로 진행)이고, 조정 근거가
  * 곧 이 주석이라 값과 근거를 떼어 놓을 이유가 없다(agent-query.ts 의 FALLBACK_TIMEOUT_MS 와 같은 결).
  *
@@ -511,7 +511,8 @@ ${catList}
  */
 export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
   const today = date;
-  const freshDays = config.youtubeFreshDays;
+  // 실행 시작 시점에 한 번 읽는다(대시보드 저장 즉시 다음 수집부터 반영 + 한 실행 안에서는 일관).
+  const freshDays = getTabSettings().youtube.freshDays;
   const cutoff = localDateDaysAgo(freshDays);
   const defs = loadCategories();
   const blockList = loadBlocklist();
@@ -586,7 +587,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
       // 실행'이 아니라 maxTurns(120) 를 전부 소진하고 결과 47자만 남긴 폭주 런이다
       // (2026-07-26 05:18Z, 도구 86회). 그런 런은 더 기다려도 건질 게 없으므로 20분에서 끊고
       // catch-up 에 넘기는 편이 낫다. 앞단의 채널 발굴·RSS 하베스트까지 합쳐도 20분이면 넉넉하다.
-      config.youtubeTimeoutMs,
+      tabTimeoutMs("youtubeMin"),
       "유튜브 큐레이션"
     );
     if (!finalText) return emptySnapshot(today, "유튜브 큐레이션 결과가 비어 있습니다.");

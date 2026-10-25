@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.ts";
+import { getTabSettings } from "../settings/tab-settings.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
 import { curateYoutube } from "./curate.ts";
@@ -195,7 +196,7 @@ function emptySnapshot(): YoutubeSnapshot {
     date: localDate(),
     updatedAt: new Date().toISOString(),
     source: "empty",
-    freshDays: config.youtubeFreshDays,
+    freshDays: getTabSettings().youtube.freshDays,
     categories: loadCategories().map((c) => ({
       key: c.key,
       label: c.label,

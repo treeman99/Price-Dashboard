@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.ts";
+import { getTabSettings } from "../settings/tab-settings.ts";
 import { log } from "../util/log.ts";
 import { titleKey } from "./curate.ts";
 import type { EventsSnapshot } from "../../shared/types.ts";
@@ -169,11 +170,12 @@ export function markNewItems(snapshot: EventsSnapshot, today: string): void {
 
   const p = ledgerPath();
   const ledger = loadLedger(p);
+  const { newGapDays, newShowDays } = getTabSettings().events;
   const { ledger: nextLedger, isNew } = detectNew(
     ledger,
     refs.map((r) => r.key),
     today,
-    { gapDays: config.eventsNewGapDays, showDays: config.eventsNewShowDays }
+    { gapDays: newGapDays, showDays: newShowDays }
   );
   for (const r of refs) r.set(isNew.get(r.key) ?? false);
   saveLedger(p, nextLedger);

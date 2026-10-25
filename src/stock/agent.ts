@@ -1,4 +1,4 @@
-import { config } from "../config.ts";
+import { tabTimeoutMs } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { getAgentModel } from "../util/model-store.ts";
 
@@ -83,7 +83,8 @@ const STOCK_AGENT_TOOLS = ["WebSearch", "WebFetch"];
  *    (60분)의 1/6 이라 지연이 누적되지 않는다(실측 n=87: 중앙 66초 · 최대 358초).
  */
 function timeoutFor(mode: StockAgentMode): number {
-  return mode === "pulse" ? config.stockPulseTimeoutMs : config.stockBriefTimeoutMs;
+  // 대시보드 운영 설정 우선(분 단위, 호출 시점에 읽음 — 다음 실행부터 적용).
+  return tabTimeoutMs(mode === "pulse" ? "stockPulseMin" : "stockBriefMin");
 }
 
 /**

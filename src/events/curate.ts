@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { config } from "../config.ts";
+import { getTabSettings, tabTimeoutMs } from "../settings/tab-settings.ts";
 import { log } from "../util/log.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { getAgentModel } from "../util/model-store.ts";
@@ -141,7 +142,7 @@ function corpusToText(corpus: RawCorpus): string {
 
 /** insane-engine 사용 가능 여부 (기능 on + venv python 존재) */
 function engineAvailable(): boolean {
-  return config.eventsVerifyDates && fs.existsSync(config.insaneEngine.python);
+  return getTabSettings().events.verifyDates && fs.existsSync(config.insaneEngine.python);
 }
 
 /** 큐레이션 프롬프트에 삽입할 '실제 페이지 날짜 검증' 지침 (엔진 가용 시에만) */
@@ -430,7 +431,7 @@ export async function curate(corpus: RawCorpus, date: string): Promise<EventsSna
       // 길다. 그래도 20분이면 최대치의 3배다. 60분이 실제로 태운 값이다(로그 시각은 UTC):
       // 10:00 KST 슬롯의 catch-up 이 01:18Z 에 시작해 3600초를 꽉 채우고 02:18Z 에 타임아웃 →
       // 원본 폴백(naver-raw). 결국 그날 LLM 결과는 두 번째 catch-up 이 도는 12:44 KST 에야 나왔다.
-      config.eventsTimeoutMs,
+      tabTimeoutMs("eventsMin"),
       "팝업/전시 큐레이션"
     );
     if (!finalText) return rawSnapshot(corpus, date);

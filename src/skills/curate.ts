@@ -1,5 +1,5 @@
 import { log } from "../util/log.ts";
-import { config } from "../config.ts";
+import { tabTimeoutMs } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { getAgentModel } from "../util/model-store.ts";
 import { loadSummaries, saveSummary, summarySourceHash } from "./store.ts";
@@ -151,8 +151,8 @@ const METRIC_RE = new RegExp(
 /**
  * 대상 저장소들을 배치로 나눠 요약하고 DB 캐시에 저장한다.
  *
- * - 배치 1회 상한: config.skillsSummaryTimeoutMs(기본 5분)
- * - 전체 예산: config.skillsSummaryBudgetMs(기본 20분) — 넘기면 남은 배치를 건너뛴다.
+ * - 배치 1회 상한: 운영 설정 timeouts.skillsSummaryMin(기본 .env SKILLS_SUMMARY_TIMEOUT_MS = 5분)
+ * - 전체 예산: 운영 설정 timeouts.skillsBudgetMin(기본 .env SKILLS_SUMMARY_BUDGET_MS = 20분) — 넘기면 남은 배치를 건너뛴다.
  *   요약이 덜 끝나도 목록은 원문으로 채워지므로, 예산 초과로 랭킹 전체를 늦추지 않는다.
  *
  * @returns 이번에 새로 만든 요약(repo_id → summary)
@@ -166,11 +166,14 @@ export async function summarizeSkillRepos(targets: SkillRepo[]): Promise<Map<num
 
   const batches = chunk(targets, SKILLS_SUMMARY_BATCH);
   const startedAt = Date.now();
+  // 시작 시점에 한 번 읽는다 — 한 회차 안에서 예산이 바뀌면 '남은 예산' 계산이 흔들린다.
+  const batchMs = tabTimeoutMs("skillsSummaryMin");
+  const budgetMs = tabTimeoutMs("skillsBudgetMin");
   log.info(`스킬 요약 시작 — ${targets.length}건 / ${batches.length}배치 (모델 ${getAgentModel()})`);
 
   for (const [i, batch] of batches.entries()) {
     const spent = Date.now() - startedAt;
-    if (spent >= config.skillsSummaryBudgetMs) {
+    if (spent >= budgetMs) {
       log.warn(
         `스킬 요약 전체 예산 소진(${Math.round(spent / 1000)}초) — 남은 ${batches.length - i}배치 건너뜀. ` +
           "해당 항목은 원문 설명으로 표시된다."
@@ -194,7 +197,7 @@ export async function summarizeSkillRepos(targets: SkillRepo[]): Promise<Map<num
             "star 수·순위·증가분 같은 수치는 절대 지어내지 않는다.",
         },
         // 남은 예산과 배치 상한 중 작은 쪽. 예산이 3분 남았는데 5분을 주면 그 배치가 예산을 넘긴다.
-        Math.max(30_000, Math.min(config.skillsSummaryTimeoutMs, config.skillsSummaryBudgetMs - spent)),
+        Math.max(30_000, Math.min(batchMs, budgetMs - spent)),
         `스킬 요약 ${i + 1}/${batches.length}`
       );
       const parsed = parseSummaryResponse(text, ids);

@@ -1,5 +1,5 @@
 import { log } from "../util/log.ts";
-import { config } from "../config.ts";
+import { tabTimeoutMs } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { getAgentModel } from "../util/model-store.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
@@ -136,7 +136,7 @@ export async function curateNews(date: string): Promise<NewsSnapshot> {
       // 웹이 느린 날은 그대로 흡수하면서도, 죽은 실행을 한 시간씩 끌고 가지 않는다.
       // 60분이 실제로 태운 값이다: 2026-08-02 00:36Z 에 3600초를 소진하고 실패했고,
       // 그 한 시간이 세마포어를 물고 있어 뒤따르던 유튜브·팝업/전시 슬롯까지 연쇄로 밀렸다.
-      config.newsTimeoutMs,
+      tabTimeoutMs("newsMin"),
       "뉴스 큐레이션"
     );
     if (!finalText) return emptySnapshot(today, "뉴스 큐레이션 결과가 비어 있습니다.");

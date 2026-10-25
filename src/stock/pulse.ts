@@ -1,5 +1,5 @@
-import { config } from "../config.ts";
 import { log } from "../util/log.ts";
+import { getTabSettings } from "../settings/tab-settings.ts";
 import { localDate } from "../util/date.ts";
 import { runStockAgent, extractJson } from "./agent.ts";
 import { buildPulsePrompt, normalizePulse } from "./pulse-prompt.ts";
@@ -118,10 +118,13 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
     log.info(`펄스 백오프 중 → ${opts.slot} 건너뜀`);
     return { ...base, error: "백오프 중" };
   }
-  // 출력 채널이 문자 하나뿐이다. 꺼져 있으면 매시간 LLM 을 돌릴 이유가 없다.
+  // 출력 채널이 문자 하나뿐이다. 꺼져 있으면(전역 미설정 또는 대시보드 탭 스위치 off)
+  // 매시간 LLM 을 돌릴 이유가 없다(isPulseNotifyEnabled 주석).
   if (!isPulseNotifyEnabled()) {
-    log.info(`iMessage 미설정 → 펄스(${opts.slot}) 건너뜀 (NOTIFY_IMESSAGE/IMESSAGE_TO 확인)`);
-    return { ...base, error: "iMessage 미설정" };
+    log.info(
+      `펄스 문자 꺼짐 → 펄스(${opts.slot}) 건너뜀 (NOTIFY_IMESSAGE/IMESSAGE_TO 또는 대시보드 알림 설정 확인)`
+    );
+    return { ...base, error: "iMessage 미설정 또는 꺼짐" };
   }
 
   running = true;
@@ -142,7 +145,9 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
     const breaking = await fetchSavetickerNews({ withinHours: 6, limit: 20 });
 
     // ── 3. 최근 이슈 (프롬프트 단계 중복 억제) ──
-    const recent = recentPulseAlerts(config.stockPulse.dedupHours);
+    // 정책 값은 실행 시작 시점에 한 번 읽는다(저장 즉시 반영 + 한 실행 안에서는 일관).
+    const policy = getTabSettings().stockPulse;
+    const recent = recentPulseAlerts(policy.dedupHours);
     const recentHeadlines = recent.slice(0, RECENT_HEADLINE_LIMIT).map((r) => r.impact.headline);
 
     // ── 4. 에이전트 판정 ──
@@ -172,11 +177,7 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
     const counts: GateCounts = countPulseSentToday(date);
     const caps = PULSE_CAPS();
     const threshold = pulseThreshold();
-    const quiet = isQuietHour(
-      startedAt.getHours(),
-      config.stockPulse.quietStartHour,
-      config.stockPulse.quietEndHour
-    );
+    const quiet = isQuietHour(startedAt.getHours(), policy.quietStartHour, policy.quietEndHour);
     const sendable = opts.notify !== false;
 
     let sent = 0;
@@ -191,7 +192,15 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
         : null;
       if (owned) candidate.impact.market = owned.market;
 
-      const decision = decide({ candidate, recent, counts, caps, threshold, quiet });
+      const decision = decide({
+        candidate,
+        recent,
+        counts,
+        caps,
+        threshold,
+        quiet,
+        dedupHours: policy.dedupHours,
+      });
 
       if (decision.status === "sent" && sendable) {
         const ok = await sendPulseIMessage(candidate.impact);
@@ -304,7 +313,7 @@ export async function flushPulseQueue(trigger: string): Promise<number> {
   const queued = listQueuedPulseAlerts();
   if (!queued.length) return 0;
   if (!isPulseNotifyEnabled()) {
-    log.warn(`펄스 묶음 발송 불가(iMessage 미설정) — 보류 ${queued.length}건 유지`);
+    log.warn(`펄스 묶음 발송 불가(iMessage 미설정 또는 꺼짐) — 보류 ${queued.length}건 유지`);
     return 0;
   }
   const ok = await sendPulseDigest(queued);

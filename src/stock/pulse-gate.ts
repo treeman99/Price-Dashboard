@@ -43,6 +43,8 @@ export interface GateInput {
   threshold: PulseSeverity;
   /** 지금이 야간(조용 시간)인가. */
   quiet: boolean;
+  /** recent 를 뽑은 중복 억제 창(시간). 사유 문구용 — 없으면 기본 24. */
+  dedupHours?: number;
 }
 
 /**
@@ -97,7 +99,7 @@ export function decide(input: GateInput): GateDecision {
   if (dup && severityRank(sev) <= severityRank(dup.impact.severity)) {
     return {
       status: "dup",
-      reason: `24시간 내 동일 이슈 (#${dup.id} ${dup.impact.severity})`,
+      reason: `${input.dedupHours ?? 24}시간 내 동일 이슈 (#${dup.id} ${dup.impact.severity})`,
     };
   }
 
