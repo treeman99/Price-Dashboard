@@ -36,10 +36,13 @@ export function PageToolbar({
         className
       )}
     >
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-muted-foreground">
+      {/* 메타 칸은 flex-basis 0 이라 최소 폭이 없으면 좁은 화면(375px)에서 오른쪽 버튼들 옆에 50~80px 로
+          짓눌린다(자동 수집 요약이 통째로 잘리거나 버튼 밑으로 겹친다). 최소 폭을 주면 그때는 버튼 줄이
+          아래로 내려가고(ml-auto 로 오른쪽 정렬), 넓은 화면은 지금과 같다. */}
+      <div className="flex min-w-[min(100%,16rem)] flex-1 flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-muted-foreground">
         {children}
       </div>
-      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      {actions && <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
