@@ -31,8 +31,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { countEvaluatedMissed, severityFor, type MissedSlot } from "../../shared/uptime.ts";
-import type { MissedSlotDeps } from "./missed.ts"; // 타입 전용 import 는 런타임에 지워진다
-import type { ScheduleSettings } from "../../shared/types.ts";
+import type { MissedScheduleInput, MissedSlotDeps } from "./missed.ts"; // 타입 전용 import 는 런타임에 지워진다
+import type { JobSchedule, ScheduleSettings } from "../../shared/types.ts";
 
 // ── ★ 반드시 대상 모듈 로드 **전에** ─────────────────────────────────────────
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "uptime-missed-"));
@@ -389,6 +389,93 @@ test("시계가 뒤로 점프해 gapEnd 가 미래여도 아직 오지 않은 �
   assert.deepEqual(tabsOf(r), ["news"]);
 });
 
+
+// ────────────────────────────────────────────────────────────────────────────
+// 9. 스케줄 v2 — 꺼짐·실행일·로또 스케줄·날 넘김 보충 슬롯
+// ────────────────────────────────────────────────────────────────────────────
+
+const weeklyJob = (days: number[], times: string[], enabled = true): JobSchedule =>
+  ({ enabled, repeat: { kind: "weekly", days, intervalWeeks: 1 }, times }) as JobSchedule;
+/** 2026-08-03 은 월요일, 08-04 는 화요일, 08-01 은 토요일이다. */
+const MONDAY = "2026-08-03";
+const TUESDAY = "2026-08-04";
+
+test("v2: 꺼진 잡은 공백 안에 시각이 있어도 누락으로 세지 않는다", async () => {
+  const schedule = (): MissedScheduleInput => ({
+    ...FULL_SCHEDULE,
+    news: { enabled: false, repeat: { kind: "daily" }, times: ["08:00"] },
+  });
+  const r = await describeMissedSlots(
+    at(WEDNESDAY, "07:00"),
+    at(WEDNESDAY, "09:00"),
+    baseDeps(WEDNESDAY, { schedule })
+  );
+  assert.equal(only(r, "news").length, 0, "꺼짐은 '놓친 것'이 아니라 '돌 예정이 없던 것'이다");
+  assert.equal(only(r, "stockKr").length, 1, "대조군: 켜진 잡은 그대로 잡힌다");
+});
+
+test("v2: 실행일이 아닌 날(월요일 전용 잡의 수요일)은 누락으로 세지 않는다", async () => {
+  const schedule = (): MissedScheduleInput => ({ news: weeklyJob([1], ["08:00"]) });
+  const wed = await describeMissedSlots(
+    at(WEDNESDAY, "07:00"),
+    at(WEDNESDAY, "09:00"),
+    baseDeps(WEDNESDAY, { schedule })
+  );
+  assert.equal(only(wed, "news").length, 0);
+  const mon = await describeMissedSlots(at(MONDAY, "07:00"), at(MONDAY, "09:00"), baseDeps(MONDAY, { schedule }));
+  assert.equal(only(mon, "news").length, 1, "실행일(월요일)에는 손실로 잡힌다");
+  assert.equal(only(mon, "news")[0].evaluated, true);
+});
+
+test("v2: 스케줄러가 날을 넘겨 보충하는 주간 슬롯은 지난 날짜여도 검증한다", async () => {
+  // 월요일 전용 뉴스. 월 07:00 ~ 화 09:00 잠들어 있었다 → 화요일은 비실행일이라 스케줄러가
+  // 월요일 08:00 을 보충한다(계약 §1.3). '지난 날짜라 보충 대상이 아닙니다'는 거짓이 된다.
+  const schedule = (): MissedScheduleInput => ({ news: weeklyJob([1], ["08:00"]) });
+  const r = await describeMissedSlots(at(MONDAY, "07:00"), at(TUESDAY, "09:00"), baseDeps(TUESDAY, { schedule }));
+  const news = only(r, "news");
+  assert.equal(news.length, 1);
+  assert.equal(news[0].date, MONDAY);
+  assert.equal(news[0].evaluated, true, "보충 대상이므로 검증된 손실이다");
+  assert.equal(news[0].note, null);
+
+  // 보충이 끝나 커버되면 목록에서 사라진다(= store 가 복구로 읽는 신호)
+  const recovered = await describeMissedSlots(
+    at(MONDAY, "07:00"),
+    at(TUESDAY, "09:00"),
+    baseDeps(TUESDAY, { schedule, newsCoveredAt: (s) => s.getTime() === at(MONDAY, "08:00").getTime() })
+  );
+  assert.equal(only(recovered, "news").length, 0);
+});
+
+test("v2: 매일 잡의 어제 슬롯은 여전히 '보충 대상 아님'(기존 동작)", async () => {
+  const schedule = (): MissedScheduleInput => ({ news: { enabled: true, repeat: { kind: "daily" }, times: ["23:00"] } });
+  const r = await describeMissedSlots(at(TUESDAY, "22:00"), at(WEDNESDAY, "09:00"), baseDeps(WEDNESDAY, { schedule }));
+  assert.equal(r.length, 1);
+  assert.equal(r[0].evaluated, false);
+  assert.equal(r[0].note, "지난 날짜라 보충 대상이 아닙니다");
+});
+
+test("v2: 로또는 스케줄의 요일·시각을 따른다(토요일 19:00 로 바꾼 경우)", async () => {
+  const schedule = (): MissedScheduleInput => ({ lotto: weeklyJob([6], ["19:00"]) });
+  const sat = await describeMissedSlots(
+    at("2026-08-01", "18:00"),
+    at("2026-08-01", "19:30"),
+    baseDeps("2026-08-01", { schedule })
+  );
+  const lotto = only(sat, "lotto");
+  assert.equal(lotto.length, 1);
+  assert.equal(lotto[0].slot, "토요일 19:00");
+  // 예전 고정값(일요일 10:00)은 더 이상 후보가 아니다
+  const sun = await describeMissedSlots(at(SUNDAY, "09:30"), at(SUNDAY, "11:00"), baseDeps(SUNDAY, { schedule }));
+  assert.equal(only(sun, "lotto").length, 0);
+  // 꺼진 로또는 후보가 없다
+  const off = await describeMissedSlots(
+    at("2026-08-01", "18:00"),
+    at("2026-08-01", "19:30"),
+    baseDeps("2026-08-01", { schedule: () => ({ lotto: weeklyJob([6], ["19:00"], false) }) })
+  );
+  assert.equal(only(off, "lotto").length, 0);
+});
 
 // 테스트가 만든 임시 디렉터리를 지운다. 없으면 npm test 를 돌릴 때마다
 // os.tmpdir() 에 uptime-* 디렉터리가 쌓인다(2026-08-02 검증에서 24개 관측).

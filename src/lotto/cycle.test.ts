@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   LOTTO_CYCLE_CRON,
   historyBefore,
+  inDrawBlackout,
   lastCycleBoundary,
   nextCycleAt,
   shouldRunCycle,
 } from "./cycle.ts";
+import type { JobSchedule } from "../../shared/types.ts";
 import { SEED_SPEC, estimateHit3Rate, generateSets, makeRng, normalizeSpec } from "./strategy.ts";
 import type { LottoDraw, LottoState } from "../../shared/lotto.ts";
 import {
@@ -55,6 +57,13 @@ test("historyBefore 는 회차가 끊겨 있어도 경계를 지킨다", () => {
 // 그 계산이 하루라도 어긋나면 사이클이 매 30분 점검마다 다시 돌거나(중복) 다음 주까지
 // 안 돌아온다(누락). 요일·시각 경계가 이 파일에서 못박히는 이유다.
 // ⚠️ 로컬 시각 기준이므로 테스트도 반드시 로컬 생성자(new Date(y, m, d, h))를 쓴다.
+// ⚠️ 스케줄 v2 이후 경계 함수의 기본 인자는 `getSchedule().lotto`(실제 data/schedule.json)다.
+//    사용자가 화면에서 로또 시각을 바꿔도 이 테스트가 흔들리지 않게 기본 스케줄을 명시해 넘긴다.
+const SUN10: JobSchedule = {
+  enabled: true,
+  repeat: { kind: "weekly", days: [0], intervalWeeks: 1 },
+  times: ["10:00"],
+};
 
 test("cron 식과 경계 계산이 같은 시각(일요일 10:00)을 가리킨다", () => {
   assert.equal(LOTTO_CYCLE_CRON, "0 10 * * 0");
@@ -62,18 +71,18 @@ test("cron 식과 경계 계산이 같은 시각(일요일 10:00)을 가리킨�
 
 test("직전 경계는 지나간 가장 최근의 일요일 10:00 이다", () => {
   // 2026-07-30 은 목요일 → 직전 경계는 7/26(일) 10:00
-  const thu = lastCycleBoundary(new Date(2026, 6, 30, 12, 34));
+  const thu = lastCycleBoundary(new Date(2026, 6, 30, 12, 34), SUN10);
   assert.equal(thu.getDay(), 0);
   assert.equal(thu.getDate(), 26);
   assert.equal(thu.getHours(), 10);
 
   // 일요일 09:00 은 **아직 그 주 경계 전**이라 한 주 전이 직전 경계다.
-  const sunEarly = lastCycleBoundary(new Date(2026, 7, 2, 9, 59));
+  const sunEarly = lastCycleBoundary(new Date(2026, 7, 2, 9, 59), SUN10);
   assert.equal(sunEarly.getDate(), 26);
   assert.equal(sunEarly.getMonth(), 6);
 
   // 정각은 경계에 포함된다.
-  const sunSharp = lastCycleBoundary(new Date(2026, 7, 2, 10, 0));
+  const sunSharp = lastCycleBoundary(new Date(2026, 7, 2, 10, 0), SUN10);
   assert.equal(sunSharp.getDate(), 2);
   assert.equal(sunSharp.getMonth(), 7);
 });
@@ -84,7 +93,7 @@ test("다음 실행 예정은 항상 미래의 일요일 10:00 이다", () => {
     new Date(2026, 7, 2, 9, 59), // 일 09:59
     new Date(2026, 7, 2, 10, 1), // 일 10:01
   ]) {
-    const next = nextCycleAt(now);
+    const next = nextCycleAt(now, SUN10);
     assert.equal(next.getDay(), 0);
     assert.equal(next.getHours(), 10);
     assert.ok(next.getTime() > now.getTime(), `${next.toString()} 가 미래가 아니다`);
@@ -96,31 +105,79 @@ test("경계를 지난 뒤 아직 안 돌았으면 보충하고, 이미 돌았�
   const before = new Date(2026, 6, 26, 10, 5).toISOString();
   const after = new Date(2026, 7, 2, 10, 2).toISOString();
 
-  assert.equal(shouldRunCycle(now, state({ lastCycleAt: before }), true), true);
-  assert.equal(shouldRunCycle(now, state({ lastCycleAt: after }), true), false);
+  assert.equal(shouldRunCycle(now, state({ lastCycleAt: before }), true, SUN10), true);
+  assert.equal(shouldRunCycle(now, state({ lastCycleAt: after }), true, SUN10), false);
   // 한 번도 안 돈 상태
-  assert.equal(shouldRunCycle(now, state(), true), true);
+  assert.equal(shouldRunCycle(now, state(), true, SUN10), true);
 });
 
 test("다음 회차 번호가 비어 있으면 일요일이 아니어도 즉시 돈다", () => {
   // 배포 직후·DB 신규 생성 직후가 이 상태다. 다음 일요일까지 빈 화면을 두지 않는다.
   const now = new Date(2026, 6, 30, 12, 0);
   const justRan = state({ lastCycleAt: new Date(2026, 6, 30, 11, 0).toISOString() });
-  assert.equal(shouldRunCycle(now, justRan, true), false);
-  assert.equal(shouldRunCycle(now, justRan, false), true);
+  assert.equal(shouldRunCycle(now, justRan, true, SUN10), false);
+  assert.equal(shouldRunCycle(now, justRan, false, SUN10), true);
 });
 
 test("예약된 재시도 시각이 지나면 돈다 (토큰 한도·수집 실패 복구)", () => {
   const now = new Date(2026, 6, 30, 12, 0);
   const justRan = { lastCycleAt: new Date(2026, 6, 30, 8, 0).toISOString() };
   assert.equal(
-    shouldRunCycle(now, state({ ...justRan, retryAt: new Date(2026, 6, 30, 16, 0).toISOString() }), true),
+    shouldRunCycle(now, state({ ...justRan, retryAt: new Date(2026, 6, 30, 16, 0).toISOString() }), true, SUN10),
     false
   );
   assert.equal(
-    shouldRunCycle(now, state({ ...justRan, retryAt: new Date(2026, 6, 30, 11, 0).toISOString() }), true),
+    shouldRunCycle(now, state({ ...justRan, retryAt: new Date(2026, 6, 30, 11, 0).toISOString() }), true, SUN10),
     true
   );
+});
+
+// ── 스케줄 v2: 요일·시각 변경, 꺼짐, 실행일 아침 대기, 추첨~결과 공개 금지 구간 ──
+
+test("경계는 스케줄을 따른다 — 월요일 07:30 로 바꾸면 직전 경계도 월요일 07:30", () => {
+  const mon0730: JobSchedule = { ...SUN10, repeat: { kind: "weekly", days: [1], intervalWeeks: 1 }, times: ["07:30"] };
+  // 2026-07-30(목) → 직전 경계 7/27(월) 07:30, 다음 8/3(월) 07:30
+  assert.deepEqual(lastCycleBoundary(new Date(2026, 6, 30, 12, 0), mon0730), new Date(2026, 6, 27, 7, 30));
+  assert.deepEqual(nextCycleAt(new Date(2026, 6, 30, 12, 0), mon0730), new Date(2026, 7, 3, 7, 30));
+  // 꺼져 있어도 경계(이번 회차의 시작)는 정의된다 — 막는 것은 shouldRunCycle 의 몫
+  assert.deepEqual(
+    lastCycleBoundary(new Date(2026, 6, 30, 12, 0), { ...mon0730, enabled: false }),
+    new Date(2026, 6, 27, 7, 30)
+  );
+});
+
+test("꺼진 로또는 번호가 비어 있어도·재시도 예약이 지나도 돌지 않는다", () => {
+  const off: JobSchedule = { ...SUN10, enabled: false };
+  const now = new Date(2026, 6, 30, 12, 0);
+  assert.equal(shouldRunCycle(now, state(), false, off), false);
+  assert.equal(
+    shouldRunCycle(now, state({ retryAt: new Date(2026, 6, 30, 11, 0).toISOString() }), true, off),
+    false
+  );
+});
+
+test("직전 경계가 이전 날이고 오늘이 실행일이면 오늘 정시를 기다린다(회차당 1사이클)", () => {
+  // 지난 일요일(7/26) 사이클을 놓친 채 다음 일요일(8/2) 09:00 에 깨어났다.
+  const lastWeek = state({ lastCycleAt: new Date(2026, 6, 19, 10, 5).toISOString() });
+  assert.equal(
+    shouldRunCycle(new Date(2026, 7, 2, 9, 0), lastWeek, true, SUN10),
+    false,
+    "한 시간 뒤 10:00 정시가 돌 텐데 지금 보충하면 같은 회차에 사이클이 두 번 돈다"
+  );
+  // 비실행일(목요일)이면 그대로 보충한다(기존 동작)
+  assert.equal(shouldRunCycle(new Date(2026, 6, 30, 12, 0), lastWeek, true, SUN10), true);
+  // 번호가 비어 있으면 실행일 아침이어도 즉시 돈다(빈 화면 방지 — 기존 동작)
+  assert.equal(shouldRunCycle(new Date(2026, 7, 2, 9, 0), lastWeek, false, SUN10), true);
+});
+
+test("추첨~결과 공개 구간은 토요일 20:00 이상 24:00 미만", () => {
+  // 2026-08-01 은 토요일
+  assert.equal(inDrawBlackout(new Date(2026, 7, 1, 19, 59)), false);
+  assert.equal(inDrawBlackout(new Date(2026, 7, 1, 20, 0)), true);
+  assert.equal(inDrawBlackout(new Date(2026, 7, 1, 20, 45)), true, "추첨 시각");
+  assert.equal(inDrawBlackout(new Date(2026, 7, 1, 23, 59)), true);
+  assert.equal(inDrawBlackout(new Date(2026, 7, 2, 0, 0)), false, "자정부터 열린다");
+  assert.equal(inDrawBlackout(new Date(2026, 6, 30, 21, 0)), false, "목요일 21시는 무관");
 });
 
 /** 균등 무작위 추첨 회차를 만든다(시드 고정 — 테스트가 흔들리지 않게). */

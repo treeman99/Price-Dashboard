@@ -194,6 +194,28 @@ test("resolveSlot: 시장별로 자기 스케줄 목록을 본다", async () => 
   assert.equal(ledger.resolveSlot("us", undefined, at(10)), ledger.MANUAL_SLOT);
 });
 
+test("resolveSlot: 스케줄 v2 — 꺼져 있거나 오늘이 실행일이 아니면 수동 갱신은 MANUAL_SLOT", async () => {
+  const ledger = await import("./notify-ledger.ts");
+  // 평일 08:00 한국장. 2026-07-20 은 월요일, 07-25 는 토요일.
+  fs.writeFileSync(
+    path.join(tmpDir, "schedule.json"),
+    JSON.stringify({
+      stockKr: { enabled: true, repeat: { kind: "weekly", days: [1, 2, 3, 4, 5], intervalWeeks: 1 }, times: ["08:00"] },
+      stockUs: { enabled: false, repeat: { kind: "daily" }, times: ["17:00"] },
+    }),
+    "utf8"
+  );
+  assert.equal(ledger.resolveSlot("kr", undefined, new Date(2026, 6, 20, 9, 0)), "08:00", "실행일은 기존 규칙 그대로");
+  assert.equal(
+    ledger.resolveSlot("kr", undefined, new Date(2026, 6, 25, 9, 0)),
+    ledger.MANUAL_SLOT,
+    "토요일엔 예정된 08:00 이 없었다 — 그 슬롯 알림을 새로 만들면 안 된다"
+  );
+  assert.equal(ledger.resolveSlot("us", undefined, new Date(2026, 6, 20, 18, 0)), ledger.MANUAL_SLOT, "꺼진 잡");
+  // 스케줄러가 넘긴 슬롯은 여전히 그대로 통과한다(게이트는 수동 갱신 전용).
+  assert.equal(ledger.resolveSlot("kr", "08:00", new Date(2026, 6, 25, 9, 0)), "08:00");
+});
+
 // ── catch-up 원장 게이트 ──
 test("slotNeedsCatchup: 원장이 근거가 될 때만 보충을 요구한다", async () => {
   const repo = await import("../db/repo.ts");

@@ -42,6 +42,7 @@ const {
   __setCycleDepsForTest,
   runWeeklyCycle,
   scorePendingPicks,
+  shouldCatchUpCycle,
   shouldRunCycle,
   writeUpcomingPicks,
 } = await import("./cycle.ts");
@@ -175,13 +176,19 @@ function okStream(text: string): AsyncIterable<SDKMessage> {
 /** 동행복권을 부르지 않는 수집기. 수집 실패의 retry 가 검증 대상 분기를 가리지 않게 한다. */
 const noNetworkSync = async () => ({ added: 0, latest: 4 });
 
+/**
+ * 추첨~결과 공개 금지 구간(토 20:00~24:00) 판정용 시계. 그 구간에는 번호 확정을 미루므로,
+ * 실제 시계를 쓰면 이 파일을 토요일 밤에 돌릴 때만 실패한다. 평일 정오로 고정한다.
+ */
+const weekdayNoon = () => new Date(2026, 6, 29, 12, 0); // 2026-07-29(수)
+
 test("Claude 인증 실패면 갱신을 미루고(재시도 예약·lastEvolvedRound 유지) 번호는 직전 세대로 확정한다", async () => {
   // 4회차 추첨 결과가 들어와, 못박아 둔 4회차 번호를 채점하고 에이전트를 부를 차례다.
   saveDraws([draw(4, [1, 2, 3, 4, 5, 6], 7)]);
   const before = latestStrategy();
   assert.ok(before);
   const models: unknown[] = [];
-  const restoreCycle = __setCycleDepsForTest({ syncDraws: noNetworkSync });
+  const restoreCycle = __setCycleDepsForTest({ syncDraws: noNetworkSync, now: weekdayNoon });
   const restoreAgent = __setAgentQueryDepsForTest({
     sdkQuery: ({ options }) => {
       models.push(options.model);
@@ -238,7 +245,7 @@ test("재로그인 뒤 4시간 재시도에서 미뤘던 갱신이 회복되고,
     hypothesis: "표본 1회차라 사양을 유지한다.",
     rationale: "근거가 표준오차를 넘지 못했다.",
   });
-  const restoreCycle = __setCycleDepsForTest({ syncDraws: noNetworkSync });
+  const restoreCycle = __setCycleDepsForTest({ syncDraws: noNetworkSync, now: weekdayNoon });
   const restoreAgent = __setAgentQueryDepsForTest({ sdkQuery: () => okStream(proposal) });
   try {
     const r = await runWeeklyCycle("retry");
@@ -260,5 +267,64 @@ test("재로그인 뒤 4시간 재시도에서 미뤘던 갱신이 회복되고,
   } finally {
     restoreAgent();
     restoreCycle();
+  }
+});
+
+/* ------------------------------------------------------------------------- *
+ * 추첨~결과 공개 구간(토 20:00~24:00)의 번호 확정 가드
+ *
+ * 사이클은 '다음 회차 = DB 최신 + 1' 로 번호를 확정한다. 토요일 저녁 정시 런이 LLM 큐 대기·전략
+ * 갱신으로 추첨(20:45경) 뒤까지 밀리면, DB 최신이 아직 지난 회차라 **방금 추첨된 회차**의 번호를
+ * 새로 뽑게 된다. 시작 시각 검증(저장 금지 구간)만으로는 막을 수 없어 확정 시점에 한 번 더 본다.
+ * ------------------------------------------------------------------------- */
+
+test("금지 구간에 번호 확정 단계에 닿으면 새로 뽑지 않고 미룬다 → 자정 이후 보충이 확정한다", async () => {
+  // 직전 테스트 뒤 상태: 4회차까지 채점·반영, 5회차 번호가 못박혀 있다. 그 번호가 없는 상황
+  // (예: 토요일 19시대 런이 4회차를 채점하고 막 지운 직후)을 만든다.
+  clearUpcoming();
+  const saturdayNight = () => new Date(2026, 7, 1, 21, 0); // 2026-08-01(토) 21:00
+  const restore = __setCycleDepsForTest({ syncDraws: noNetworkSync, now: saturdayNight });
+  try {
+    const r = await runWeeklyCycle("test-draw-window");
+    assert.equal(r.reason, "draw-window");
+    assert.equal(r.upcomingRound, null);
+    assert.equal(getUpcoming(), null, "금지 구간에 5회차 번호가 박혔다(추첨 후에 고른 번호가 될 수 있다)");
+    const st = getLottoState();
+    assert.match(st.lastError ?? "", /추첨~결과 공개 구간/);
+    assert.ok(st.retryAt, "자정 이후 재시도가 예약돼야 한다");
+
+    // 같은 밤의 30분 틱은 번호가 비어 있어도 보충하지 않는다(진입 자체가 막힌다).
+    assert.equal(shouldCatchUpCycle(new Date(2026, 7, 1, 21, 30)), false);
+    assert.equal(shouldCatchUpCycle(new Date(2026, 7, 1, 23, 59)), false);
+    // 자정이 지나면 '번호 없음' 조건으로 곧바로 보충한다.
+    assert.equal(shouldCatchUpCycle(new Date(2026, 7, 2, 0, 0)), true);
+  } finally {
+    restore();
+  }
+
+  const restore2 = __setCycleDepsForTest({ syncDraws: noNetworkSync, now: () => new Date(2026, 7, 2, 0, 30) });
+  try {
+    const r = await runWeeklyCycle("catchup");
+    assert.equal(r.upcomingRound, 5, "자정 이후에는 정상적으로 다음 회차 번호를 확정한다");
+    assert.equal(getUpcoming()?.round, 5);
+  } finally {
+    restore2();
+  }
+});
+
+test("이미 못박힌 번호가 있으면 금지 구간이어도 그대로 둔다(미룸 없음 — 덮어쓰지 않으므로 안전)", async () => {
+  const pinned = getUpcoming();
+  assert.ok(pinned);
+  const restore = __setCycleDepsForTest({
+    syncDraws: noNetworkSync,
+    now: () => new Date(2026, 7, 8, 21, 0), // 토요일 21:00
+  });
+  try {
+    const r = await runWeeklyCycle("test-pinned");
+    assert.equal(r.reason, "ok");
+    assert.equal(r.upcomingRound, 5);
+    assert.deepEqual(getUpcoming()?.sets, pinned.sets);
+  } finally {
+    restore();
   }
 });

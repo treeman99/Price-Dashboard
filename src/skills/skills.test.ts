@@ -253,3 +253,45 @@ test("다음 실행 예정은 직전 경계 + 7일이다", () => {
   const thursday = new Date(2026, 8, 17, 23, 0, 0);
   assert.equal(nextSkillsCycleAt(thursday).getTime(), new Date(2026, 8, 21, 9, 0, 0).getTime());
 });
+
+// ── 스케줄 v2: 회차 경계는 getSchedule().skills 를 따른다 ──
+
+test("경계는 스케줄을 따른다 — 기본(파일 없음)은 매주 월 09:00, 바꾸면 그 시각으로 이동", async () => {
+  // 이 파일은 DB_PATH 를 임시 디렉터리로 돌려 두었으므로, 그 옆 schedule.json 이 곧 스케줄이다.
+  const file = path.join(tmpDir, "schedule.json");
+  const thursday = new Date(2026, 8, 17, 23, 0, 0);
+  try {
+    // 격주 수요일 07:00 (기준 주 = 9/7~9/13) → 실행일 9/9, 9/23 …
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        skills: {
+          enabled: true,
+          repeat: { kind: "weekly", days: [3], intervalWeeks: 2, anchorDate: "2026-09-09" },
+          times: ["07:00"],
+        },
+      })
+    );
+    assert.equal(lastSkillsCycleBoundary(thursday).getTime(), new Date(2026, 8, 9, 7, 0).getTime());
+    assert.equal(nextSkillsCycleAt(thursday).getTime(), new Date(2026, 8, 23, 7, 0).getTime());
+
+    // 매월 1일 09:00
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ skills: { enabled: true, repeat: { kind: "monthly", dates: [1] }, times: ["09:00"] } })
+    );
+    assert.equal(lastSkillsCycleBoundary(thursday).getTime(), new Date(2026, 8, 1, 9, 0).getTime());
+    assert.equal(nextSkillsCycleAt(thursday).getTime(), new Date(2026, 9, 1, 9, 0).getTime());
+
+    // 꺼져 있어도 경계(이번 회차의 시작)는 정의된다 — 보충을 막는 것은 스케줄러의 몫이다.
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ skills: { enabled: false, repeat: { kind: "monthly", dates: [1] }, times: ["09:00"] } })
+    );
+    assert.equal(lastSkillsCycleBoundary(thursday).getTime(), new Date(2026, 8, 1, 9, 0).getTime());
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+  // 파일을 지우면 기본(매주 월 09:00)으로 돌아온다.
+  assert.equal(lastSkillsCycleBoundary(thursday).getTime(), new Date(2026, 8, 14, 9, 0).getTime());
+});

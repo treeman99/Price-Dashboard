@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { __setCaffeinateSpawnerForTest } from "../util/power.ts";
 import { __testing } from "./scheduler.ts";
+import type { JobSchedule, ScheduleRepeat } from "../../shared/types.ts";
 
 const {
   withLlmSlot,
@@ -9,6 +10,8 @@ const {
   createBackoff,
   backoffWaitMs,
   decideCatchup,
+  catchupTarget,
+  fireIfDue,
   shouldNoteBackoff,
   sleepGapMessage,
   formatDuration,
@@ -402,4 +405,112 @@ test("소요 시간 표기", () => {
   assert.equal(formatDuration(60_000), "1분");
   assert.equal(formatDuration(92_000), "1분 32초");
   assert.equal(formatDuration(-5), "0초", "음수 델타(시계 역행)에도 깨지지 않아야 한다");
+});
+
+// ── 스케줄 v2: catch-up 대상 일반화(계약 §1.3) ───────────────────────────
+//
+// 커버 판정은 updatedAt ≥ occurrence 로 단조라, 보충 대상은 'lastOccurrence 하나'면 충분하다.
+// 아래는 그 occurrence 를 언제 대상으로 삼는가 — 날을 넘길 때의 규칙 — 를 못박는다.
+// ⚠️ 로컬 시각 기준이라 반드시 로컬 생성자 new Date(y, m, d, h, mi) 를 쓴다.
+
+const at = (y: number, m: number, d: number, h = 0, mi = 0) => new Date(y, m - 1, d, h, mi, 0, 0);
+const sched = (repeat: ScheduleRepeat, times: string[], enabled = true): JobSchedule => ({
+  enabled,
+  repeat,
+  times,
+});
+const DAILY_0817 = sched({ kind: "daily" }, ["08:00", "17:00"]);
+const MONDAY_09 = sched({ kind: "weekly", days: [1], intervalWeeks: 1 }, ["09:00"]);
+
+test("catch-up 대상 — daily: 오늘 지난 가장 최근 슬롯 / 아침 첫 슬롯 전에는 어제 슬롯을 보충하지 않는다", () => {
+  // 2026-10-26 은 월요일
+  assert.deepEqual(catchupTarget(DAILY_0817, at(2026, 10, 26, 18, 0)), at(2026, 10, 26, 17, 0));
+  assert.deepEqual(catchupTarget(DAILY_0817, at(2026, 10, 26, 9, 0)), at(2026, 10, 26, 8, 0));
+  assert.equal(
+    catchupTarget(DAILY_0817, at(2026, 10, 26, 7, 0)),
+    null,
+    "기존 동작 보존: 아침 7시엔 어제 17시를 보충하지 않는다(오늘 08:00 을 기다린다)"
+  );
+});
+
+test("catch-up 대상 — 주간 잡: 다음 날(비실행일)엔 지난 occurrence 를 보충, 다음 실행일 아침엔 기다린다", () => {
+  // 월요일 09:00 을 놓친 채 화요일에 깨어났다 → 화요일은 실행일이 아니므로 월요일 09:00 이 대상
+  assert.deepEqual(catchupTarget(MONDAY_09, at(2026, 10, 27, 10, 0)), at(2026, 10, 26, 9, 0));
+  // 일요일까지 계속 같은 대상(커버 판정이 updatedAt ≥ 월요일 09:00 이라 한 번 돌면 닫힌다)
+  assert.deepEqual(catchupTarget(MONDAY_09, at(2026, 11, 1, 23, 0)), at(2026, 10, 26, 9, 0));
+  // 다음 월요일 08:00 — 오늘이 실행일이라 지난주 것을 보충하지 않고 오늘 09:00 을 기다린다
+  assert.equal(catchupTarget(MONDAY_09, at(2026, 11, 2, 8, 0)), null);
+  assert.deepEqual(catchupTarget(MONDAY_09, at(2026, 11, 2, 9, 0)), at(2026, 11, 2, 9, 0));
+});
+
+test("catch-up 대상 — 증시 브리핑(crossDay:false)은 날을 넘겨 보충하지 않는다", () => {
+  const weekdays = sched({ kind: "weekly", days: [1, 2, 3, 4, 5], intervalWeeks: 1 }, ["08:00"]);
+  // 토요일(비실행일) — 일반 잡이면 금요일 08:00 이 대상이지만 증시는 아니다
+  assert.deepEqual(catchupTarget(weekdays, at(2026, 10, 31, 10, 0)), at(2026, 10, 30, 8, 0));
+  assert.equal(catchupTarget(weekdays, at(2026, 10, 31, 10, 0), { crossDay: false }), null);
+  // 같은 날 슬롯은 그대로 대상이다
+  assert.deepEqual(
+    catchupTarget(weekdays, at(2026, 10, 30, 9, 0), { crossDay: false }),
+    at(2026, 10, 30, 8, 0)
+  );
+});
+
+test("catch-up 대상 — 꺼진 잡은 보충이 없다", () => {
+  assert.equal(catchupTarget({ ...DAILY_0817, enabled: false }, at(2026, 10, 26, 18, 0)), null);
+  assert.equal(catchupTarget({ ...MONDAY_09, enabled: false }, at(2026, 10, 27, 10, 0)), null);
+});
+
+test("catch-up 대상 — 매월 말일 잡: 다음 달 초(비실행일)엔 지난 말일을 보충", () => {
+  const monthEnd = sched({ kind: "monthly", dates: [-1] }, ["09:00"]);
+  assert.deepEqual(catchupTarget(monthEnd, at(2026, 11, 1, 12, 0)), at(2026, 10, 31, 9, 0));
+  assert.equal(catchupTarget(monthEnd, at(2026, 11, 30, 8, 0)), null, "말일 아침엔 오늘 09:00 을 기다린다");
+});
+
+test("catch-up 게이트 — Date 슬롯(v2 보충 대상)에도 같은 우선순위가 적용된다", () => {
+  const occ = at(2026, 10, 26, 9, 0);
+  assert.deepEqual(
+    decideCatchup({ running: false, blocked: false, slots: [occ], past: () => true, covered: () => false }),
+    { run: true, slot: occ }
+  );
+  assert.deepEqual(
+    decideCatchup({ running: false, blocked: false, slots: [] as Date[], past: () => true, covered: () => false }),
+    { run: false, reason: "covered" },
+    "대상이 없으면(꺼짐·실행일 아침 대기) 보충하지 않는다"
+  );
+  assert.deepEqual(
+    decideCatchup({ running: false, blocked: true, slots: [occ], past: () => true, covered: () => false }),
+    { run: false, reason: "backoff" }
+  );
+});
+
+// ── 스케줄 v2: 정시 cron 게이트(계약 §1.2) ───────────────────────────────
+
+test("cron 게이트 — 실행일이 아니면 실행하지 않는다(매일 cron + isDueDate)", () => {
+  let runs = 0;
+  const run = () => {
+    runs += 1;
+  };
+  // 월요일 잡: 화요일 09:00 발화는 버린다, 월요일 09:00 발화는 실행한다
+  assert.equal(fireIfDue(MONDAY_09, at(2026, 10, 27, 9, 0), run), false);
+  assert.equal(runs, 0);
+  assert.equal(fireIfDue(MONDAY_09, at(2026, 10, 26, 9, 0), run), true);
+  assert.equal(runs, 1);
+  // 격주: 쉬는 주의 월요일은 버린다
+  const biweekly = sched({ kind: "weekly", days: [1], intervalWeeks: 2, anchorDate: "2026-10-26" }, ["09:00"]);
+  assert.equal(fireIfDue(biweekly, at(2026, 11, 2, 9, 0), run), false);
+  assert.equal(fireIfDue(biweekly, at(2026, 11, 9, 9, 0), run), true);
+  // 매월 31일: 11월 30일 발화는 버린다(당겨 실행하지 않는다)
+  const m31 = sched({ kind: "monthly", dates: [31] }, ["09:00"]);
+  assert.equal(fireIfDue(m31, at(2026, 11, 30, 9, 0), run), false);
+  // 꺼진 잡은 실행일이어도 버린다(방어선 — 원래는 cron 자체를 등록하지 않는다)
+  assert.equal(fireIfDue({ ...MONDAY_09, enabled: false }, at(2026, 10, 26, 9, 0), run), false);
+  // daily 는 언제나 실행(기본 스케줄 행동 불변)
+  assert.equal(fireIfDue(DAILY_0817, at(2026, 10, 25, 8, 0), run), true);
+  assert.equal(runs, 3);
+});
+
+test("cron 게이트 — 수동 호출(\"manual\" 문자열)이면 지금 시각으로 판정한다", () => {
+  let ran = false;
+  assert.equal(fireIfDue(DAILY_0817, "manual", () => (ran = true)), true);
+  assert.equal(ran, true);
 });
