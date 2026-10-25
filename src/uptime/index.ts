@@ -30,7 +30,7 @@
 
 import path from "node:path";
 import { log } from "../util/log.ts";
-import { isIMessageConfigured } from "../notify/imessage.ts";
+import { uptimeIMessageEnabled } from "./notify.ts";
 import {
   MIN_GAP_MS,
   REEVAL_DELAYS_MS,
@@ -93,7 +93,7 @@ import { notifyDowntimeEvent } from "./notify.ts";
  */
 const narrator: DowntimeNarrator = {
   narrate: (e) => narrate(e),
-  journalEntry: (e) => renderJournalEntry(e, isIMessageConfigured()),
+  journalEntry: (e) => renderJournalEntry(e, uptimeIMessageEnabled()),
   journalHeader: () => DOWNTIME_JOURNAL_HEADER,
   splitEntries: (t) => splitJournalEntries(t),
 };
@@ -384,7 +384,7 @@ function disarmNotifySweep(): void {
 async function runNotifySweep(): Promise<void> {
   // 설정 자체가 없으면 아무리 돌려도 보낼 수 없다. 스윕을 끄고 조용히 물러난다
   // (일지·stdout·원장에는 이미 남아 있으므로 기록 요구는 배신하지 않는다).
-  if (!isIMessageConfigured()) {
+  if (!uptimeIMessageEnabled()) {
     disarmNotifySweep();
     return;
   }
@@ -663,3 +663,12 @@ export function getDowntimeView(): DowntimeView {
     return { current: null, unackedCount: 0 };
   }
 }
+
+/** 단위 테스트 전용 훅 — 프로덕션 코드에서 import 하지 말 것. (scheduler.ts __testing 과 같은 관례) */
+export const __testing = {
+  narrator,
+  runNotifySweep,
+  armNotifySweep,
+  disarmNotifySweep,
+  isNotifySweepArmed: () => notifySweepTimer !== null,
+};
