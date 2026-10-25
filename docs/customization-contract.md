@@ -52,16 +52,20 @@ export function normalizeJobSchedule(input: unknown, id: ScheduleJobId, now?: Da
 export function isDueDate(repeat: ScheduleRepeat, date: Date): boolean;
 export function nextOccurrence(job: JobSchedule, from: Date): Date | null; // from 초과 첫 실행
 export function lastOccurrence(job: JobSchedule, at: Date): Date | null;   // at 이하 마지막 실행
-export function describeSchedule(job: JobSchedule): string;               // "매일 08:00, 17:00" / "평일 08:00" / "격주 월요일 09:00" / "매월 1·15일 09:00" / "매월 말일 09:00" / "꺼짐"
+export function describeSchedule(job: JobSchedule): string;               // "매일 08:00, 17:00" / "평일 08:00" / "격주 월요일 09:00" / "격주(그 주 매일) 09:00" / "매월 1·15일 09:00" / "매월 말일 09:00" / "꺼짐"
 export function expandInterval(start: string, end: string, everyMinutes: number): string[]; // "N시간마다(시작~끝)" → 시각 목록(끝 포함, 자정 넘김 허용)
+export function mondayOf(d: Date, weekOffset?: number): Date;             // 그 주(월요일 시작) 월요일 00:00 + N주 — 격주 판정과 화면의 시작 주 고르기가 같이 쓴다
 ```
 
 ## 2. 운영 설정 (`/api/settings`)
 - 저장: `data/tab-settings.json`(sparse) + .env 기본값. 저장 즉시 반영 — 소비처는 `config.X` 직접 참조 대신
   `getTabSettings()` 를 **호출 시점마다** 읽는다(모듈 로드 시 상수로 캡처 금지).
 - 범위는 `numberRules` 가 정본. 범위 밖·타입 오류 → 400.
+  `.env` 기본값도 이 범위로 자르고 정수로 반올림해 내보낸다(기본값은 언제나 저장·복원 가능해야 한다). 잘린 항목은 기동 시 경고 1줄.
 - 알림: 탭 스위치 AND 전역 스위치. `channels` 에 없는 채널은 저장해도 무시.
-- `stockPulse.quietEndHour` 변경 시 보류분 묶음 발송 cron 재등록(`rescheduleAll()`).
+  증시 브리핑은 꺼진 채널(탭 off·전역 off·메일 자격증명 미설정·iMessage 수신자 없음)을 그 슬롯 원장에서 '처리 완료'로 닫는다 —
+  실제 발송 실패만 열어 두고 catch-up 이 재시도한다. 판정은 `stockChannelOffReason`(src/notify/stock-email.ts) 하나.
+- `stockPulse.quietStartHour`/`quietEndHour` 변경 시 재등록(`rescheduleAll()`, 멱등). 보류분 묶음 발송 cron 시각은 `quietEndHour` 다.
 - 타임아웃은 다음 실행부터 적용.
 
 ## 3. 화면
