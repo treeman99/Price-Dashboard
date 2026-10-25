@@ -982,9 +982,9 @@ export function narrateRecoveryLine(n: NarrationInput): string {
 /**
  * "알림" 줄(§6.1).
  *
- * @param imessageConfigured `isIMessageConfigured()`(`src/notify/imessage.ts:32`) 결과.
- *        이 모듈은 순수 함수라 config 를 못 읽는다 — 호출부(store/index)가 넘겨 준다.
- *        "아직 안 보냄" 과 "보낼 설정이 아예 없음" 은 사용자에게 완전히 다른 사실이다.
+ * @param imessageConfigured `uptimeIMessageEnabled()`(`src/uptime/notify.ts`) 결과 — 전역 iMessage 설정
+ *        AND 대시보드 '가동 중단 알림' 스위치. 이 모듈은 순수 함수라 설정을 못 읽는다 — 호출부(index)가 넘겨 준다.
+ *        "아직 안 보냄" 과 "보낼 수 없음(미설정 또는 꺼짐)" 은 사용자에게 완전히 다른 사실이다.
  */
 export function narrateNotifyLine(
   notified: DowntimeNotifyState,
@@ -998,7 +998,8 @@ export function narrateNotifyLine(
       : "iMessage 발송 완료";
   }
   if (severity !== "사고") return "보내지 않음(사고 아님)";
-  if (!imessageConfigured) return "미설정";
+  // 전역 미설정과 대시보드에서 끈 경우를 이 함수는 구분하지 못한다(불리언 하나) — 둘 다 적는다.
+  if (!imessageConfigured) return "미설정 또는 꺼짐";
   if (notified.queuedUntil) {
     const at = toMs(notified.queuedUntil);
     return Number.isFinite(at)

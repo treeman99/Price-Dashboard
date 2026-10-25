@@ -556,7 +556,7 @@ test("지금 상태: recoveryState 4종 문장 (§8.5)", () => {
   assert.equal(withState("복구중", []), "정상입니다. 확인하실 것 없습니다.");
 });
 
-test("알림 줄: 발송 완료 / 조용시간 대기 / 사고 아님 / 미설정", () => {
+test("알림 줄: 발송 완료 / 조용시간 대기 / 사고 아님 / 미설정 또는 꺼짐", () => {
   assert.equal(
     narrateNotifyLine({ imessage: true, at: "2026-08-02T11:15:00+09:00", queuedUntil: null }, "사고"),
     "iMessage 발송 완료 11:15"
@@ -574,7 +574,7 @@ test("알림 줄: 발송 완료 / 조용시간 대기 / 사고 아님 / 미설�
   );
   assert.equal(
     narrateNotifyLine({ imessage: false, at: null, queuedUntil: null }, "사고", false),
-    "미설정"
+    "미설정 또는 꺼짐"
   );
 });
 

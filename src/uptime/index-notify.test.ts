@@ -85,14 +85,14 @@ function incident(): Ev {
   };
 }
 
-test("탭 off 면 일지 '알림:' 줄이 '미설정'이 되고 스윕이 꺼진다 — 탭 on 이면 발송되고 스윕이 유지된다", async () => {
+test("탭 off 면 일지 '알림:' 줄이 '미설정 또는 꺼짐'이 되고 스윕이 꺼진다 — 탭 on 이면 발송되고 스윕이 유지된다", async () => {
   const rec = recordDowntimeEvent(incident(), __testing.narrator);
   assert.ok(rec, "사건이 기록되지 않았다");
   assert.equal(rec.event.severity, "사고");
 
   // ── 탭 off ──
   saveTabSettings({ notify: { uptime: { imessage: false } } });
-  assert.match(__testing.narrator.journalEntry(rec.event), /알림:\s*미설정/);
+  assert.match(__testing.narrator.journalEntry(rec.event), /알림:\s*미설정 또는 꺼짐/);
 
   __testing.armNotifySweep();
   assert.equal(__testing.isNotifySweepArmed(), true);
