@@ -258,6 +258,8 @@ npx tsx src/cli.ts config                        # 현재 설정·경고 확인
 | POST | `/api/stock/pulse/run` | 펄스 지금 실행 (백오프 무시) |
 | GET | `/api/lotto` | 다음 회차 예상 번호 + 지난 10회차 비교 결과 |
 | POST | `/api/lotto/cycle` | 주간 사이클 수동 실행 (**운영·검증용**, 화면에 버튼 없음. 응답 즉시) |
+| GET | `/api/settings` | 탭별 운영 설정 `TabSettingsResponse` — 현재값(대시보드 값 우선)·`.env` 기본값·숫자 범위·탭별 알림 채널·전역 채널 상태 |
+| PUT | `/api/settings` | 운영 설정 부분 수정(`DeepPartial<TabSettings>`). 바꾼 필드만 저장하고 기본값과 같으면 다시 `.env` 를 따른다. 범위·타입 오류는 400 `{error}`. 조용 시간을 바꾸면 펄스 보류분 발송 cron 을 즉시 재등록 |
 
 ## 동작 메모
 - **catch-up**: 기동 직후 + 30분마다 점검, 예정 시각이 지났고 오늘 성공 수집이 없으면 1회 보충.

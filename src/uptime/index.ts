@@ -85,11 +85,13 @@ import { notifyDowntimeEvent } from "./notify.ts";
 /**
  * `store.ts` 는 `narrate.ts` 를 **하드 임포트하지 않는다.** 이유는 그 파일 주석에 적힌 대로
  * 두 가지다: (1) 문구 규칙이 두 파일로 복제되는 것을 막고, (2) `renderJournalEntry` 의 두
- * 번째 인자가 `isIMessageConfigured()` 를 요구해서 하드 임포트하면 저장 계층이 알림 계층까지
- * 끌고 온다. 그 배선을 **합성 루트인 이 파일이** 담당한다.
+ * 번째 인자가 `uptimeIMessageEnabled()`(`./notify.ts` — 전역 iMessage 설정 AND 대시보드 '가동 중단
+ * 알림' 스위치)를 요구해서 하드 임포트하면 저장 계층이 알림 계층까지 끌고 온다. 그 배선을
+ * **합성 루트인 이 파일이** 담당한다.
  *
- * `isIMessageConfigured()` 를 매번 부르는 이유: `.env` 를 고쳐 재시작하지 않아도 다음 사건의
- * 일지 "알림:" 줄이 따라오게 하기 위해서다. 비용은 문자열 비교 한 번이다.
+ * `uptimeIMessageEnabled()` 를 매번 부르는 이유: 대시보드에서 알림 스위치를 바꾸면 재시작 없이
+ * 다음 사건의 일지 "알림:" 줄이 따라오게 하기 위해서다(발송 게이트·60초 스윕 해제와 같은 판정이라
+ * 셋이 갈라지지 않는다). 비용은 작은 설정 파일(data/tab-settings.json) 한 번 읽기다.
  */
 const narrator: DowntimeNarrator = {
   narrate: (e) => narrate(e),
