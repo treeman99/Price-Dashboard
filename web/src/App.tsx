@@ -13,6 +13,7 @@ import { LottoBoard } from "@/components/LottoBoard";
 import { SkillsBoard } from "@/components/SkillsBoard";
 import { ScrollToTop } from "@/components/ScrollToTop";
 import { ModelControl } from "@/components/ModelControl";
+import { SettingsOverview } from "@/components/SettingsOverview";
 import { localDay } from "@/components/SnapshotNotice";
 import { MailAuthBanner } from "@/components/MailAuthBanner";
 import {
@@ -242,6 +243,8 @@ export default function App() {
             />
             {/* 수집·큐레이션 AI 모델 선택은 특정 탭이 아닌 전역 설정 → 헤더에 배치 */}
             <ModelControl />
+            {/* 전 탭 자동 수집 스케줄·운영 설정·알림 한눈에 보기(+ 탭에 속하지 않는 가동 중단 알림) */}
+            <SettingsOverview tabs={TABS} />
             {serviceInstalled && (
               <Button
                 variant="ghost"
