@@ -495,8 +495,10 @@ async function safeRefreshEvents(trigger: string, notify: boolean) {
   } finally {
     eventsRunning = false;
     // 뉴스·유튜브와 달리 '런 시작 이후 기록'을 따지지 않는다. 팝업/전시는 게이트와 백오프가
-    // **같은 술어**(eventsCoveredToday)를 쓰기 때문이다 — 커버됐다고 판정되면 catch-up 게이트도
-    // 곧바로 막히므로, 오래된 성공이 백오프를 풀어도 무한 재시도가 생기지 않는다.
+    // **같은 술어**를 쓰기 때문이다(백오프 = eventsCoveredToday = eventsCoveredOn(지금), 게이트 =
+    // eventsCoveredOn(보충 대상) — 대상은 언제나 오늘 이전이라 '오늘 커버'면 게이트도 커버다).
+    // 커버됐다고 판정되면 catch-up 게이트도 곧바로 막히므로, 오래된 성공이 백오프를 풀어도
+    // 무한 재시도가 생기지 않는다.
     noteTabOutcome(`팝업/전시[${trigger}]`, eventsBackoff, outcome, eventsCoveredToday);
   }
 }
@@ -1038,7 +1040,7 @@ function scheduleGroup(
   opts: { quiet?: boolean } = {}
 ): void {
   if (!job.enabled) {
-    log.info(`스케줄러: ${label} 꺼짐(자동 실행·누락 보충 없음 — 수동 갱신은 가능)`);
+    log.info(`스케줄러: ${label} 꺼짐(정시 실행·누락 보충 없음)`);
     return;
   }
   job.times.forEach((t, i) => {
@@ -1084,8 +1086,6 @@ function registerCrons() {
   });
   if (s.stockPulse.enabled) {
     log.info(`스케줄러: 증시 펄스 ${s.stockPulse.times.length}회 — ${describeSchedule(s.stockPulse)}`);
-  } else {
-    log.info("스케줄러: 증시 펄스 꺼짐");
   }
 
   // 야간 보류분 묶음 발송(조용 시간 종료 정각). 시각은 **등록 시점의** 운영 설정 값이다 —
