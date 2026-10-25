@@ -1,5 +1,5 @@
 import { log } from "../util/log.ts";
-import { sendIMessage } from "./imessage.ts";
+import { isIMessageConfigured, sendIMessage } from "./imessage.ts";
 import { getTabSettings, isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import {
   DIRECTION_EMOJI,
@@ -106,7 +106,7 @@ export function pulseDigestText(records: PulseAlertRecord[]): string {
  * 알림 하나가 펄스 실행 전체를 깨면 나머지 판정까지 잃는다.
  */
 export async function sendPulseIMessage(i: PulseImpact): Promise<boolean> {
-  if (!isPulseNotifyEnabled()) return false;
+  if (!isPulseTextEnabled()) return false;
   try {
     await sendIMessage(pulseIMessageText(i));
     return true;
@@ -119,7 +119,7 @@ export async function sendPulseIMessage(i: PulseImpact): Promise<boolean> {
 /** 묶음 발송. 빈 목록이면 아무것도 하지 않고 false. */
 export async function sendPulseDigest(records: PulseAlertRecord[]): Promise<boolean> {
   if (!records.length) return false;
-  if (!isPulseNotifyEnabled()) return false;
+  if (!isPulseTextEnabled()) return false;
   try {
     await sendIMessage(pulseDigestText(records));
     log.info(`펄스 야간 보류 ${records.length}건 묶음 발송 완료`);
@@ -131,17 +131,29 @@ export async function sendPulseDigest(records: PulseAlertRecord[]): Promise<bool
 }
 
 /**
- * 문자 채널이 아예 꺼져 있는지. 펄스 실행 자체를 건너뛸 근거로 쓴다 —
- * 출력 채널이 문자 하나뿐인데 그게 꺼져 있으면 매시간 LLM 을 돌릴 이유가 없다.
+ * **실행 게이트** — 문자 채널이 환경에서 아예 꺼져 있는지(전역 NOTIFY_IMESSAGE+IMESSAGE_TO 만 본다).
+ * 펄스 실행 자체를 건너뛸 근거로 쓴다 — 출력 채널이 문자 하나뿐인데 환경에 설정조차 없으면
+ * 매시간 LLM 을 돌릴 이유가 없다. (`GET /stock/pulse/status` 의 notifyEnabled 도 이 값이다 —
+ * 화면은 false 일 때 "펄스를 실행하지 않습니다 · .env 확인"을 띄운다.)
  *
  * ⚠️ 이 판정으로 펄스를 끄면 **원장도 안 쌓여서** 일일 브리핑의 24시간 요약도 빈다.
- *    그래도 끄는 쪽이 맞다 — 사용자가 알림을 안 켰다는 건 이 기능을 안 쓴다는 뜻이고,
+ *    그래도 끄는 쪽이 맞다 — 환경에 알림을 안 켰다는 건 이 기능을 안 쓴다는 뜻이고,
  *    쓰지도 않는 기능이 하루 16회 토큰을 태우면 안 된다.
  *
- * 전역(NOTIFY_IMESSAGE+IMESSAGE_TO) AND 대시보드 탭 스위치(notify.stockPulse.imessage)다.
- * 탭 스위치만 꺼도 같은 이유로 실행을 건너뛴다 — 실행 자체를 멈추는 정본 스위치는 스케줄의 enabled 다.
+ * ★ 대시보드의 탭 스위치(notify.stockPulse.imessage)는 여기 들어오지 않는다. 화면에 '자동 실행'
+ *   (스케줄 enabled = 실행 on/off 의 정본)과 '알림'(발송 on/off)이 별개 스위치로 있으므로, 탭 알림을
+ *   끄면 **실행은 계속하고 문자만 끈다**(isPulseTextEnabled). 둘이 같은 효과를 내면 스위치가 하나 사라진다.
  */
 export function isPulseNotifyEnabled(): boolean {
+  return isIMessageConfigured();
+}
+
+/**
+ * **발송 게이트** — 지금 펄스 문자를 보내도 되는가 = 전역 AND 대시보드 탭 스위치.
+ * false 인데 실행 게이트가 true 면 펄스는 판정을 'muted'(기록만)로 남긴다 — 문턱 미달('below')과
+ * 구분되고, 상한·중복 집계(sent|queued)에서 빠져 다시 켰을 때 그날 예산이 이미 찬 상태가 되지 않는다.
+ */
+export function isPulseTextEnabled(): boolean {
   return isTabNotifyEnabled("stockPulse", "imessage");
 }
 

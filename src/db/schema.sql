@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS stock_pulse_alerts (
   trigger     TEXT NOT NULL,              -- 'person' | 'company' | 'macro'
   headline    TEXT NOT NULL,              -- 유사도 판정용으로 컬럼에 꺼내 둔다
   impact_json TEXT NOT NULL,              -- JSON(PulseImpact) 전문
-  status      TEXT NOT NULL,              -- 'sent'|'queued'|'dup'|'capped'|'below'|'failed'
+  status      TEXT NOT NULL,              -- 'sent'|'queued'|'dup'|'capped'|'below'|'failed'|'muted'
   created_at  TEXT NOT NULL,              -- ISO datetime
   sent_at     TEXT
 );

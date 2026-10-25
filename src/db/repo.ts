@@ -751,6 +751,25 @@ export function markPulseAlertsSent(ids: number[]): void {
   }
 }
 
+/**
+ * 보류분을 '보내지 않고 기록만'(muted)으로 내린다. 대시보드에서 펄스 문자를 꺼 둔 상태로 플러시가
+ * 돌 때 쓴다 — 큐에 남겨 두면 다시 켜는 순간 밀린 문자가 한꺼번에 나간다.
+ * muted 는 상한·중복 집계(sent|queued)에서 빠지므로 그날 예산도 돌려받는다.
+ */
+export function markPulseAlertsMuted(ids: number[]): void {
+  if (!ids.length) return;
+  const conn = db();
+  const stmt = conn.prepare("UPDATE stock_pulse_alerts SET status = 'muted' WHERE id = ?");
+  conn.exec("BEGIN");
+  try {
+    for (const id of ids) stmt.run(id);
+    conn.exec("COMMIT");
+  } catch (e) {
+    conn.exec("ROLLBACK");
+    throw e;
+  }
+}
+
 /** 발송 실패 표시. 큐에 영원히 남아 매 플러시마다 재시도하는 것을 막는다. */
 export function markPulseAlertsFailed(ids: number[]): void {
   if (!ids.length) return;

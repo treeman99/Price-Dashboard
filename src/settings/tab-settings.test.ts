@@ -23,9 +23,8 @@ const { config } = await import("../config.ts");
 const ts = await import("./tab-settings.ts");
 const { __setIMessageTransportForTest } = await import("../notify/imessage.ts");
 const { sendNewsIMessage, sendNewsEmail } = await import("../notify/news-email.ts");
-const { sendPulseIMessage, isPulseNotifyEnabled, pulseThreshold, PULSE_CAPS } = await import(
-  "../notify/pulse-imessage.ts"
-);
+const { sendPulseIMessage, isPulseNotifyEnabled, isPulseTextEnabled, pulseThreshold, PULSE_CAPS } =
+  await import("../notify/pulse-imessage.ts");
 const { uptimeIMessageEnabled, notifyDowntimeEvent } = await import("../uptime/notify.ts");
 
 const STORE = path.join(tmpDir, "tab-settings.json");
@@ -268,13 +267,17 @@ test("메일: 탭 off·전역 off 모두 Gmail API 를 부르지 않는다", asy
   assert.equal(fetchCalls, 0);
 });
 
-test("펄스 문자: 탭 off 면 실행 게이트(isPulseNotifyEnabled)와 발송이 모두 꺼진다", async () => {
+test("펄스 문자: 탭 off 는 발송 게이트만 끈다 — 실행 게이트(isPulseNotifyEnabled)는 전역만 본다", async () => {
   assert.equal(isPulseNotifyEnabled(), true);
+  assert.equal(isPulseTextEnabled(), true);
   assert.equal(await sendPulseIMessage(IMPACT), true);
   ts.saveTabSettings({ notify: { stockPulse: { imessage: false } } });
-  assert.equal(isPulseNotifyEnabled(), false);
+  assert.equal(isPulseNotifyEnabled(), true, "탭 off 여도 펄스는 실행한다(판정만 기록)");
+  assert.equal(isPulseTextEnabled(), false);
   assert.equal(await sendPulseIMessage(IMPACT), false);
   assert.equal(sent.length, 1);
+  config.notify.imessage = false;
+  assert.equal(isPulseNotifyEnabled(), false, "전역 off 면 실행 자체를 건너뛴다");
 });
 
 test("가동 중단 알림: 탭 off 면 '미설정 또는 꺼짐'으로 건너뛴다", async () => {
