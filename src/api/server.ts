@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { api } from "./routes.ts";
+import { settingsApi } from "./settings-routes.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -16,6 +17,7 @@ export function createApp() {
 
   // API
   app.use("/api", api);
+  app.use("/api", settingsApi);
 
   // 정적 프론트 (web 빌드물). 빌드 전이면 안내 메시지.
   if (fs.existsSync(path.join(webDist, "index.html"))) {
