@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useState } from "react";
-import { Archive, ChevronDown, Globe, Lock, Star, TrendingUp } from "lucide-react";
+import { Archive, ChevronDown, Globe, Loader2, Lock, RefreshCw, Star, TrendingUp } from "lucide-react";
 import type {
   SkillAccess,
   SkillRankEntry,
@@ -33,9 +33,10 @@ import { cn } from "@/lib/utils";
 /**
  * 스킬 랭킹 탭 — GitHub 의 Claude/Agent 스킬 저장소를 **총합**과 **주간 증가** 두 갈래로 본다.
  *
- * 화면에 수동 갱신 버튼이 없다. 로또 탭과 같은 규약으로 갱신은 서버 스케줄(기본 매주 월요일 09:00,
- * 툴바 '자동 갱신'에서 격주·매월로 바꿀 수 있다)이 전담한다(POST /api/skills/refresh 는 운영·검증용으로만 남아 있다). 주 1회만 바뀌는 값에
- * 버튼을 달아 두면 눌러도 화면이 그대로라 "고장났나" 하는 오해만 남는다.
+ * 정식 회차는 서버 스케줄(기본 매주 월요일 09:00, 툴바 '자동 갱신'에서 격주·매월로 바꿀 수 있다)이
+ * 돈다. '지금 갱신'은 이번 회차가 이미 기록돼 있으면 **중간 점검**이다 — 지금 star 로 다시 매기되
+ * 다음 회차의 비교 기준(DB 스냅샷)에는 남지 않는다(snap.interim). 회차가 비어 있으면 그 회차를
+ * 대신 돈다. 어느 쪽인지는 서버가 정하고, 화면은 interim 을 보고 그 사실을 적기만 한다.
  *
  * ★ 이 화면의 핵심 규율은 **증가분 구간을 속이지 않는 것**이다. 계약(shared/skills.ts)이
  *   SkillWindow.days 를 굳이 실어 보내는 이유가 그것이고, 여기서는 그 값을 그대로 인용한다.
@@ -439,9 +440,14 @@ function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }
   );
 }
 
-/** 증가 랭킹의 비교 구간 라벨. days 를 그대로 인용한다 — 7 로 하드코딩하지 않는다. */
-function windowLabel(w: SkillWindow): string {
-  return `최근 ${w.days}일간 증가 (${w.fromDate} → ${w.toDate} 스냅샷 비교)`;
+/**
+ * 증가 랭킹의 비교 구간 라벨. days 를 그대로 인용한다 — 7 로 하드코딩하지 않는다.
+ * 중간 점검이면 toDate 쪽은 저장된 스냅샷이 아니라 지금 값이라 그렇게 적는다.
+ */
+function windowLabel(w: SkillWindow, interim: boolean): string {
+  return interim
+    ? `최근 ${w.days}일간 증가 (${w.fromDate} 스냅샷 → ${w.toDate} 중간 점검)`
+    : `최근 ${w.days}일간 증가 (${w.fromDate} → ${w.toDate} 스냅샷 비교)`;
 }
 
 export function SkillsBoard() {
@@ -451,6 +457,8 @@ export function SkillsBoard() {
   const [collecting, setCollecting] = useState(false);
   const [attempt, setAttempt] = useState<CollectAttempt | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // 다른 탭이 AI 수집을 붙잡고 있어 '지금 갱신'이 시작조차 못 한 경우의 안내.
+  const [busyMsg, setBusyMsg] = useState<string | null>(null);
   const { schedule } = useTabConfig();
 
   async function load() {
@@ -490,6 +498,22 @@ export function SkillsBoard() {
     return () => clearInterval(id);
   }, [collecting]);
 
+  async function refresh() {
+    setErr(null);
+    setBusyMsg(null);
+    try {
+      const r = await api.refreshSkills(); // 백그라운드 시작(202) 또는 시작 불가(409)
+      if (r.busy && !r.collecting) {
+        // 다른 탭이 AI 수집을 붙잡고 있다 → 시작된 게 없으므로 '수집 중'으로 넘어가면 안 된다.
+        setBusyMsg(r.reason);
+        return;
+      }
+      setCollecting(true); // '수집 중' 배너 + 폴링 시작 → 완료되면 자동 반영
+    } catch (e) {
+      setErr((e as Error).message); // 5xx 등 진짜 실패만 표시
+    }
+  }
+
   if (loading) return <LoadingState />;
 
   if (!snap) {
@@ -523,15 +547,21 @@ export function SkillsBoard() {
     <div>
       <PageToolbar
         actions={
-          <Segmented
-            aria-label="랭킹 종류"
-            value={kind}
-            onChange={setKind}
-            options={[
-              { value: "total", label: <><Star /> star 총합</> },
-              { value: "growth", label: <><TrendingUp /> 이번 주 급상승</> },
-            ]}
-          />
+          <>
+            <Segmented
+              aria-label="랭킹 종류"
+              value={kind}
+              onChange={setKind}
+              options={[
+                { value: "total", label: <><Star /> star 총합</> },
+                { value: "growth", label: <><TrendingUp /> 이번 주 급상승</> },
+              ]}
+            />
+            <Button variant="outline" onClick={refresh} disabled={collecting}>
+              {collecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {collecting ? "수집 중…" : "지금 갱신"}
+            </Button>
+          </>
         }
       >
         <ScheduleControl tab="skills" label="자동 갱신" />
@@ -542,12 +572,14 @@ export function SkillsBoard() {
             <MetaDot />
             <Meta>
               최종 갱신 <strong>{updated}</strong>
+              {snap.interim && " (중간 점검 — 다음 회차 비교 기준에는 남지 않음)"}
             </Meta>
           </>
         )}
       </PageToolbar>
 
       {err && <Notice tone="error">{err}</Notice>}
+      {busyMsg && <Notice tone="warn">{busyMsg}</Notice>}
 
       {collecting && (
         <Notice tone="info" progress>
@@ -578,7 +610,11 @@ export function SkillsBoard() {
         <SectionHeader
           title={kind === "total" ? "star 총합 순위" : "이번 주 급상승"}
           // 증가 랭킹은 구간을 숨기지 않는다 — days 를 그대로 인용한다(7일이 아닐 수 있다).
-          note={kind === "growth" && snap.window ? windowLabel(snap.window) : `기준 ${snap.date} 스냅샷`}
+          note={
+            kind === "growth" && snap.window
+              ? windowLabel(snap.window, !!snap.interim)
+              : `기준 ${snap.date} ${snap.interim ? "중간 점검" : "스냅샷"}`
+          }
         />
 
         {kind === "growth" && firstCycle ? (

@@ -75,11 +75,11 @@ test("탭 ↔ 잡 매핑: 증시는 시장별 브리핑 2개, 로또는 운영 �
 });
 
 test("MANUAL_RUN_LABEL: 스케줄 '꺼짐' 안내의 수동 실행 문구는 화면 버튼이 실제로 있는 잡에만", () => {
-  // QA L2: 로또·스킬 랭킹에는 화면 수동 갱신이 없는데 "'지금 갱신'은 그대로 됩니다"가 떴다.
+  // QA L2: 로또에는 화면 수동 실행이 없는데 "'지금 갱신'은 그대로 됩니다"가 떴다.
+  // 스킬 랭킹은 2026-10-25 '지금 갱신'이 생겼다(회차가 기록돼 있으면 중간 점검).
   assert.equal(MANUAL_RUN_LABEL.lotto, undefined);
-  assert.equal(MANUAL_RUN_LABEL.skills, undefined);
   assert.equal(MANUAL_RUN_LABEL.stockPulse, "지금 실행", "보유 주식 탭 버튼 문구");
-  for (const id of ["events", "news", "youtube", "stockKr", "stockUs"] as const) {
+  for (const id of ["events", "news", "youtube", "stockKr", "stockUs", "skills"] as const) {
     assert.equal(MANUAL_RUN_LABEL[id], "지금 갱신", id);
   }
 });
