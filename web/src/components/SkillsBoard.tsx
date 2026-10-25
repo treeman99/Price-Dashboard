@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useState } from "react";
-import { Archive, CalendarClock, ChevronDown, Globe, Lock, Star, TrendingUp } from "lucide-react";
+import { Archive, ChevronDown, Globe, Lock, Star, TrendingUp } from "lucide-react";
 import type {
   SkillAccess,
   SkillRankEntry,
@@ -8,9 +8,12 @@ import type {
   SkillWindow,
   SkillsSnapshot,
 } from "@shared/skills";
-import { SKILLS_CYCLE_LABEL, SKILLS_RANK_SIZE } from "@shared/skills";
+import { SKILLS_RANK_SIZE } from "@shared/skills";
+import { describeSchedule } from "@shared/schedule";
 import { safeHref } from "@shared/url";
 import { api, type CollectAttempt } from "@/lib/api";
+import { useTabConfig } from "@/lib/tabConfigStore";
+import { ScheduleControl } from "@/components/ScheduleControl";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
 import {
@@ -30,8 +33,8 @@ import { cn } from "@/lib/utils";
 /**
  * 스킬 랭킹 탭 — GitHub 의 Claude/Agent 스킬 저장소를 **총합**과 **주간 증가** 두 갈래로 본다.
  *
- * 화면에 수동 갱신 버튼이 없다. 로또 탭과 같은 규약으로 갱신은 매주 월요일 09:00 서버 cron 이
- * 전담한다(POST /api/skills/refresh 는 운영·검증용으로만 남아 있다). 주 1회만 바뀌는 값에
+ * 화면에 수동 갱신 버튼이 없다. 로또 탭과 같은 규약으로 갱신은 서버 스케줄(기본 매주 월요일 09:00,
+ * 툴바 '자동 갱신'에서 격주·매월로 바꿀 수 있다)이 전담한다(POST /api/skills/refresh 는 운영·검증용으로만 남아 있다). 주 1회만 바뀌는 값에
  * 버튼을 달아 두면 눌러도 화면이 그대로라 "고장났나" 하는 오해만 남는다.
  *
  * ★ 이 화면의 핵심 규율은 **증가분 구간을 속이지 않는 것**이다. 계약(shared/skills.ts)이
@@ -448,6 +451,7 @@ export function SkillsBoard() {
   const [collecting, setCollecting] = useState(false);
   const [attempt, setAttempt] = useState<CollectAttempt | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const { schedule } = useTabConfig();
 
   async function load() {
     try {
@@ -474,7 +478,7 @@ export function SkillsBoard() {
 
   useEffect(() => {
     void load();
-    void checkStatus(); // 진입 시 (월요일 09:00 수집이 돌고 있으면) '수집 중'을 즉시 반영
+    void checkStatus(); // 진입 시 (자동 갱신 수집이 돌고 있으면) '수집 중'을 즉시 반영
   }, []);
 
   // 수집 중이면 5초마다 확인 → 끝나면 스냅샷을 자동으로 다시 불러온다.
@@ -507,6 +511,13 @@ export function SkillsBoard() {
   const updated = fmtWhen(snap.updatedAt);
   // 첫 회차 = 비교할 지난주 스냅샷이 없다. 증가 랭킹은 이때 '0' 이 아니라 '없음'이다.
   const firstCycle = snap.window === null;
+  // 갱신 주기는 사용자가 바꿀 수 있어(격주·매월) 고정 문구 대신 지금 스케줄을 그대로 읽는다.
+  const skillsJob = schedule?.schedule.skills;
+  const firstFillText = !skillsJob
+    ? "자동 갱신에서 채워집니다."
+    : skillsJob.enabled
+      ? `${describeSchedule(skillsJob)} 자동 갱신에서 채워집니다.`
+      : "자동 갱신이 꺼져 있습니다 — 위 '자동 갱신'에서 켜세요.";
 
   return (
     <div>
@@ -523,9 +534,7 @@ export function SkillsBoard() {
           />
         }
       >
-        <Meta className="inline-flex items-center gap-1.5">
-          <CalendarClock aria-hidden className="h-3.5 w-3.5" />매주 {SKILLS_CYCLE_LABEL} 자동 갱신
-        </Meta>
+        <ScheduleControl tab="skills" label="자동 갱신" />
         <MetaDot />
         <Meta>GitHub 스킬 저장소 star 를 주간 스냅샷으로 쌓아 직접 차분합니다</Meta>
         {updated && (
@@ -574,13 +583,13 @@ export function SkillsBoard() {
 
         {kind === "growth" && firstCycle ? (
           <EmptyState icon={<TrendingUp />}>
-            <p>증가 순위는 다음 주 월요일 갱신부터 채워집니다.</p>
+            <p>증가 순위는 다음 자동 갱신부터 채워집니다.</p>
             <p className="mt-1 text-xs">(비교할 지난주 기록이 아직 없어요)</p>
           </EmptyState>
         ) : entries.length === 0 ? (
           <EmptyState>
             {snap.source === "empty"
-              ? `아직 첫 수집 전입니다. 매주 ${SKILLS_CYCLE_LABEL} 자동 갱신에서 채워집니다.`
+              ? `아직 첫 수집 전입니다. ${firstFillText}`
               : "표시할 저장소가 없습니다."}
           </EmptyState>
         ) : (

@@ -21,7 +21,7 @@ import {
   LoadingState,
   type TagTone,
 } from "@/components/ui/page";
-import { ScheduleControl } from "@/components/ScheduleControl";
+import { NotifyMeta, ScheduleControl } from "@/components/ScheduleControl";
 import { SnapshotNotice, snapshotHealth } from "@/components/SnapshotNotice";
 
 /** 섹션 고유색. 섹션 제목 앞 작은 사각형에만 쓴다. */
@@ -351,9 +351,9 @@ export function EventsBoard() {
           </Button>
         }
       >
-        <ScheduleControl kind="events" />
+        <ScheduleControl tab="events" />
         <MetaDot />
-        <Meta>갱신 시 이메일 발송</Meta>
+        <NotifyMeta notify="events" verb="갱신 시" fallback="갱신 시 이메일 발송" />
         {updated && (
           <>
             <MetaDot />

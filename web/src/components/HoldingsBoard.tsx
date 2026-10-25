@@ -313,7 +313,7 @@ export function HoldingsBoard() {
           </>
         }
       >
-        <ScheduleControl kind="stockPulse" />
+        <ScheduleControl tab="holdings" />
       </PageToolbar>
 
       <PulseStatus />

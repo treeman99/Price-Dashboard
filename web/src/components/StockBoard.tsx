@@ -47,7 +47,7 @@ import { cn } from "@/lib/utils";
 import { StockCard } from "@/components/StockCard";
 import { StockChart } from "@/components/StockChart";
 import { AddTickerDialog } from "@/components/AddTickerDialog";
-import { ScheduleControl } from "@/components/ScheduleControl";
+import { NotifyMeta, ScheduleControl } from "@/components/ScheduleControl";
 
 const MARKETS: StockMarket[] = ["kr", "us"];
 
@@ -416,9 +416,9 @@ export function StockBoard() {
           onChange={setMarket}
           options={MARKETS.map((m) => ({ value: m, label: marketLabel(m) }))}
         />
-        <ScheduleControl kind={market === "kr" ? "stockKr" : "stockUs"} />
+        <ScheduleControl tab="stock" job={market === "kr" ? "stockKr" : "stockUs"} />
         <MetaDot />
-        <Meta>수집 시 이메일 발송(지금 갱신 포함)</Meta>
+        <NotifyMeta notify="stock" suffix="(지금 갱신 포함)" fallback="수집 시 이메일 발송(지금 갱신 포함)" />
         {snap && (
           <>
             <MetaDot />

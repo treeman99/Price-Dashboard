@@ -7,7 +7,11 @@ import type {
   BlockedChannel,
   WatchedVideo,
   DismissedVideo,
-  ScheduleSettings,
+  ScheduleConfig,
+  ScheduleResponse,
+  TabSettings,
+  TabSettingsResponse,
+  DeepPartial,
   AgentModelSettings,
   StockMarket,
   StockSnapshot,
@@ -71,16 +75,30 @@ async function busyResult(res: Response): Promise<RefreshResult> {
 }
 
 export const api = {
-  /** 탭별 자동 수집 시각(스케줄) 조회. */
-  schedule: () => fetch("/api/schedule").then((r) => j<ScheduleSettings>(r)),
+  /** 탭별 자동 실행 스케줄(v2) + .env 기본값 + 잡별 편집 제약 + 다음 실행 예정. */
+  schedule: () => fetch("/api/schedule").then((r) => j<ScheduleResponse>(r)),
 
-  /** 스케줄 부분 수정. 저장 즉시 서버가 cron 재등록. 갱신된 전체 스케줄 반환. */
-  updateSchedule: (patch: Partial<ScheduleSettings>) =>
+  /**
+   * 스케줄 수정. 본문에 넣은 잡만 **잡 단위로 통째로** 바뀐다(나머지 잡은 그대로).
+   * 저장 즉시 서버가 cron 을 재등록한다. 검증 실패(400)면 서버의 한국어 사유를 그대로 throw 한다.
+   */
+  updateSchedule: (patch: Partial<ScheduleConfig>) =>
     fetch("/api/schedule", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
-    }).then((r) => j<ScheduleSettings>(r)),
+    }).then((r) => j<ScheduleResponse>(r)),
+
+  /** 탭별 운영 설정(알림 채널·보존 일수·타임아웃 …) + 기본값 + 숫자 범위 + 채널 정보. */
+  settings: () => fetch("/api/settings").then((r) => j<TabSettingsResponse>(r)),
+
+  /** 운영 설정 부분 수정(바꾼 필드만). 저장 즉시 반영. 400 이면 서버 사유를 그대로 throw 한다. */
+  updateSettings: (patch: DeepPartial<TabSettings>) =>
+    fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => j<TabSettingsResponse>(r)),
 
   /** 수집·큐레이션 에이전트 + 선택지 조회. */
   modelSettings: () => fetch("/api/model").then((r) => j<AgentModelSettings>(r)),

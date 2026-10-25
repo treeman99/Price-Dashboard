@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarClock, Check, Copy, Loader2, RefreshCw } from "lucide-react";
+import { Check, Copy, Loader2, RefreshCw } from "lucide-react";
 import type { LottoRecentRound, LottoSnapshot } from "@shared/lotto";
 import { upcomingToText, winningNumbers } from "@shared/lotto";
 import { api } from "@/lib/api";
+import { ScheduleControl } from "@/components/ScheduleControl";
 import { Button } from "@/components/ui/button";
 import {
   PageToolbar,
@@ -22,7 +23,8 @@ import { cn } from "@/lib/utils";
  *
  * 2026-07-30 전면 축소. 세대 이력·바퀴별 성적표·회차 점수 추이·누적 점수 추이·가중 회차 점수
  * 추이를 전부 지웠고, 조작 버튼(실험 시작·일시정지·회차 동기화·초기화·실험 반복)도 없앴다.
- * 이제 모든 동작은 **매주 일요일 10:00 서버 cron** 이 한다(`src/lotto/cycle.ts`).
+ * 이제 모든 동작은 **주 1회 서버 자동 사이클**이 한다(`src/lotto/cycle.ts`). 기본 매주 일요일 10:00 이고,
+ * 툴바 '자동 갱신'에서 요일·시각을 바꿀 수 있다(매주·요일 1개·시각 1개 고정, 토요일 추첨 전후 금지).
  *
  * 폴링도 없다. 데이터가 주 1회만 바뀌므로 3초마다 서버를 두드릴 이유가 없다 — 화면을 열 때
  * 한 번 받고, 갱신이 궁금하면 [새로고침]을 누르면 된다.
@@ -151,7 +153,7 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
         <EmptyState>
           <p>다음 회차 예상 번호가 아직 준비되지 않았습니다.</p>
           <p className="mt-1 text-[13px]">
-            매주 일요일 10:00 자동 갱신 시 확정됩니다(서버 기동 직후에는 잠시 걸릴 수 있습니다).
+            다음 자동 갱신 때 확정됩니다(서버 기동 직후에는 잠시 걸릴 수 있습니다).
           </p>
         </EmptyState>
       </>
@@ -197,7 +199,7 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
       {/* 이 한 줄이 없으면 "화면을 열 때마다 번호가 바뀌는 게 아닐까" 하는 의심이 남는다.
           실제로 추첨 전에 저장해 두고 다음 주에 그 번호로만 채점한다는 것을 명시한다. */}
       <p className="mt-2.5 text-[12px] leading-relaxed text-muted-foreground">
-        추첨 전에 확정해 저장한 번호입니다 — 다시 열어도 바뀌지 않고, 다음 주 일요일에 이 번호로
+        추첨 전에 확정해 저장한 번호입니다 — 다시 열어도 바뀌지 않고, 추첨 뒤 다음 자동 갱신 때 이 번호로
         채점합니다. 실제 구매·투자 목적이 아닌 알고리즘 검증용입니다.
       </p>
     </>
@@ -389,10 +391,10 @@ export function LottoBoard() {
           <strong>로또 6/45</strong>
         </Meta>
         <MetaDot />
-        <Meta className="inline-flex items-center gap-1.5">
-          <CalendarClock className="h-3.5 w-3.5 shrink-0" />
-          매주 일요일 10:00 자동 갱신 — 새 추첨 결과로 지난 회차를 채점하고 다음 회차 번호를 뽑습니다.
-        </Meta>
+        {/* 다음 실행은 바로 뒤 서버 기준 '다음'(nextCycleAt)이 이미 보여 주므로 버튼에서는 뺀다. */}
+        <ScheduleControl tab="lotto" label="자동 갱신" showNext={false} />
+        <MetaDot />
+        <Meta>새 추첨 결과로 지난 회차를 채점하고 다음 회차 번호를 뽑습니다.</Meta>
         <MetaDot />
         <Meta>
           다음 <strong>{fmtWhen(snap.nextCycleAt)}</strong>

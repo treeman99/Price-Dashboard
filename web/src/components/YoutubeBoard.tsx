@@ -43,7 +43,7 @@ import {
   EmptyLine,
   LoadingState,
 } from "@/components/ui/page";
-import { ScheduleControl } from "@/components/ScheduleControl";
+import { NotifyMeta, ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 import { BlockedChannelsDialog } from "@/components/BlockedChannelsDialog";
 import { DismissedVideosDialog } from "@/components/DismissedVideosDialog";
@@ -900,13 +900,13 @@ export function YoutubeBoard() {
           </>
         }
       >
-        <ScheduleControl kind="youtube" />
+        <ScheduleControl tab="youtube" />
         <MetaDot />
         <Meta>최근 {freshDays}일 이내 영상</Meta>
         <MetaDot />
         <Meta>AI·LLM/신제품 리뷰 전문 조사</Meta>
         <MetaDot />
-        <Meta>수집 시 이메일 발송(지금 갱신 포함)</Meta>
+        <NotifyMeta notify="youtube" suffix="(지금 갱신 포함)" fallback="수집 시 이메일 발송(지금 갱신 포함)" />
         <MetaDot />
         <Meta>영상을 보고 돌아오면 자동 본영상 체크</Meta>
         {updated && (
