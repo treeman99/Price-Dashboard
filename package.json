@@ -14,7 +14,8 @@
     "web:dev": "npm --prefix web run dev",
     "web:build": "npm --prefix web run build",
     "build": "npm run web:build",
-    "test": "tsx --test \"{src,shared,web/src}/**/*.test.ts\""
+    "test": "tsx --test \"{src,shared,web/src}/**/*.test.ts\"",
+    "mail:preview": "tsx src/notify/preview/mail-preview.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.280",
