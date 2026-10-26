@@ -120,3 +120,39 @@ test("renderLineChartPng: 주식 호출 형태 (formatY 로 원 단위 그대로
   });
   assertPng(png);
 });
+
+// ── 지면 색(DESIGN.md Stock Chart): 신문지 바탕 · 잉크 선 · 끝점 하나만 상승·하락 색 ──
+
+async function pixels(buf: Buffer): Promise<{ at: (x: number, y: number) => string; all: Set<string> }> {
+  const { createCanvas, loadImage } = await import("@napi-rs/canvas");
+  const img = await loadImage(buf);
+  const c = createCanvas(img.width, img.height);
+  const ctx = c.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(0, 0, img.width, img.height).data;
+  const hex = (i: number) => "#" + [d[i], d[i + 1], d[i + 2]].map((v) => v.toString(16).padStart(2, "0")).join("");
+  const all = new Set<string>();
+  for (let i = 0; i < d.length; i += 4) all.add(hex(i));
+  return { at: (x, y) => hex((y * img.width + x) * 4), all };
+}
+
+test("renderLineChartPng: 신문지 바탕 + 끝점만 endColor (흰 바탕·계열색 점 없음)", async () => {
+  const { PAPER, MARKET } = await import("./email-kit.ts");
+  const values = [332_000, 341_000, 338_000, 346_500];
+  const withEnd = await pixels(
+    renderLineChartPng({
+      labels: ["07-14", "07-15", "07-16", "07-17"],
+      series: [{ label: "종가", endColor: MARKET.up, values }],
+      title: "끝점",
+      formatY: (v) => Math.round(v).toLocaleString("ko-KR"),
+    })
+  );
+  assert.equal(withEnd.at(0, 0), PAPER);
+  assert.ok(!withEnd.all.has("#ffffff"), "흰 바탕이 남아 있다");
+  assert.ok(withEnd.all.has(MARKET.up), "끝점 색이 없다");
+
+  const noEnd = await pixels(
+    renderLineChartPng({ labels: ["07-14", "07-15", "07-16", "07-17"], series: [{ label: "종가", values }], title: "끝점 없음" })
+  );
+  assert.ok(!noEnd.all.has(MARKET.up), "endColor 를 안 줬는데 상승색 점이 찍혔다");
+});

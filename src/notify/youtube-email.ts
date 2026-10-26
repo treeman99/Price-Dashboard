@@ -4,6 +4,23 @@ import { isMailConfigured, sendMail } from "./mailer.ts";
 import { sendIMessage } from "./imessage.ts";
 import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
+import {
+  HAIRLINE,
+  INK,
+  INK_80,
+  MUTED,
+  SUNKEN,
+  TNUM,
+  articleRow,
+  breakLongRuns,
+  emailDocument,
+  emptyLine,
+  metaLine,
+  sectionHeader,
+  strong,
+  subHeader,
+  textLink,
+} from "./email-kit.ts";
 import type { YoutubeSnapshot, YoutubeVideo, YoutubeCategory } from "../../shared/types.ts";
 
 /** 유튜브 소식 iMessage 텍스트: 총건수 + 카테고리별 상위 2개 제목. */
@@ -31,65 +48,89 @@ export async function sendYoutubeIMessage(s: YoutubeSnapshot): Promise<boolean> 
   }
 }
 
-function metaLine(v: YoutubeVideo): string {
-  const parts = [escapeHtml(v.channel)];
-  if (v.channelHandle) parts.push(escapeHtml(v.channelHandle));
-  parts.push(`📅 ${escapeHtml(v.date)}`);
-  if (v.views) parts.push(`👁 ${escapeHtml(v.views)}`);
-  if (v.duration) parts.push(`⏱ ${escapeHtml(v.duration)}`);
-  return parts.join(" · ");
+/** 채널 · 핸들 · 게시일 · 조회수 · 길이. 아이콘 대신 가운데점으로만 나눈다(화면 행 메타와 같은 순서). */
+function videoMeta(v: YoutubeVideo): string {
+  return metaLine([
+    escapeHtml(v.channel),
+    v.channelHandle && escapeHtml(v.channelHandle),
+    escapeHtml(v.date),
+    v.views && escapeHtml(v.views),
+    v.duration && escapeHtml(v.duration),
+  ]);
 }
 
-function videoCard(v: YoutubeVideo, color: string): string {
+/** 썸네일 폭. 화면 좁은 폭(w-36)과 같은 144px — 390px 에서도 글 칸이 200px 남는다. */
+const THUMB_W = 144;
+
+/**
+ * 영상 한 행 — 화면 VideoRow 처럼 카드 없이 [썸네일 | 제목·메타·요약·영상 보기] 두 칸, 아래 헤어라인.
+ * 썸네일이 없으면 기사형 행(articleRow) 그대로 쓴다.
+ */
+function videoRow(v: YoutubeVideo): string {
   // url·thumbnail 모두 LLM 이 만들어 온 값이라 http(s) 가 아니면 링크/이미지를 버린다.
   const href = safeHref(v.url);
   const thumbSrc = safeHref(v.thumbnail);
-  const img = thumbSrc
-    ? `<img src="${escapeAttr(thumbSrc)}" alt="" width="160" style="width:160px;border-radius:6px;display:block;" />`
-    : "";
-  const thumb =
-    img && href
-      ? `<a href="${escapeAttr(href)}" style="display:block;text-decoration:none;">
-         ${img}
-       </a>`
-      : img;
-  const watch = href
-    ? `<a href="${escapeAttr(href)}" style="color:#ff0000;text-decoration:none;font-weight:600;">▶ 영상 보기</a>`
-    : "";
-  return `<div style="margin-bottom:18px;padding:14px;background:#f8f9fa;border-radius:8px;border-left:4px solid ${color};">
-  <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;"><tr>
-    <td valign="top" style="padding-right:${thumb ? "12px" : "0"};">${thumb}</td>
-    <td valign="top">
-      <h3 style="margin:0 0 6px 0;color:#1a1a2e;font-size:15px;">${escapeHtml(v.title)}</h3>
-      <p style="color:#888;font-size:12px;margin:0 0 8px 0;">${metaLine(v)}</p>
-      <p style="color:#333;line-height:1.55;margin:0 0 8px 0;font-size:13px;">${escapeHtml(v.summary)}</p>
-      ${watch}
-    </td>
-  </tr></table>
-</div>`;
+  const row = {
+    title: v.title,
+    href,
+    meta: videoMeta(v),
+    summary: breakLongRuns(escapeHtml(v.summary)),
+    after: href ? textLink(href, "영상 보기") : undefined,
+  };
+  if (!thumbSrc) return articleRow(row);
+
+  const img = `<img src="${escapeAttr(thumbSrc)}" alt="" width="${THUMB_W}" style="display:block;width:${THUMB_W}px;max-width:100%;height:auto;border:0;border-radius:3px;background:${SUNKEN}" />`;
+  const thumb = href ? `<a href="${escapeAttr(href)}" style="display:block;text-decoration:none">${img}</a>` : img;
+  const title = href
+    ? `<a href="${escapeAttr(href)}" style="color:${INK};text-decoration:none">${escapeHtml(v.title)}</a>`
+    : escapeHtml(v.title);
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid ${HAIRLINE}"><tr>
+<td valign="top" width="${THUMB_W}" style="width:${THUMB_W}px;padding:14px 14px 14px 0;vertical-align:top">${thumb}</td>
+<td valign="top" style="padding:14px 0;vertical-align:top">
+<p style="margin:0;font-size:15px;font-weight:600;line-height:1.45;color:${INK}">${title}</p>
+<p style="margin:4px 0 0;font-size:12.5px;color:${MUTED};${TNUM}">${row.meta}</p>
+${row.summary ? `<p style="margin:8px 0 0;font-size:14px;line-height:1.65;color:${INK_80}">${row.summary}</p>` : ""}
+${row.after ? `<p style="margin:8px 0 0;font-size:12.5px;color:${MUTED}">${row.after}</p>` : ""}
+</td></tr></table>`;
 }
 
-function sectionHtml(cat: YoutubeCategory): string {
-  const head = `<h2 style="color:${cat.color};margin-top:36px;border-bottom:2px solid ${cat.color};padding-bottom:8px;">${cat.emoji} ${escapeHtml(cat.label)} <span style="font-size:13px;color:#999;font-weight:normal;">(${cat.items.length})</span></h2>`;
-  const body = cat.items.length
-    ? cat.items.map((v) => videoCard(v, cat.color)).join("")
-    : `<p style="color:#999;padding:14px;background:#f8f9fa;border-radius:8px;">최근 새 영상이 없습니다.</p>`;
-  return head + body;
+/** 카테고리 제목 — 이모지는 사용자가 정한 데이터라 화면처럼 그대로 둔다. */
+function categoryTitle(cat: YoutubeCategory): string {
+  return `${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ""}${escapeHtml(cat.label)}`;
 }
 
 /** 유튜브 소식 이메일 HTML. 순수 함수 — 발송하지 않는다. */
 export function buildYoutubeEmailHtml(s: YoutubeSnapshot): string {
-  const sections = s.categories.map(sectionHtml).join("");
-  const catChips = s.categories.map((c) => `${c.emoji} ${escapeHtml(c.label)}`).join(" · ");
+  // 뉴스 메일과 같은 순서: 영상이 있는 카테고리 먼저, 비어 있는 카테고리는 맨 아래 한 줄씩.
+  const filled = s.categories.filter((c) => c.items.length);
+  const empty = s.categories.filter((c) => !c.items.length);
+  const total = filled.reduce((a, c) => a + c.items.length, 0);
 
-  return `<html><body style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:720px;margin:0 auto;padding:20px;background-color:#ffffff;">
-  <h1 style="color:#1a1a2e;border-bottom:3px solid #ff0000;padding-bottom:10px;">▶ YouTube 소식</h1>
-  <p style="color:#666;margin-bottom:10px;">${escapeHtml(s.date)} | 최근 ${s.freshDays}일 이내 영상</p>
-  <p style="color:#888;font-size:13px;margin-bottom:24px;">${catChips} | 출처: YouTube (WebSearch/WebFetch 큐레이션)</p>
-  ${sections}
-  <hr style="margin-top:40px;border:none;border-top:1px solid #eee;">
-  <p style="color:#999;font-size:11px;text-align:center;">Generated by Claude · Daily Dashboard | <a href="http://localhost:${config.port}">localhost:${config.port}</a></p>
-</body></html>`;
+  const sections = filled
+    .map(
+      (c, i) =>
+        sectionHeader({ title: categoryTitle(c), accent: c.color, count: c.items.length, first: i === 0 }) +
+        c.items.map(videoRow).join("")
+    )
+    .join("");
+  const emptyBlock = empty.length
+    ? subHeader("최근 새 영상이 없는 카테고리", { count: `${empty.length}개` }) +
+      empty.map((c) => emptyLine(`${c.emoji ? `${c.emoji} ` : ""}${c.label} — 최근 새 영상이 없습니다`)).join("")
+    : "";
+
+  return emailDocument({
+    tab: "youtube",
+    title: "유튜브 소식",
+    date: s.date,
+    meta: metaLine([`최근 ${s.freshDays}일 이내 영상`, `총 ${strong(`${total}건`)}`, `카테고리 ${strong(`${filled.length}개`)}`]),
+    body: (sections || emptyLine("수록할 새 영상이 없습니다")) + emptyBlock,
+    footnote: "출처: YouTube (WebSearch/WebFetch 큐레이션)",
+  });
+}
+
+/** 유튜브 소식 메일 제목. 발송과 미리보기(preview/mail-preview.ts)가 같이 쓴다. */
+export function youtubeSubject(s: YoutubeSnapshot): string {
+  return `▶ YouTube 소식 - ${s.date}`;
 }
 
 /** 유튜브 소식 다이제스트 이메일. NOTIFY_EMAIL + Gmail 주소 + Google OAuth 클라이언트 필요. */
@@ -105,7 +146,7 @@ export async function sendYoutubeEmail(s: YoutubeSnapshot): Promise<boolean> {
   }
 
   return sendMail({
-    subject: `▶ YouTube 소식 - ${s.date}`,
+    subject: youtubeSubject(s),
     html: buildYoutubeEmailHtml(s),
   });
 }

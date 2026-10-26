@@ -41,7 +41,7 @@ function snapshot(over: Partial<NewsSnapshot> = {}): NewsSnapshot {
 
 test("buildNewsEmailHtml: 헤더·날짜·카테고리·본문이 렌더된다", () => {
   const html = buildNewsEmailHtml(snapshot());
-  assert.ok(html.includes("📰 Daily News Digest"));
+  assert.ok(html.includes("뉴스 다이제스트"));
   assert.ok(html.includes("2026-07-17"));
   assert.ok(html.includes("AI / LLM"));
   assert.ok(html.includes("AI 모델 공개"));
@@ -50,24 +50,24 @@ test("buildNewsEmailHtml: 헤더·날짜·카테고리·본문이 렌더된다",
 
 test("buildNewsEmailHtml: 빈 카테고리는 안내 문구", () => {
   const html = buildNewsEmailHtml(snapshot({ categories: [category({ items: [] })] }));
-  assert.ok(html.includes("오늘은 해당 카테고리의 최신 뉴스가 없습니다."));
+  assert.ok(html.includes("오늘은 최신 뉴스가 없습니다"));
 });
 
 test("buildNewsEmailHtml: 카테고리 0개에서도 throw 없이 문자열", () => {
   const html = buildNewsEmailHtml(snapshot({ categories: [] }));
   assert.equal(typeof html, "string");
-  assert.ok(html.includes("📰 Daily News Digest"));
+  assert.ok(html.includes("뉴스 다이제스트"));
 });
 
 test("buildNewsEmailHtml: link 가 null 이면 '원문 보기' 앵커가 없다", () => {
   const html = buildNewsEmailHtml(snapshot({ categories: [category({ items: [item({ link: null })] })] }));
-  assert.ok(!html.includes("🔗 원문 보기"));
+  assert.ok(!html.includes("원문 보기"));
 });
 
 test("buildNewsEmailHtml: 정상 링크는 앵커로 렌더된다", () => {
   const html = buildNewsEmailHtml(snapshot());
   assert.ok(html.includes(`<a href="https://example.com/a"`));
-  assert.ok(html.includes("🔗 원문 보기"));
+  assert.ok(html.includes("원문 보기"));
 });
 
 test("buildNewsEmailHtml: XSS — 제목·요약의 <script> 가 이스케이프된다", () => {
@@ -87,7 +87,7 @@ test("buildNewsEmailHtml: XSS — javascript: 링크는 앵커로 렌더하지 �
     snapshot({ categories: [category({ items: [item({ link: "javascript:alert(1)" })] })] })
   );
   assert.ok(!html.includes("javascript:"));
-  assert.ok(!html.includes("🔗 원문 보기"));
+  assert.ok(!html.includes("원문 보기"));
 });
 
 test("buildNewsEmailHtml: XSS — data: 링크도 앵커로 렌더하지 않는다", () => {
@@ -95,7 +95,7 @@ test("buildNewsEmailHtml: XSS — data: 링크도 앵커로 렌더하지 않는�
     snapshot({ categories: [category({ items: [item({ link: "data:text/html,<script>alert(1)</script>" })] })] })
   );
   assert.ok(!html.includes("data:text/html"));
-  assert.ok(!html.includes("🔗 원문 보기"));
+  assert.ok(!html.includes("원문 보기"));
 });
 
 test("buildNewsEmailHtml: related 의 javascript: 링크는 앵커 없이 라벨만 남는다", () => {

@@ -319,7 +319,7 @@ test("sendNewsEmail: Gmail API 로 제목·본문이 나간다", async () => {
     assert.equal(headerOf(mime, "To"), ADDRESS);
 
     const html = htmlOf(mime);
-    assert.ok(html.includes("📰 Daily News Digest"));
+    assert.ok(html.includes("뉴스 다이제스트"));
     assert.ok(html.includes("AI 모델 공개"), "본문에 뉴스 제목이 살아 있어야 한다");
     assert.ok(!/Content-ID:/i.test(mime), "뉴스 메일에는 첨부가 없다");
   } finally {

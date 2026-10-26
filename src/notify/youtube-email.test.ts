@@ -46,7 +46,7 @@ function snapshot(over: Partial<YoutubeSnapshot> = {}): YoutubeSnapshot {
 
 test("buildYoutubeEmailHtml: 헤더·카테고리·영상 정보가 렌더된다", () => {
   const html = buildYoutubeEmailHtml(snapshot());
-  assert.ok(html.includes("▶ YouTube 소식"));
+  assert.ok(html.includes("유튜브 소식"));
   assert.ok(html.includes("AI · LLM"));
   assert.ok(html.includes("새 AI 도구 리뷰"));
   assert.ok(html.includes("MKBHD"));
@@ -56,20 +56,20 @@ test("buildYoutubeEmailHtml: 헤더·카테고리·영상 정보가 렌더된다
 
 test("buildYoutubeEmailHtml: 빈 카테고리는 안내 문구", () => {
   const html = buildYoutubeEmailHtml(snapshot({ categories: [category({ items: [] })] }));
-  assert.ok(html.includes("최근 새 영상이 없습니다."));
+  assert.ok(html.includes("최근 새 영상이 없습니다"));
 });
 
 test("buildYoutubeEmailHtml: 정상 url 은 앵커·썸네일로 렌더된다", () => {
   const html = buildYoutubeEmailHtml(snapshot());
   assert.ok(html.includes(`<a href="https://www.youtube.com/watch?v=abc123"`));
-  assert.ok(html.includes("▶ 영상 보기"));
+  assert.ok(html.includes(">영상 보기</a>"));
   assert.ok(html.includes(`<img src="https://i.ytimg.com/vi/abc123/hqdefault.jpg"`));
 });
 
 test("buildYoutubeEmailHtml: thumbnail 이 null 이면 img 없이 본문만", () => {
   const html = buildYoutubeEmailHtml(snapshot({ categories: [category({ items: [video({ thumbnail: null })] })] }));
   assert.ok(!html.includes("<img"));
-  assert.ok(html.includes("▶ 영상 보기")); // 링크는 그대로
+  assert.ok(html.includes(">영상 보기</a>")); // 링크는 그대로
 });
 
 test("buildYoutubeEmailHtml: XSS — 제목·채널의 <script> 가 이스케이프된다", () => {
@@ -89,7 +89,7 @@ test("buildYoutubeEmailHtml: XSS — javascript: url 은 앵커로 렌더하지 
     snapshot({ categories: [category({ items: [video({ url: "javascript:alert(1)", thumbnail: null })] })] })
   );
   assert.ok(!html.includes("javascript:"));
-  assert.ok(!html.includes("▶ 영상 보기"));
+  assert.ok(!html.includes("영상 보기"));
   assert.ok(html.includes("새 AI 도구 리뷰")); // 카드 자체는 남는다
 });
 
@@ -100,7 +100,7 @@ test("buildYoutubeEmailHtml: XSS — data: url 도 앵커로 렌더하지 않는
     })
   );
   assert.ok(!html.includes("data:text/html"));
-  assert.ok(!html.includes("▶ 영상 보기"));
+  assert.ok(!html.includes("영상 보기"));
 });
 
 test("buildYoutubeEmailHtml: url 이 불안전하면 썸네일을 앵커로 감싸지 않는다", () => {
@@ -110,7 +110,7 @@ test("buildYoutubeEmailHtml: url 이 불안전하면 썸네일을 앵커로 감�
   );
   assert.ok(!html.includes("javascript:"));
   assert.ok(html.includes("<img src=")); // 썸네일(https)은 살아있되
-  assert.ok(!html.includes("▶ 영상 보기")); // 앵커는 없다
+  assert.ok(!html.includes("영상 보기")); // 앵커는 없다
 });
 
 test("buildYoutubeEmailHtml: XSS — data: 썸네일은 img 로 렌더하지 않는다", () => {
@@ -121,7 +121,16 @@ test("buildYoutubeEmailHtml: XSS — data: 썸네일은 img 로 렌더하지 않
   );
   assert.ok(!html.includes("data:text/html"));
   assert.ok(!html.includes("<img"));
-  assert.ok(html.includes("▶ 영상 보기")); // url 은 정상이라 링크는 남는다
+  assert.ok(html.includes(">영상 보기</a>")); // url 은 정상이라 링크는 남는다
+});
+
+// ── 조간 브리핑 지면(DESIGN.md) ─────────────────────────────────
+
+test("buildYoutubeEmailHtml: 옛 카드 모양(상자·굵은 왼쪽 테두리·하드코딩 링크색·flex)을 쓰지 않는다", () => {
+  const html = buildYoutubeEmailHtml(snapshot({ categories: [category(), category({ key: "x", items: [] })] }));
+  for (const old of ["border-left:4px", "border-radius:8px", "#4361ee", "#f8f9fa", "#fff3cd", "display:flex"]) {
+    assert.ok(!html.includes(old), old);
+  }
 });
 
 // ── youtubeIMessageText ────────────────────────────────────────

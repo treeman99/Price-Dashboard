@@ -220,8 +220,8 @@ test("하위호환: watchlist 키가 아예 없는 스냅샷에도 throw 하지 
 });
 
 test("해외 참고 섹션 제목은 시장 대칭이 아니다(미국장의 한국 종목은 '해외'가 아니다)", () => {
-  assert.equal(foreignSectionTitle("kr"), "🌐 해외 참고");
-  assert.equal(foreignSectionTitle("us"), "🌐 국내(한국) 참고");
+  assert.equal(foreignSectionTitle("kr"), "해외 참고");
+  assert.equal(foreignSectionTitle("us"), "국내(한국) 참고");
 });
 
 // ── 프리뷰 시제: '오늘 밤'은 조건부다 ────────────────────────────────

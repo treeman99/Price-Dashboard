@@ -5,6 +5,30 @@ import { isMailConfigured, sendMail, type MailAttachment } from "./mailer.ts";
 import { isIMessageConfigured, sendIMessage } from "./imessage.ts";
 import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
 import { escapeHtml, escapeAttr, safeHref } from "./html.ts";
+import {
+  FONT,
+  HAIRLINE,
+  INK,
+  INK_80,
+  MARKET,
+  MUTED,
+  TAB_COLOR,
+  TNUM,
+  articleRow,
+  breakLongRuns,
+  cellNote,
+  changeText,
+  dataTable,
+  emailDocument,
+  emptyLine,
+  metaLine,
+  notice,
+  sectionHeader,
+  statusTag,
+  strong,
+  subHeader,
+  textLink,
+} from "./email-kit.ts";
 import { listStocks } from "../stock/tickers.ts";
 import {
   changeTone,
@@ -16,7 +40,7 @@ import {
   watchMarket,
   foreignSectionTitle,
 } from "../../shared/stock.ts";
-import { formatPnlPct, horizonLabel } from "../../shared/holdings.ts";
+import { formatPnlPct, horizonLabel, pnlTone } from "../../shared/holdings.ts";
 import type {
   NotifyChannel,
   StockAnalysis,
@@ -31,20 +55,17 @@ import type {
 /**
  * 증시 브리핑 이메일 + iMessage.
  *
- * ⚠️ 등락 색은 **한국 증시 관례**를 따른다: 상승=빨강, 하락=파랑.
+ * ⚠️ 등락 색은 **한국 증시 관례**를 따른다: 상승=빨강, 하락=파랑(email-kit MARKET · changeText).
  * 같은 디렉터리의 email.ts(쇼핑 리포트)는 "하락=초록(GREEN)"이라 규칙이 정반대다.
  * 가격이 내리면 좋은 쇼핑과 달리 증시는 방향 자체가 정보라서, 두 색 규칙을 절대 섞으면 안 된다.
  */
-const UP = "#e74c3c"; // 상승
-const DOWN = "#2563eb"; // 하락
-const FLAT = "#888888"; // 보합·값 없음
 
 /** iMessage 본문 상한. 초과분은 알림 미리보기에서 어차피 잘리므로 보내기 전에 자른다. */
 const IMESSAGE_MAX = 500;
 
-function toneColor(pct: number | null): string {
-  const t = changeTone(pct);
-  return t === "up" ? UP : t === "down" ? DOWN : FLAT;
+/** 증시 상승·하락 색. 보합·값 없음은 흐린 잉크(색을 입히지 않는다). */
+function marketColor(tone: "up" | "down" | "flat"): string {
+  return tone === "up" ? MARKET.up : tone === "down" ? MARKET.down : MUTED;
 }
 
 /** 등락률 텍스트. changeTone 이 null·0·비유한수를 모두 flat 으로 모아주므로 여기선 화살표만 고른다. */
@@ -54,14 +75,15 @@ function pctText(pct: number | null): string {
   return `${t === "up" ? "▲" : "▼"}${Math.abs(pct as number).toFixed(1)}%`;
 }
 
-function pctBadge(pct: number | null): string {
-  return `<span style="color:${toneColor(pct)};font-weight:600">${pctText(pct)}</span>`;
-}
-
 /** 지수는 통화가 아니라 포인트다 — formatPrice(원/$ 붙음) 대신 소수 2자리 고정. */
 function indexValue(v: number | null): string {
   if (v == null || !Number.isFinite(v)) return "-";
   return v.toLocaleString("ko-KR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** 시세 표기(이스케이프 포함) — 모르는 통화는 코드가 그대로 붙어 나오므로 감싸 둔다. */
+function priceHtml(v: number | null, currency: string): string {
+  return escapeHtml(formatPrice(v, currency));
 }
 
 function flagOf(m: StockMarket): string {
@@ -102,11 +124,68 @@ function chartCid(market: StockMarket, symbol: string): string {
   return `chart_${market}_${symbol}@dailystock`;
 }
 
+// ── 지면 부품(증시 전용) ────────────────────────────────────────
+// 공용 부품은 email-kit.ts. 여기 것은 종목 행에서만 쓰는 조각이다.
+
+/**
+ * 브리핑의 전망(verdict)·주목 강도(attention)는 서버 계약상 이모지 값이다(src/stock/curate.ts VERDICTS·ATTENTIONS).
+ * 지면에는 이모지를 아이콘 대신 쓰지 않고 글씨 태그로 단다 — web/src/components/StockCard.tsx 와 같은 매핑.
+ * 모르는 값은 그대로 둔다(statusTag 가 이스케이프한다).
+ */
+const VERDICT_LABEL: Record<string, string> = { "📈": "상승 전망", "📉": "하락 전망", "➡️": "보합 전망" };
+
+/** "🔥강" → "주목 강". 한글 등급이 없으면 받은 값 그대로. */
+function attentionLabel(attention: string): string {
+  const level = attention.replace(/[^가-힣]/g, "");
+  return level ? `주목 ${level}` : attention;
+}
+
+/** 큰 숫자(지수·종가·손익률) — 명조 22px tabular. html 그대로. */
+function bigNumber(html: string, color: string = INK): string {
+  return `<span style="font-family:${FONT.serif};font-size:22px;font-weight:600;line-height:1.25;letter-spacing:-0.01em;color:${color};${TNUM}">${html}</span>`;
+}
+
+/** 큰 숫자 + 등락률 한 줄. label 이 있으면 위에 12px 흐린 잉크로(화면 StockCard 의 '종가'). */
+function quoteLine(valueHtml: string, pct: number | null, label?: string): string {
+  return (
+    (label ? `<p style="margin:10px 0 0;font-size:12px;color:${MUTED}">${escapeHtml(label)}</p>` : "") +
+    `<p style="margin:${label ? 0 : 2}px 0 0">${bigNumber(valueHtml)}&nbsp;&nbsp;<span style="font-size:15px">${changeText(pct)}</span></p>`
+  );
+}
+
+/** 행 제목 — 이름(semibold) 뒤에 상태 태그. name 은 텍스트, tags 는 html. */
+function nameLine(name: string, tags: string[] = []): string {
+  const after = tags.filter(Boolean).map((t) => ` ${t}`).join("");
+  return `<p style="margin:0;font-size:15px;font-weight:600;line-height:1.45;color:${INK}">${escapeHtml(name)}${after}</p>`;
+}
+
+/** 이름 아래 회색 한 줄 — Mono 종목코드 + 덧붙일 조각(html). */
+function codeLine(symbol: string, parts: (string | null | false)[] = []): string {
+  const code = `<span style="font-family:${FONT.mono}">${escapeHtml(symbol)}</span>`;
+  return `<p style="margin:2px 0 0;font-size:12px;line-height:1.6;color:${MUTED};${TNUM}">${metaLine([code, ...parts])}</p>`;
+}
+
+/**
+ * 서술 한 덩어리 — 라벨(12px 흐린 잉크) + 본문. 화면 StockCard 의 Field 와 같다.
+ * 값이 없으면 아무것도 그리지 않는다. label·value 는 텍스트.
+ */
+function field(label: string | null, value: string | null | undefined): string {
+  if (!value) return "";
+  const head = label ? `<div style="font-size:12px;font-weight:600;color:${MUTED}">${escapeHtml(label)}</div>` : "";
+  return `<div style="margin-top:10px">${head}<div style="margin-top:2px;font-size:14px;line-height:1.65;color:${INK_80};white-space:pre-line">${breakLongRuns(escapeHtml(value))}</div></div>`;
+}
+
+/** 종목·지수 한 행. 상자 없이 아래 헤어라인으로만 나눈다. */
+function itemRow(inner: string): string {
+  return `<div style="padding:16px 0;border-bottom:1px solid ${HAIRLINE}">${inner}</div>`;
+}
+
+const DASH = `<span style="color:${MUTED}">-</span>`;
+
 // ── 섹션 렌더러 ────────────────────────────────────────────────
 
 function newsSection(items: StockNewsItem[]): string {
-  if (!items.length)
-    return `<p style="color:#999;padding:12px;background:#f8f9fa;border-radius:8px">최근 24시간 내 수집된 뉴스가 없습니다.</p>`;
+  if (!items.length) return emptyLine("최근 24시간 내 수집된 뉴스가 없습니다.");
 
   // bucket 그룹. 등장 순서를 유지해야 LLM 이 매긴 중요도 순서가 보존된다(Map 은 삽입 순서 보장).
   const buckets = new Map<string, StockNewsItem[]>();
@@ -119,156 +198,137 @@ function newsSection(items: StockNewsItem[]): string {
 
   return [...buckets.entries()]
     .map(([bucket, list]) => {
-      const cards = list
+      const rows = list
         .map((it) => {
           const href = safeHref(it.link);
-          const link = href
-            ? `<p style="margin:6px 0 0"><a href="${escapeAttr(href)}" style="color:#4361ee;text-decoration:none;font-size:13px">🔗 원문 보기</a></p>`
-            : "";
-          return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid #4361ee">
-      <h4 style="margin:0 0 4px;font-size:14px;color:#1a1a2e">${escapeHtml(it.title)}</h4>
-      <p style="margin:0 0 4px;color:#888;font-size:12px">${escapeHtml(it.source)}${it.date ? ` · 📅 ${escapeHtml(it.date)}` : ""}</p>
-      ${it.summary ? `<p style="margin:0;color:#444;font-size:13px;line-height:1.6">${escapeHtml(it.summary)}</p>` : ""}
-      ${link}
-    </div>`;
+          return articleRow({
+            title: it.title,
+            href,
+            meta: metaLine([
+              escapeHtml(it.source),
+              it.date ? `<span style="font-family:${FONT.mono}">${escapeHtml(it.date)}</span>` : null,
+            ]),
+            summary: it.summary ? breakLongRuns(escapeHtml(it.summary)) : undefined,
+            after: href ? textLink(href, "원문 보기") : undefined,
+          });
         })
         .join("");
-      return `<h3 style="margin:16px 0 8px;font-size:15px;color:#1a1a2e">📌 ${escapeHtml(bucket)}</h3>${cards}`;
+      return subHeader(bucket, { count: list.length }) + rows;
     })
     .join("");
 }
 
-function indexCard(i: StockIndex): string {
+function indexRow(i: StockIndex): string {
   // rationale 이 없으면 outlook 을 감춘다 — 근거 없는 전망은 노출하지 않는다는 규칙(types.ts StockIndex 주석).
-  const outlook =
-    i.outlook && i.rationale
-      ? `<p style="margin:6px 0 0;color:#444;font-size:13px"><b>전망</b> ${escapeHtml(i.outlook)}</p>
-       <p style="margin:4px 0 0;color:#666;font-size:12px"><b>전망 사유</b> ${escapeHtml(i.rationale)}</p>`
-      : "";
-  return `<div style="margin-bottom:10px;padding:12px 14px;background:#f8f9fa;border-radius:8px;border-left:4px solid ${toneColor(i.changePct)}">
-    <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(i.name)}
-      <span style="font-weight:600">${indexValue(i.value)}</span> ${pctBadge(i.changePct)}</h3>
-    ${i.comment ? `<p style="margin:0;color:#444;font-size:13px;line-height:1.6">${escapeHtml(i.comment)}</p>` : ""}
-    ${outlook}
-  </div>`;
+  const outlook = i.outlook && i.rationale ? field("전망", i.outlook) + field("근거", i.rationale) : "";
+  return itemRow(
+    nameLine(i.name) + quoteLine(escapeHtml(indexValue(i.value)), i.changePct) + field(null, i.comment) + outlook
+  );
 }
 
-/** 종목 카드. chartCid 가 있으면 그 종목만 인라인 차트를 붙인다(첨부 생성에 성공한 종목). */
-function analysisCard(a: StockAnalysis, cid: string | null): string {
-  const img = cid
-    ? `<div style="margin:10px 0"><img src="cid:${escapeAttr(cid)}" alt="${escapeAttr(a.name)} 최근 20거래일" width="540" style="max-width:100%;border:1px solid #f0f0f0;border-radius:8px"/></div>`
-    : "";
+/** 등록 종목 한 행. cid 가 있으면 그 종목만 인라인 차트를 붙인다(첨부 생성에 성공한 종목). */
+function analysisRow(a: StockAnalysis, cid: string | null): string {
+  const verdict = a.verdict ? statusTag(VERDICT_LABEL[a.verdict] ?? a.verdict) : "";
+  const unverified = a.verified ? null : statusTag("시세 미검증", "warn");
+  // 이동평균은 값이 하나라도 있을 때만(예전 카드와 같은 조건). 화면 StockCard 의 '5일 등락 · 5일선 · 20일선' 줄.
   const ma =
     a.ma5 != null || a.ma20 != null
-      ? `<tr><td style="padding:2px 12px 2px 0;color:#666">이동평균</td><td>5일 ${formatPrice(a.ma5, a.currency)} · 20일 ${formatPrice(a.ma20, a.currency)}</td></tr>`
-      : "";
-  const unverified = a.verified
-    ? ""
-    : ` <span style="background:#fff3cd;color:#8a6d3b;border-radius:4px;padding:1px 6px;font-size:11px">시세 미검증</span>`;
+      ? [`5일선 ${strong(priceHtml(a.ma5, a.currency))}`, `20일선 ${strong(priceHtml(a.ma20, a.currency))}`]
+      : [];
+  const stats = `<p style="margin:6px 0 0;font-size:13px;color:${MUTED};${TNUM}">${metaLine([
+    `5일 등락 ${changeText(a.weekChangePct)}`,
+    ...ma,
+  ])}</p>`;
+  // 신문지 바탕 PNG 라 테두리 없이 지면에 그대로 얹는다. 폭은 첨부 PNG(540px)에 맞추고, 좁은 화면에선 줄어든다.
+  const img = cid
+    ? `<img src="cid:${escapeAttr(cid)}" alt="${escapeAttr(a.name)} 최근 20거래일" width="540" style="display:block;width:100%;max-width:540px;height:auto;margin:12px 0 0;border:0"/>`
+    : "";
 
-  return `<div style="border:1px solid #eee;border-radius:10px;padding:16px;margin:12px 0">
-    <h3 style="margin:0 0 8px;font-size:16px">${escapeHtml(a.verdict)} ${escapeHtml(a.name)}
-      <span style="color:#888;font-size:13px">${escapeHtml(a.symbol)}</span>${unverified}</h3>
-    <table style="border-collapse:collapse;font-size:14px">
-      <tr><td style="padding:2px 12px 2px 0;color:#666">종가</td><td><b>${formatPrice(a.close, a.currency)}</b> ${pctBadge(a.changePct)}</td></tr>
-      <tr><td style="padding:2px 12px 2px 0;color:#666">5거래일</td><td>${pctBadge(a.weekChangePct)}</td></tr>
-      ${ma}
-    </table>
-    ${img}
-    ${a.summary ? `<p style="margin:8px 0 0;color:#444;font-size:13px;line-height:1.6"><b>요약</b> ${escapeHtml(a.summary)}</p>` : ""}
-    ${a.outlook ? `<p style="margin:6px 0 0;color:#444;font-size:13px"><b>전망</b> ${escapeHtml(a.outlook)}</p>` : ""}
-    ${a.rationale ? `<p style="margin:4px 0 0;color:#666;font-size:12px"><b>전망 사유</b> ${escapeHtml(a.rationale)}</p>` : ""}
-    ${a.risks ? `<p style="margin:4px 0 0;color:#666;font-size:12px"><b>리스크</b> ${escapeHtml(a.risks)}</p>` : ""}
-  </div>`;
+  return itemRow(
+    nameLine(a.name, [verdict]) +
+      codeLine(a.symbol, [unverified]) +
+      quoteLine(priceHtml(a.close, a.currency), a.changePct, "종가") +
+      stats +
+      img +
+      field("요약", a.summary) +
+      field("전망", a.outlook) +
+      field("근거", a.rationale) +
+      field("리스크", a.risks)
+  );
 }
 
 /**
- * 관심 종목 카드. marketNote 가 있으면 '해외 참고' 항목이라 배경·보더를 앰버가 아닌
- * 슬레이트-블루로 바꾸고 시장 칩을 붙여 **한눈에 다른 묶음임을 보이게** 한다.
- * 통화 표기는 항목의 currency 만 보므로(shared/stock.ts formatPrice) 별도 분기가 필요 없다 —
- * 해외 항목엔 verifyWatchlist 가 실제 시장의 통화를 붙여 두었다.
+ * 관심 종목 한 행. marketNote 가 있으면 '해외 참고' 항목이라 시장 태그를 붙여 **다른 묶음임을 보인다**
+ * (섹션도 따로 끊는다). 통화 표기는 항목의 currency 만 보므로(shared/stock.ts formatPrice) 별도 분기가
+ * 필요 없다 — 해외 항목엔 verifyWatchlist 가 실제 시장의 통화를 붙여 두었다.
  */
-function watchCard(w: StockWatchItem, marketNote?: string): string {
-  const bg = marketNote ? "#f5f7fb" : "#fffdf5";
-  const bar = marketNote ? "#5b7cfa" : "#f0ad4e";
-  const chip = marketNote
-    ? ` <span style="background:#e8edf7;color:#3f5185;border-radius:4px;padding:1px 6px;font-size:11px">${escapeHtml(marketNote)}</span>`
-    : "";
-  return `<div style="margin-bottom:10px;padding:12px 14px;background:${bg};border-radius:8px;border-left:4px solid ${bar}">
-    <h3 style="margin:0 0 4px;font-size:15px;color:#1a1a2e">${escapeHtml(w.attention)} ${escapeHtml(w.name)}
-      <span style="color:#888;font-size:13px">${escapeHtml(w.symbol)}</span>${chip}
-      <span style="font-weight:600">${formatPrice(w.close, w.currency)}</span> ${pctBadge(w.changePct)}</h3>
-    ${w.summary ? `<p style="margin:0;color:#444;font-size:13px;line-height:1.6">${escapeHtml(w.summary)}</p>` : ""}
-    ${w.levels ? `<p style="margin:4px 0 0;color:#666;font-size:12px"><b>주목 가격대</b> ${escapeHtml(w.levels)}</p>` : ""}
-    ${w.rationale ? `<p style="margin:4px 0 0;color:#666;font-size:12px"><b>거론 사유</b> ${escapeHtml(w.rationale)}</p>` : ""}
-    ${w.risks ? `<p style="margin:4px 0 0;color:#666;font-size:12px"><b>리스크</b> ${escapeHtml(w.risks)}</p>` : ""}
-  </div>`;
+function watchRow(w: StockWatchItem, marketNote?: string): string {
+  return itemRow(
+    nameLine(w.name) +
+      codeLine(w.symbol, [statusTag(attentionLabel(w.attention)), marketNote ? statusTag(marketNote) : null]) +
+      quoteLine(priceHtml(w.close, w.currency), w.changePct, "종가") +
+      field("요약", w.summary) +
+      // 전망은 근거가 있을 때만 — 종합 테이블과 같은 조건이라 표와 행이 서로 다른 말을 하지 않는다.
+      (w.outlook && w.rationale ? field("전망", w.outlook) : "") +
+      field("근거", w.rationale) +
+      field("리스크", w.risks) +
+      field("주목 가격대", w.levels)
+  );
 }
 
 function summaryTable(s: StockSnapshot): string {
-  // 근거 없는 전망은 표에서도 감춘다 — 카드(indexCard)만 막고 표를 열어두면
+  // 근거 없는 전망은 표에서도 감춘다 — 행(indexRow)만 막고 표를 열어두면
   // 같은 전망이 '핵심 근거 -' 상태로 표에 그대로 실린다.
-  const row = (label: string, tone: number | null, outlook: string | null, rationale: string | null) =>
-    `<tr>
-      <td style="padding:8px;border-bottom:1px solid #eee;font-size:13px">${label} ${pctBadge(tone)}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;font-size:13px;color:#444">${outlook && rationale ? escapeHtml(outlook) : "-"}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#666">${rationale ? escapeHtml(rationale) : "-"}</td>
-    </tr>`;
+  //
+  // 표에는 시장 컬럼이 없다. 해외 참고 항목을 관심 종목과 같은 묶음으로 찍으면 섹션에서 애써
+  // 분리한 게 표에서 다시 섞인다 → 이름 아래 회색 묶음 표기에 시장명을 박는다.
+  // 미국장 브리핑의 한국 종목은 '해외'가 아니라 '국내'다 — 라벨은 시장 상대적이다(foreignSectionTitle 과 같다).
+  const row = (name: string, group: string, tone: number | null, outlook: string | null, rationale: string | null) => [
+    `<span style="font-weight:600">${escapeHtml(name)}</span> ${changeText(tone)}${cellNote(escapeHtml(group))}`,
+    outlook && rationale ? escapeHtml(outlook) : DASH,
+    rationale ? `<span style="font-size:13px;color:${INK_80}">${escapeHtml(rationale)}</span>` : DASH,
+  ];
 
-  // 표에는 시장 컬럼이 없다. 해외 참고 항목을 관심 종목과 같은 💡 로 찍으면 카드에서 애써
-  // 분리한 게 표에서 다시 섞인다 → 프리픽스를 🌐 로 나누고 라벨에 시장명을 박는다.
   const { domestic, foreign } = partitionWatchlist(s);
+  const foreignGroup = s.market === "kr" ? "해외" : "국내";
   const rows = [
-    ...s.indices.map((i) => row(`📊 ${escapeHtml(i.name)}`, i.changePct, i.outlook, i.rationale)),
-    ...s.analyses.map((a) => row(`📈 ${escapeHtml(a.name)}`, a.changePct, a.outlook, a.rationale)),
-    ...domestic.map((w) => row(`💡 ${escapeHtml(w.name)}`, w.changePct, w.outlook, w.rationale)),
+    ...s.indices.map((i) => row(i.name, "지수", i.changePct, i.outlook, i.rationale)),
+    ...s.analyses.map((a) => row(a.name, "등록", a.changePct, a.outlook, a.rationale)),
+    ...domestic.map((w) => row(w.name, "관심", w.changePct, w.outlook, w.rationale)),
     ...foreign.map((w) =>
-      row(
-        `🌐 ${escapeHtml(w.name)}(${escapeHtml(marketLabel(watchMarket(w, s.market)))})`,
-        w.changePct,
-        w.outlook,
-        w.rationale
-      )
+      row(w.name, `${foreignGroup} · ${marketLabel(watchMarket(w, s.market))}`, w.changePct, w.outlook, w.rationale)
     ),
-  ].join("");
+  ];
 
-  if (!rows) return `<p style="color:#999">표에 담을 항목이 없습니다.</p>`;
-  return `<table style="border-collapse:collapse;width:100%;margin-top:8px">
-    <tr style="background:#f8f9fa">
-      <th style="padding:8px;text-align:left;font-size:13px;color:#666">지수/종목</th>
-      <th style="padding:8px;text-align:left;font-size:13px;color:#666">전망</th>
-      <th style="padding:8px;text-align:left;font-size:13px;color:#666">핵심 근거</th>
-    </tr>
-    ${rows}
-  </table>`;
+  if (!rows.length) return emptyLine("표에 담을 항목이 없습니다.");
+  return dataTable([{ label: "지수/종목", width: "32%" }, { label: "전망", width: "28%" }, { label: "핵심 근거" }], rows);
 }
 
 /**
- * 헤더 서브라인의 거래일 병기.
+ * 메타 줄의 거래일 사실.
  *
  * ⚠️ close/preview 는 `sessionDate !== date` 조건부 로직을 쓰면 안 된다. 프리뷰의 sessionDate
  * 는 '오늘 밤 뉴욕 세션'이라 KST 수집일과 **같아지는 날이 대부분**이고, 그러면 대상 세션 표기가
  * 조용히 사라진다. 역할이 있으면 항상 표시하고, 문구로 두 브리핑을 구분한다.
  */
-function sessionLineOf(s: StockSnapshot): string {
+function sessionFactOf(s: StockSnapshot): string | null {
   const role = effectiveRole(s);
-  if (role === "close" && s.sessionDate) return ` · 간밤 뉴욕장(${escapeHtml(s.sessionDate)}) 마감 결산`;
-  if (role === "preview" && s.sessionDate)
-    return ` · 오늘 밤(${escapeHtml(s.sessionDate)}) 뉴욕장 개장 프리뷰`;
+  if (role === "close" && s.sessionDate) return `간밤 뉴욕장(${escapeHtml(s.sessionDate)}) 마감 결산`;
+  if (role === "preview" && s.sessionDate) return `오늘 밤(${escapeHtml(s.sessionDate)}) 뉴욕장 개장 프리뷰`;
   // both·한국장은 현행 조건부 로직 유지.
-  return s.sessionDate && s.sessionDate !== s.date ? ` · 거래일 ${escapeHtml(s.sessionDate)}` : "";
+  return s.sessionDate && s.sessionDate !== s.date ? `거래일 ${escapeHtml(s.sessionDate)}` : null;
 }
 
-function shellHtml(s: StockSnapshot, body: string): string {
-  const session = sessionLineOf(s);
-  return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif;max-width:680px;margin:0 auto;padding:16px">
-    <h1 style="color:#1a1a2e;border-bottom:3px solid #1a1a2e;padding-bottom:8px">${flagOf(s.market)} ${titleOf(s)}</h1>
-    <p style="color:#666;font-size:13px">${escapeHtml(s.date)}${session} · 대시보드: <a href="http://localhost:${config.port}">localhost:${config.port}</a></p>
-    ${body}
-    <hr style="margin-top:32px;border:none;border-top:1px solid #eee">
-    <p style="color:#999;font-size:11px;line-height:1.6">${escapeHtml(s.disclaimer)}</p>
-    <p style="color:#aaa;font-size:11px;text-align:center">Daily Dashboard · 로컬 자동 수집</p>
-  </div>`;
+/** 지면 뼈대. 제목에서 국기는 뺀다(제목 앞 이모지 금지) — 메일 제목(subject)에는 그대로 남는다. */
+function documentHtml(s: StockSnapshot, meta: (string | null | false)[], body: string): string {
+  return emailDocument({
+    tab: "stock",
+    title: titleOf(s),
+    date: s.date,
+    meta: metaLine([sessionFactOf(s), ...meta]),
+    body,
+    footnote: s.disclaimer ? escapeHtml(s.disclaimer) : undefined,
+  });
 }
 
 /**
@@ -281,110 +341,128 @@ function shellHtml(s: StockSnapshot, body: string): string {
 export function buildStockEmailHtml(s: StockSnapshot, chartSymbols?: ReadonlySet<string>): string {
   // 휴장이면 오케스트레이터가 호출을 막지만, 방어적으로 짧은 안내만 렌더한다.
   if (s.closed) {
-    const reason = s.closedReason ? ` (${escapeHtml(s.closedReason)})` : "";
-    return shellHtml(
-      s,
-      `<p style="margin:24px 0;padding:16px;background:#f8f9fa;border-radius:8px;color:#444">😴 휴장일${reason}입니다. 오늘은 브리핑이 없습니다.</p>`
-    );
+    const reason = s.closedReason ? `(${escapeHtml(s.closedReason)})` : "";
+    return documentHtml(s, ["휴장"], notice(`휴장일${reason}입니다. 오늘은 브리핑이 없습니다.`, "muted"));
   }
 
+  const accent = TAB_COLOR.stock;
   const charts = chartSymbols ?? new Set<string>();
-  const analyses = s.analyses.length
-    ? s.analyses
-        .map((a) => analysisCard(a, charts.has(a.symbol) ? chartCid(s.market, a.symbol) : null))
-        .join("")
-    : `<p style="color:#999">등록된 종목이 없습니다.</p>`;
-  const indices = s.indices.length
-    ? s.indices.map(indexCard).join("")
-    : `<p style="color:#999">지수 데이터를 가져오지 못했습니다.</p>`;
   const { domestic, foreign } = partitionWatchlist(s);
+  const positions = positionSection(s);
+
+  const analyses = s.analyses.length
+    ? s.analyses.map((a) => analysisRow(a, charts.has(a.symbol) ? chartCid(s.market, a.symbol) : null)).join("")
+    : emptyLine("등록된 종목이 없습니다.");
+  const indices = s.indices.length ? s.indices.map(indexRow).join("") : emptyLine("지수 데이터를 가져오지 못했습니다.");
   const watchlist = domestic.length
-    ? domestic.map((w) => watchCard(w)).join("")
-    : `<p style="color:#999">오늘 추려진 관심 종목이 없습니다.</p>`;
+    ? domestic.map((w) => watchRow(w)).join("")
+    : emptyLine("오늘 추려진 관심 종목이 없습니다.");
   // 해외 참고는 **평소 0건이 정상**이다. 관심 종목처럼 플레이스홀더 문구를 두면
   // 매일 '해외 참고 없음'이 뜨는 노이즈가 되므로 비면 섹션 자체를 렌더하지 않는다(웹과 동일).
+  // 제목은 화면과 같은 foreignSectionTitle 그대로다(공용 문구라 화면·메일이 함께 바뀌어야 한다).
   const foreignSection = foreign.length
-    ? `
-    <h2 style="color:#5b7cfa;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">${escapeHtml(
-      foreignSectionTitle(s.market)
-    )}</h2>
-    <p style="color:#666;font-size:12px;margin:0 0 10px">${escapeHtml(
-      marketLabel(s.market)
-    )}에 상장되지 않은 종목입니다. 오늘 이 장에서 직접 거래되지 않으며, 시세·통화는 해당 종목의 상장 시장 기준입니다.</p>
-    ${foreign
-      .map((w) => watchCard(w, marketLabel(watchMarket(w, s.market))))
-      .join("")}`
+    ? sectionHeader({ title: escapeHtml(foreignSectionTitle(s.market)), accent, count: foreign.length }) +
+      `<p style="margin:8px 0 0;font-size:13px;line-height:1.6;color:${MUTED}">${escapeHtml(
+        marketLabel(s.market)
+      )}에 상장되지 않은 종목입니다. 오늘 이 장에서 직접 거래되지 않으며, 시세·통화는 해당 종목의 상장 시장 기준입니다.</p>` +
+      foreign.map((w) => watchRow(w, marketLabel(watchMarket(w, s.market)))).join("")
     : "";
 
-  const body = `
-    ${positionSection(s)}
-    <h2 style="color:#4361ee;margin-top:28px;border-bottom:2px solid #eee;padding-bottom:6px">🌍 24시간 뉴스 브리핑</h2>
-    ${newsSection(s.news)}
+  const body = [
+    positions,
+    sectionHeader({ title: "24시간 뉴스 브리핑", accent, count: s.news.length || null, first: !positions }),
+    newsSection(s.news),
+    sectionHeader({ title: "지수", accent, count: s.indices.length || null }),
+    indices,
+    sectionHeader({ title: "등록 종목", accent, count: s.analyses.length || null }),
+    analyses,
+    sectionHeader({ title: "오늘의 관심 종목", accent, count: domestic.length || null }),
+    notice("관심 종목은 시장에서 거론되는 사실을 정리한 것으로 매수 추천이 아닙니다.", "muted"),
+    watchlist,
+    foreignSection,
+    sectionHeader({ title: "종합 테이블", accent }),
+    summaryTable(s),
+    s.notes
+      ? `<p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:${MUTED};white-space:pre-line">${escapeHtml(s.notes)}</p>`
+      : "",
+  ].join("\n");
 
-    <h2 style="color:#1a1a2e;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">📊 지수 분석 &amp; 전망</h2>
-    ${indices}
-
-    <h2 style="color:#1a1a2e;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">📈 등록 종목 분석 &amp; 전망</h2>
-    ${analyses}
-
-    <h2 style="color:#f0ad4e;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">💡 오늘의 관심 종목</h2>
-    ${watchlist}
-    <p style="color:#8a6d3b;font-size:12px;background:#fff3cd;border-radius:6px;padding:8px 10px;margin-top:8px">관심 종목은 시장에서 거론되는 사실을 정리한 것으로 매수 추천이 아닙니다.</p>
-${foreignSection}
-
-    <h2 style="color:#1a1a2e;margin-top:32px;border-bottom:2px solid #eee;padding-bottom:6px">📋 종합 테이블</h2>
-    ${summaryTable(s)}
-    ${s.notes ? `<p style="color:#888;font-size:12px;margin-top:12px">📝 ${escapeHtml(s.notes)}</p>` : ""}`;
-
-  return shellHtml(s, body);
+  return documentHtml(
+    s,
+    [
+      `등록 ${strong(`${s.analyses.length}종목`)}`,
+      `관심 ${strong(`${domestic.length}종목`)}`,
+      foreign.length > 0 && `${s.market === "kr" ? "해외" : "국내"} 참고 ${strong(`${foreign.length}종목`)}`,
+    ],
+    body
+  );
 }
 
 /**
- * 내 포지션 점검 카드 1건.
+ * 본문 HTML 과 인라인 차트 첨부를 함께 만든다. pinned = 차트를 붙일 종목 심볼. 발송·DB 조회 없음.
+ *
+ * 차트를 먼저 만들고 **성공한 종목만** HTML 에 img 를 박는다(깨진 CID 방지) — 실패한 종목은 차트 없이 렌더한다.
+ * 메일 크기·생성 시간 때문에 차트는 pinned 만. 시계열이 비면 빈 차트라 의미가 없어 건너뛴다.
+ */
+export function buildStockEmailParts(
+  s: StockSnapshot,
+  pinned: ReadonlySet<string>
+): { html: string; attachments: MailAttachment[] } {
+  const attachments: MailAttachment[] = [];
+  const chartSymbols = new Set<string>();
+  if (!s.closed) {
+    for (const a of s.analyses) {
+      if (!pinned.has(a.symbol) || !a.history.length) continue;
+      try {
+        attachments.push({
+          filename: `chart_${s.market}_${a.symbol}.png`,
+          content: renderStockChart(a),
+          // 본문의 <img src="cid:..."> 와 짝을 이룬다 — 이 값이 어긋나면 차트가 깨진다.
+          cid: chartCid(s.market, a.symbol),
+          contentType: "image/png",
+        });
+        chartSymbols.add(a.symbol);
+      } catch (e) {
+        log.warn(`증시 차트 생성 실패 [${a.name}]: ${(e as Error).message}`);
+      }
+    }
+  }
+  return { html: buildStockEmailHtml(s, chartSymbols), attachments };
+}
+
+/**
+ * 내 포지션 점검 행 1건.
  *
  * 목표가·손절가는 **거리(%)로만** 표시한다. 도달 알림은 인터뷰에서 트리거로 선택되지
  * 않았으므로 여기서 "도달!" 같은 행동 신호를 만들면 사용자가 요청하지 않은 알림이 된다.
  */
-function positionCard(p: StockPositionReview): string {
-  const tone = toneColor(p.pnlPct);
-  const dist = (label: string, price: number | null, pct: number | null): string =>
-    price == null
-      ? ""
-      : `<span style="color:#666;margin-right:10px">${label} ${escapeHtml(
-          formatPrice(price, p.currency)
-        )} <span style="color:#888">(${escapeHtml(formatPnlPct(pct))})</span></span>`;
+function positionRow(p: StockPositionReview): string {
+  const level = (label: string, price: number | null, pct: number | null): string | null =>
+    price == null ? null : `${label} ${strong(priceHtml(price, p.currency))} (${escapeHtml(formatPnlPct(pct))})`;
+  const levels = [level("목표", p.targetPrice, p.toTargetPct), level("손절", p.stopPrice, p.toStopPct)];
 
-  return `
-  <div style="border:1px solid #e5e7eb;border-left:4px solid ${tone};border-radius:8px;padding:12px 14px;margin:10px 0;background:#fff">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-      <strong style="font-size:15px">${escapeHtml(p.name)} <span style="color:#888;font-weight:400;font-size:12px">${escapeHtml(
-        p.symbol
-      )} · ${escapeHtml(horizonLabel(p.horizon))}</span></strong>
-      <span style="color:${tone};font-weight:700;font-size:15px">${escapeHtml(formatPnlPct(p.pnlPct))}</span>
-    </div>
-    <div style="color:#444;font-size:13px;margin-top:6px">
-      현재가 <strong>${escapeHtml(formatPrice(p.close, p.currency))}</strong>
-      <span style="color:#888">· 평단 ${escapeHtml(formatPrice(p.avgPrice, p.currency))} · ${escapeHtml(
-        String(p.quantity)
-      )}주</span>
-      ${pctBadge(p.changePct)}
-    </div>
-    <div style="font-size:12px;margin-top:6px">
-      ${dist("🎯 목표", p.targetPrice, p.toTargetPct)}${dist("🛡 손절", p.stopPrice, p.toStopPct)}
-    </div>
-    ${
-      p.factors
-        ? `<div style="color:#333;font-size:13px;margin-top:8px;line-height:1.6">${escapeHtml(p.factors)}</div>`
-        : ""
-    }
-    ${
-      p.pulseSummary
-        ? `<div style="color:#555;font-size:12px;margin-top:8px;background:#f8f9fa;border-radius:6px;padding:8px 10px">
-             <strong style="color:#666">⏱ 지난 24시간 실시간 취합</strong><br>${escapeHtml(p.pulseSummary)}
-           </div>`
-        : ""
-    }
-  </div>`;
+  // 이름 왼쪽 · 손익률 오른쪽. 좌우 배치는 flex 대신 표로(Gmail·Outlook 이 flex 를 무시한다).
+  const head = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td valign="top" style="padding:0">${nameLine(p.name)}${codeLine(p.symbol, [escapeHtml(horizonLabel(p.horizon))])}</td>
+<td valign="top" align="right" style="padding:0 0 0 12px;white-space:nowrap;text-align:right">${bigNumber(
+    escapeHtml(formatPnlPct(p.pnlPct)),
+    marketColor(pnlTone(p.pnlPct))
+  )}<div style="font-size:12px;color:${MUTED}">손익률</div></td>
+</tr></table>`;
+
+  return itemRow(
+    head +
+      `<p style="margin:8px 0 0;font-size:13px;color:${MUTED};${TNUM}">${metaLine([
+        `현재가 ${strong(priceHtml(p.close, p.currency))} ${changeText(p.changePct)}`,
+        `평단 ${priceHtml(p.avgPrice, p.currency)}`,
+        `${escapeHtml(String(p.quantity))}주`,
+      ])}</p>` +
+      (levels.some(Boolean)
+        ? `<p style="margin:2px 0 0;font-size:13px;color:${MUTED};${TNUM}">${metaLine(levels)}</p>`
+        : "") +
+      field(null, p.factors) +
+      field("지난 24시간 실시간 취합", p.pulseSummary)
+  );
 }
 
 /**
@@ -394,26 +472,35 @@ function positionCard(p: StockPositionReview): string {
 function positionSection(s: StockSnapshot): string {
   const positions = s.positions ?? [];
   if (!positions.length) return "";
-  return `
-    <h2 style="color:#059669;margin-top:28px;border-bottom:2px solid #eee;padding-bottom:6px">💼 내 포지션 점검</h2>
-    ${positions.map(positionCard).join("")}
-    <p style="color:#8a6d3b;font-size:12px;background:#fff3cd;border-radius:6px;padding:8px 10px;margin-top:8px">손익·거리 수치는 서버가 계산한 값이며, 서술은 AI 영향도 판정입니다. 매매 권유가 아닙니다.</p>`;
+  return (
+    sectionHeader({ title: "내 포지션 점검", accent: TAB_COLOR.holdings, count: positions.length, first: true }) +
+    notice("손익·거리 수치는 서버가 계산한 값이며, 서술은 AI 영향도 판정입니다. 매매 권유가 아닙니다.", "muted") +
+    positions.map(positionRow).join("")
+  );
 }
 
-/** 종목 1건의 20거래일 종가 차트 PNG. 실패는 호출부가 잡는다(그 종목만 차트 없이 렌더). */
+/**
+ * 종목 1건의 20거래일 종가 차트 PNG. 실패는 호출부가 잡는다(그 종목만 차트 없이 렌더).
+ * 선은 잉크 한 가지, 마지막 점 하나만 오늘 등락의 상승·하락 색(화면 StockChart 와 같은 인상).
+ */
 function renderStockChart(a: StockAnalysis): Buffer {
   return renderLineChartPng({
-    labels: a.history.map((p) => p.date),
+    // 축 눈금은 화면처럼 MM-DD.
+    labels: a.history.map((p) => p.date.slice(5)),
     series: [
       {
         label: "종가",
-        color: a.changePct != null && a.changePct >= 0 ? UP : DOWN,
+        endColor: marketColor(changeTone(a.changePct)),
         values: a.history.map((p) => p.close),
       },
     ],
     title: `${a.name} 최근 20거래일`,
     // 눈금값은 min~max 보간이라 정수가 아니다. 반올림하지 않으면 "1,437,333.333" 같은 라벨이 찍힌다.
-    formatY: (v) => (a.currency === "USD" ? `$${v.toFixed(0)}` : Math.round(v).toLocaleString("ko-KR")),
+    // USD 는 화면 눈금처럼 소수 2자리 — 저가주는 정수로 자르면 눈금이 같은 값으로 뭉갠다.
+    formatY: (v) =>
+      a.currency === "USD"
+        ? `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : Math.round(v).toLocaleString("ko-KR"),
   });
 }
 
@@ -514,37 +601,20 @@ export async function sendStockEmail(s: StockSnapshot): Promise<boolean> {
   }
 
   try {
-    // 차트를 먼저 만들고 성공한 종목만 HTML 에 img 를 박는다(깨진 CID 방지).
-    // pinned 는 스냅샷이 아니라 원장에만 있어 여기서 조회한다 → 순수 함수는 이 조회를 타지 않는다.
-    const attachments: MailAttachment[] = [];
-    const chartSymbols = new Set<string>();
-    if (!s.closed) {
-      const pinned = new Set(
-        listStocks(s.market)
-          .filter((t) => t.pinned)
-          .map((t) => t.symbol)
-      );
-      for (const a of s.analyses) {
-        // 메일 크기·생성 시간 때문에 차트는 pinned 만. 시계열이 비면 빈 차트라 의미가 없다.
-        if (!pinned.has(a.symbol) || !a.history.length) continue;
-        try {
-          attachments.push({
-            filename: `chart_${s.market}_${a.symbol}.png`,
-            content: renderStockChart(a),
-            // 본문의 <img src="cid:..."> 와 짝을 이룬다 — 이 값이 어긋나면 차트가 깨진다.
-            cid: chartCid(s.market, a.symbol),
-            contentType: "image/png",
-          });
-          chartSymbols.add(a.symbol);
-        } catch (e) {
-          log.warn(`증시 차트 생성 실패 [${a.name}]: ${(e as Error).message}`);
-        }
-      }
-    }
+    // pinned 는 스냅샷이 아니라 원장에만 있어 여기서 조회한다 → 순수 빌더(buildStockEmailParts)는 이 조회를 타지 않는다.
+    // 휴장이면 차트를 붙이지 않으므로 원장도 읽지 않는다.
+    const pinned = s.closed
+      ? new Set<string>()
+      : new Set(
+          listStocks(s.market)
+            .filter((t) => t.pinned)
+            .map((t) => t.symbol)
+        );
+    const { html, attachments } = buildStockEmailParts(s, pinned);
 
     return await sendMail({
       subject: subjectOf(s),
-      html: buildStockEmailHtml(s, chartSymbols),
+      html,
       attachments,
     });
   } catch (e) {

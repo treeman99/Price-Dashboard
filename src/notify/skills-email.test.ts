@@ -65,7 +65,8 @@ test("증가 라벨은 window.days 를 그대로 인용한다 — 7 을 가정�
   assert.equal(windowLabel(14), "최근 14일간");
 
   const html = buildSkillsEmailHtml(snapshot({ window: { fromDate: "2026-08-31", toDate: "2026-09-14", days: 14 } }));
-  assert.match(html, /최근 14일간 \+1,204/);
+  assert.match(html, /최근 14일간 증가/);
+  assert.match(html, />\+1,204</);
   assert.doesNotMatch(html, /최근 7일간/, "실제 구간이 14일인데 7일이라고 적으면 안 된다");
   assert.match(html, /2026-08-31 → 2026-09-14 \(14일\)/, "비교 구간을 그대로 밝힌다");
 });
@@ -74,7 +75,7 @@ test("첫 회차(window=null)에는 증가 섹션 대신 이유를 적는다", (
   const html = buildSkillsEmailHtml(snapshot({ byGrowth: [], window: null }));
   assert.doesNotMatch(html, /최근 \d+일간/, "구간이 없으면 구간 라벨도 없다");
   assert.match(html, /비교할 지난 스냅샷이 없어/, "설명 없이 섹션만 사라지면 고장으로 오해한다");
-  assert.match(html, /star 총합 TOP 1/, "총합 랭킹은 첫 회차에도 나온다");
+  assert.match(html, /star 총합 순위/, "총합 랭킹은 첫 회차에도 나온다");
 });
 
 test("증가분은 부호와 천단위 구분을 붙여 표기한다", () => {
@@ -83,7 +84,8 @@ test("증가분은 부호와 천단위 구분을 붙여 표기한다", () => {
       byGrowth: [entry({ rank: 1, repo: repo({ id: 2 }), starsGained: -30 })],
     })
   );
-  assert.match(html, /최근 7일간 -30/);
+  assert.match(html, /최근 7일간 증가/);
+  assert.match(html, />-30</);
 });
 
 test("요약이 없으면 원문 description 으로 폴백한다 — 목록이 비면 안 된다", () => {
@@ -135,6 +137,13 @@ test("순위 변동 배지: 직전 순위가 없으면 NEW", () => {
   assert.equal(rankDeltaLabel(1, 3), "▲2");
   assert.equal(rankDeltaLabel(5, 2), "▼3");
   assert.equal(rankDeltaLabel(4, 4), "―");
+});
+
+test("buildSkillsEmailHtml: 옛 카드 모양(상자·굵은 왼쪽 테두리·하드코딩 링크색·flex)을 쓰지 않는다", () => {
+  const html = buildSkillsEmailHtml(snapshot());
+  for (const old of ["border-left:4px", "border-radius:8px", "#4361ee", "#f8f9fa", "#fff3cd", "display:flex"]) {
+    assert.ok(!html.includes(old), old);
+  }
 });
 
 test("iMessage 본문은 총합·증가 각 5건이고 첫 회차에는 증가 블록이 없다", () => {

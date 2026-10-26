@@ -30,12 +30,12 @@ const SNAP = {
 
 test("기본 스케줄이면 예전 문구와 같다(매주 월요일 09:00 갱신)", () => {
   assert.equal(skillsCycleLabel(), "매주 월요일 09:00 갱신");
-  assert.match(buildSkillsEmailHtml(SNAP), /2026-10-26 \| 매주 월요일 09:00 갱신 \|/);
+  assert.match(buildSkillsEmailHtml(SNAP), />매주 월요일 09:00 갱신</);
 });
 
 test("대시보드에서 바꾼 회차(매월·격주·꺼짐)를 저장 즉시 그대로 적는다", () => {
   saveSchedule({ skills: { enabled: true, repeat: { kind: "monthly", dates: [1] }, times: ["09:30"] } });
-  assert.match(buildSkillsEmailHtml(SNAP), /\| 매월 1일 09:30 갱신 \|/);
+  assert.match(buildSkillsEmailHtml(SNAP), />매월 1일 09:30 갱신</);
 
   saveSchedule({
     skills: { enabled: true, repeat: { kind: "weekly", days: [3], intervalWeeks: 2, anchorDate: "2026-10-26" }, times: ["10:00"] },
@@ -43,6 +43,6 @@ test("대시보드에서 바꾼 회차(매월·격주·꺼짐)를 저장 즉시 
   assert.equal(skillsCycleLabel(), "격주 수요일 10:00 갱신");
 
   saveSchedule({ skills: { ...getSchedule().skills, enabled: false } });
-  assert.match(buildSkillsEmailHtml(SNAP), /\| 자동 갱신 꺼짐 \|/);
+  assert.match(buildSkillsEmailHtml(SNAP), />자동 갱신 꺼짐</);
   assert.doesNotMatch(buildSkillsEmailHtml(SNAP), /매주 월요일/);
 });

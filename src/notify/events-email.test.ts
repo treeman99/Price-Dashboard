@@ -63,8 +63,8 @@ function snapshot(over: Partial<EventsSnapshot> = {}): EventsSnapshot {
 
 test("buildEventsEmailHtml: 3개 섹션과 항목이 렌더된다", () => {
   const html = buildEventsEmailHtml(snapshot());
-  assert.ok(html.includes("🛍 팝업스토어"));
-  assert.ok(html.includes("🎉 대한민국 축제"));
+  assert.ok(html.includes("팝업스토어"));
+  assert.ok(html.includes("대한민국 축제"));
   assert.ok(html.includes("성수 팝업"));
   assert.ok(html.includes("코엑스 전시"));
   assert.ok(html.includes("함평 나비축제"));
@@ -94,7 +94,7 @@ test("buildEventsEmailHtml: 한쪽 지역이 비면 그룹 머리말 + 없음 �
     popups: [popup({ region: "서울 성수" })],
   });
   assert.ok(html.includes("수원 · 화성 등"));
-  assert.ok(html.includes("해당 지역의 팝업 없음"));
+  assert.ok(html.includes("확인된 팝업이 없습니다"));
 });
 
 test("buildEventsEmailHtml: 전부 비어도 throw 없이 안내 문구", () => {
@@ -102,15 +102,15 @@ test("buildEventsEmailHtml: 전부 비어도 throw 없이 안내 문구", () => 
     snapshot({ popups: [], exhibitions: { venues: [] }, festivals: [] })
   );
   assert.equal(typeof html, "string");
-  assert.ok(html.includes("확인된 팝업이 없습니다."));
+  assert.ok(html.includes("확인된 팝업이 없습니다"));
   assert.ok(html.includes("확인된 축제가 없습니다."));
 });
 
 test("buildEventsEmailHtml: 정상 링크는 '보기' 앵커 + 캘린더 앵커", () => {
   const html = buildEventsEmailHtml(snapshot());
   assert.ok(html.includes(`<a href="https://example.com/popup"`));
-  assert.ok(html.includes("🔗 보기"));
-  assert.ok(html.includes("📅 캘린더 추가"));
+  assert.ok(html.includes(">보기</a>"));
+  assert.ok(html.includes(">캘린더 추가</a>"));
 });
 
 test("buildEventsEmailHtml: link 가 null 인 항목은 화면과 같이 아예 빠진다", () => {
@@ -121,16 +121,16 @@ test("buildEventsEmailHtml: link 가 null 인 항목은 화면과 같이 아예 
       festivals: [festival({ link: null })],
     })
   );
-  assert.ok(!html.includes("🔗 보기"));
+  assert.ok(!html.includes(">보기</a>"));
   assert.ok(!html.includes("성수 팝업"));
   assert.ok(!html.includes("코엑스 전시"));
   assert.ok(!html.includes("함평 나비축제"));
   // 링크 없는 항목만 있으면 각 섹션은 '없음' 상태가 된다.
-  assert.ok(html.includes("확인된 팝업이 없습니다."));
+  assert.ok(html.includes("확인된 팝업이 없습니다"));
   assert.ok(html.includes("확인된 축제가 없습니다."));
   // 전시장 그룹 자체는 남고 화면과 같은 문구를 쓴다.
   assert.ok(html.includes("코엑스"));
-  assert.ok(html.includes("이번 주 확인된 행사 없음"));
+  assert.ok(html.includes("이번 주 확인된 행사가 없습니다"));
 });
 
 test("buildEventsEmailHtml: 링크가 있으면 스킴이 불안전해도 카드는 남는다(화면과 동일)", () => {
@@ -163,7 +163,7 @@ test("buildEventsEmailHtml: 시작일이 없으면 캘린더 앵커가 없다", 
       festivals: [],
     })
   );
-  assert.ok(!html.includes("📅 캘린더 추가"));
+  assert.ok(!html.includes("캘린더 추가"));
 });
 
 test("buildEventsEmailHtml: XSS — 이름·요약의 <script> 가 이스케이프된다", () => {
@@ -191,7 +191,7 @@ test("buildEventsEmailHtml: XSS — 팝업의 javascript: 링크는 앵커로 �
     })
   );
   assert.ok(!html.includes("javascript:"));
-  assert.ok(!html.includes("🔗 보기"));
+  assert.ok(!html.includes(">보기</a>"));
   assert.ok(html.includes("성수 팝업"));
 });
 
@@ -206,7 +206,7 @@ test("buildEventsEmailHtml: XSS — 전시의 data: 링크는 앵커로 렌더�
     })
   );
   assert.ok(!html.includes("data:text/html"));
-  assert.ok(!html.includes("🔗 보기"));
+  assert.ok(!html.includes(">보기</a>"));
   assert.ok(html.includes("코엑스 전시"));
 });
 
@@ -220,7 +220,7 @@ test("buildEventsEmailHtml: XSS — 축제의 javascript: 링크는 앵커로 �
     })
   );
   assert.ok(!html.includes("javascript:"));
-  assert.ok(!html.includes("🔗 보기"));
+  assert.ok(!html.includes(">보기</a>"));
   assert.ok(html.includes("함평 나비축제"));
 });
 
@@ -233,9 +233,51 @@ test("buildEventsEmailHtml: 불안전한 링크라도 캘린더 앵커(구글 UR
       festivals: [],
     })
   );
-  assert.ok(html.includes("📅 캘린더 추가"));
+  assert.ok(html.includes(">캘린더 추가</a>"));
   assert.ok(html.includes("https://calendar.google.com"));
   assert.ok(!html.includes("javascript:")); // details 로도 새어나가지 않는다
+});
+
+// ── 조간 브리핑 지면(DESIGN.md) ─────────────────────────────────
+
+test("buildEventsEmailHtml: 옛 카드 모양(상자·굵은 왼쪽 테두리·하드코딩 링크색·flex)을 쓰지 않는다", () => {
+  const html = buildEventsEmailHtml(snapshot());
+  for (const old of ["border-left:4px", "border-radius:8px", "#4361ee", "#f8f9fa", "#fff3cd", "display:flex"]) {
+    assert.ok(!html.includes(old), old);
+  }
+});
+
+/** 로컬 오늘 YYYY-MM-DD(+days). 화면 TagBadge 와 같이 '오늘 종료'는 실제 오늘 날짜로 가른다. */
+function localDay(days = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+test("buildEventsEmailHtml: 상태 태그는 화면과 같은 규칙 — 오늘 종료·종료임박·오픈예정·신규(isNew 와 합침)", () => {
+  const html = buildEventsEmailHtml(
+    snapshot({
+      popups: [
+        popup({ name: "오늘끝 팝업", tag: "종료임박", endDate: localDay() }),
+        popup({ name: "곧끝 팝업", tag: "종료임박", endDate: localDay(3) }),
+        popup({ name: "예정 팝업", tag: "예정" }),
+        popup({ name: "재등장 팝업", tag: null, isNew: true }),
+        popup({ name: "겹침 팝업", tag: "신규", isNew: true }),
+      ],
+      exhibitions: { venues: [] },
+      festivals: [],
+    })
+  );
+  const row = (name: string) => html.slice(html.lastIndexOf("<tr>", html.indexOf(name)), html.indexOf("</tr>", html.indexOf(name)));
+  assert.ok(row("오늘끝 팝업").includes(">오늘 종료</span>"));
+  assert.ok(!row("오늘끝 팝업").includes(">종료임박</span>"));
+  assert.ok(row("곧끝 팝업").includes(">종료임박</span>"));
+  assert.ok(!row("곧끝 팝업").includes(">오늘 종료</span>"));
+  assert.ok(row("예정 팝업").includes(">오픈예정</span>"));
+  assert.ok(row("재등장 팝업").includes(">신규</span>"));
+  // 태그 '신규' + isNew 여도 배지는 하나다.
+  assert.equal(row("겹침 팝업").split(">신규</span>").length - 1, 1);
 });
 
 // ── eventsIMessageText ─────────────────────────────────────────

@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/notify/email-kit.ts"
+        ],
+        "createdAt": "2026-10-26T13:24:38.582Z",
+        "reason": "DESIGN.md Notice(안내 띠) 규격: 왼쪽 3px 신호색 선 + 옅은 바탕 — 화면 web/src/components/ui/page.tsx Notice 와 같은 시스템 부품(메일판)"
+      }
+    ]
+  }
+}

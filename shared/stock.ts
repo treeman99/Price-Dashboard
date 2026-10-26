@@ -212,7 +212,7 @@ export function partitionWatchlist(s: StockSnapshot): {
  * 한국 사용자에게 그걸 '해외'라 부르면 틀린 말이다. 그래서 브리핑 시장 기준으로 뒤집는다.
  */
 export function foreignSectionTitle(m: StockMarket): string {
-  return m === "kr" ? "🌐 해외 참고" : "🌐 국내(한국) 참고";
+  return m === "kr" ? "해외 참고" : "국내(한국) 참고";
 }
 
 /** 등락 방향. 0 과 null 은 모두 flat — 색을 입히지 않는다는 뜻이라 같게 취급해도 안전하다. */
