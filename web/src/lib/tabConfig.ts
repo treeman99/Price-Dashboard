@@ -290,7 +290,7 @@ export function weekDays(now: Date, weekOffset = 0): Date[] {
 const WEEKDAY_SHORT = ["일", "월", "화", "수", "목", "금", "토"];
 
 /**
- * 다음 실행 시각 표기. 오늘·내일은 말로, 그 밖은 "10/28(화) 08:00".
+ * 시각 표기(다음 실행·최종 갱신 공용). 어제·오늘·내일은 말로, 그 밖은 "10/28(화) 08:00".
  * 해가 바뀌는 날짜면(연말의 격주·매월) 연도를 붙인다.
  */
 export function formatWhen(at: Date, now: Date): string {
@@ -302,6 +302,7 @@ export function formatWhen(at: Date, now: Date): string {
   );
   if (dayDiff === 0) return `오늘 ${hm}`;
   if (dayDiff === 1) return `내일 ${hm}`;
+  if (dayDiff === -1) return `어제 ${hm}`;
   const md = `${at.getMonth() + 1}/${at.getDate()}(${WEEKDAY_SHORT[at.getDay()]})`;
   return at.getFullYear() === now.getFullYear() ? `${md} ${hm}` : `${at.getFullYear()}. ${md} ${hm}`;
 }

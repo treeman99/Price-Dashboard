@@ -157,10 +157,12 @@ test("mondayOf / weekDays: 주는 월요일에 시작한다(일요일은 그 주
   assert.equal(ymd(mondayOf(new Date(2026, 10, 1), 0)), "2026-10-26");
 });
 
-test("formatWhen: 오늘·내일은 말로, 그 밖은 날짜(요일), 해가 바뀌면 연도", () => {
+test("formatWhen: 어제·오늘·내일은 말로, 그 밖은 날짜(요일), 해가 바뀌면 연도", () => {
   const now = new Date(2026, 9, 25, 18, 30);
   assert.equal(formatWhen(new Date(2026, 9, 25, 21, 0), now), "오늘 21:00");
   assert.equal(formatWhen(new Date(2026, 9, 26, 8, 0), now), "내일 08:00");
+  assert.equal(formatWhen(new Date(2026, 9, 24, 21, 26), now), "어제 21:26");
+  assert.equal(formatWhen(new Date(2026, 9, 23, 9, 0), now), "10/23(금) 09:00");
   assert.equal(formatWhen(new Date(2026, 9, 28, 9, 5), now), "10/28(수) 09:05");
   assert.equal(formatWhen(new Date(2027, 0, 1, 9, 0), now), "2027. 1/1(금) 09:00");
 });

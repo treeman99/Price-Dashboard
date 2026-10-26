@@ -13,6 +13,7 @@ import { describeSchedule } from "@shared/schedule";
 import { safeHref } from "@shared/url";
 import { api, type CollectAttempt } from "@/lib/api";
 import { useTabConfig } from "@/lib/tabConfigStore";
+import { formatWhen } from "@/lib/tabConfig";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
@@ -56,16 +57,10 @@ const num = (n: number) => n.toLocaleString("ko-KR");
  */
 const signed = (n: number) => `${n >= 0 ? "+" : "-"}${num(Math.abs(n))}`;
 
-/** ISO → "9월 1일 09:00". 연도는 뺀다(주간 갱신이라 같은 해가 아닐 일이 거의 없다). */
+/** ISO → "어제 21:26"·"10/19(월) 09:00" — 다른 탭 툴바와 같은 표기(formatWhen). 읽을 수 없으면 null. */
 function fmtWhen(iso: string): string | null {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleString("ko-KR", {
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return Number.isNaN(d.getTime()) ? null : formatWhen(d, new Date());
 }
 
 /**
@@ -357,7 +352,7 @@ function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }
                 </span>
               ))}
               {extraTopics > 0 && (
-                <span className="text-[11px] text-muted-foreground/70">+{extraTopics}</span>
+                <span className="text-[11px] text-muted-foreground">+{extraTopics}</span>
               )}
             </div>
           )}
@@ -566,13 +561,17 @@ export function SkillsBoard() {
       >
         <ScheduleControl tab="skills" label="자동 갱신" />
         <MetaDot />
-        <Meta>GitHub 스킬 저장소 star 를 주간 스냅샷으로 쌓아 직접 차분합니다</Meta>
+        <Meta>
+          <span title="GitHub 스킬 저장소 star 를 주간 스냅샷으로 쌓아 직접 차분합니다">GitHub star 주간 차분</span>
+        </Meta>
         {updated && (
           <>
             <MetaDot />
             <Meta>
               최종 갱신 <strong>{updated}</strong>
-              {snap.interim && " (중간 점검 — 다음 회차 비교 기준에는 남지 않음)"}
+              {snap.interim && (
+                <span title="지금 star 로 다시 매긴 결과입니다. 다음 회차의 비교 기준에는 남지 않습니다"> (중간 점검)</span>
+              )}
             </Meta>
           </>
         )}

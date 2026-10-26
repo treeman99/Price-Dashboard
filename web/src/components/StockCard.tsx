@@ -52,6 +52,18 @@ export function ChangeMark({ pct, size = "md" }: { pct: number | null; size?: "s
   );
 }
 
+/**
+ * 브리핑의 전망(verdict)·주목 강도(attention)는 서버 계약상 이모지 값이다(src/stock/curate.ts VERDICTS·ATTENTIONS,
+ * 메일은 그대로 쓴다). 화면은 이모지를 아이콘 대신 쓰지 않고 글씨 태그로 바꿔 단다. 모르는 값은 그대로 둔다.
+ */
+const VERDICT_LABEL: Record<string, string> = { "📈": "상승 전망", "📉": "하락 전망", "➡️": "보합 전망" };
+
+/** "🔥강" → "주목 강". 한글 등급이 없으면 받은 값 그대로. */
+function attentionLabel(attention: string): string {
+  const level = attention.replace(/[^가-힣]/g, "");
+  return level ? `주목 ${level}` : attention;
+}
+
 /** 왼쪽 열 아래의 작은 키-값 한 칸(5일 등락·5일선·20일선). */
 function Stat({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
@@ -214,12 +226,14 @@ export function StockCard({
           <div className="min-w-0">
             <h3 className="flex items-center gap-1.5 text-base font-semibold leading-snug">
               <span className="min-w-0 break-words">{analysis.name}</span>
-              {analysis.verdict && <span className="shrink-0">{analysis.verdict}</span>}
+              {analysis.verdict && (
+                <StatusTag className="font-sans">{VERDICT_LABEL[analysis.verdict] ?? analysis.verdict}</StatusTag>
+              )}
             </h3>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 font-mono text-[12px] text-muted-foreground">
               <span>{analysis.symbol}</span>
               {ticker?.exchange && <span>· {ticker.exchange}</span>}
-              {watch && <StatusTag className="font-sans">{watch.attention}</StatusTag>}
+              {watch && <StatusTag className="font-sans">{attentionLabel(watch.attention)}</StatusTag>}
               {/* 해외 참고 항목의 실제 시장. "attention" in analysis 만으로는 관심/해외참고를
                   구별할 수 없어(둘 다 StockWatchItem) 섹션이 명시적으로 내려준다. */}
               {marketNote && <StatusTag className="font-sans">{marketNote}</StatusTag>}

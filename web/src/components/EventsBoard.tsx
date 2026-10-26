@@ -424,11 +424,11 @@ export function EventsBoard() {
           <SectionHeader title="팝업스토어" count={popups.length} accent={ACCENT.popup} />
           {popups.length ? (
             <EventTable placeLabel="지역">
-              <GroupRows {...POPUP_GROUPS.seoul} rows={seoulPopups.map(popupRow)} empty="확인된 팝업이 없습니다." first />
-              <GroupRows {...POPUP_GROUPS.outer} rows={outerPopups.map(popupRow)} empty="확인된 팝업이 없습니다." />
+              <GroupRows {...POPUP_GROUPS.seoul} rows={seoulPopups.map(popupRow)} empty="확인된 팝업이 없습니다" first />
+              <GroupRows {...POPUP_GROUPS.outer} rows={outerPopups.map(popupRow)} empty="확인된 팝업이 없습니다" />
             </EventTable>
           ) : (
-            <EmptyLine>확인된 팝업이 없습니다.</EmptyLine>
+            <EmptyLine>확인된 팝업이 없습니다</EmptyLine>
           )}
 
           <SectionHeader
@@ -444,7 +444,7 @@ export function EventsBoard() {
                   key={v.name}
                   label={v.name}
                   rows={v.items.map((e) => exhRow(e, v.name))}
-                  empty="이번 주 확인된 행사 없음"
+                  empty="이번 주 확인된 행사가 없습니다"
                   first={i === 0}
                 />
               ))}

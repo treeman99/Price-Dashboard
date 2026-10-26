@@ -32,7 +32,7 @@ export function splitPopupsByRegion<T extends Pick<PopupItem, "region">>(
 /**
  * 출처(보기) 링크가 없는 항목을 걷어낸 스냅샷. 확인할 수 없는 항목은 보여주지 않는다.
  * 링크 '존재' 여부만 본다 — 스킴 안전성은 렌더 단계(safeHref)가 따로 거른다.
- * 전시장 그룹은 항목이 0건이 되어도 남긴다(화면이 '이번 주 확인된 행사 없음'을 표시).
+ * 전시장 그룹은 항목이 0건이 되어도 남긴다(화면이 '이번 주 확인된 행사가 없습니다'를 표시).
  */
 export function withLinkedItemsOnly(s: EventsSnapshot): EventsSnapshot {
   return {

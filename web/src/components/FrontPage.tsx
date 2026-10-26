@@ -247,7 +247,8 @@ export function FrontPage({
         <section>
           <SectionHeader
             title={busy.length ? "그 밖의 지면" : "새 소식 없음"}
-            note={busy.length ? "새 소식 없음" : "지난번 본 뒤 새로 들어온 항목이 없습니다"}
+            // 전부 조용한 날은 제목과 툴바(0건)가 이미 같은 말을 한다 — 메모를 겹쳐 달지 않는다.
+            note={busy.length ? "새 소식 없음" : undefined}
           />
           <ul className="divide-y">
             {quiet.map((d) => (

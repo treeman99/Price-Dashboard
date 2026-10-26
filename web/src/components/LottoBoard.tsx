@@ -5,6 +5,7 @@ import { upcomingToText, winningNumbers } from "@shared/lotto";
 import { api } from "@/lib/api";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { useTabConfig } from "@/lib/tabConfigStore";
+import { formatWhen } from "@/lib/tabConfig";
 import { Button } from "@/components/ui/button";
 import {
   PageToolbar,
@@ -33,16 +34,10 @@ import { cn } from "@/lib/utils";
  * 강조색은 탭 고유색(--tab, 로또는 #7c3aed)을 `text-tab`/`bg-tab` 으로 쓴다.
  */
 
-/** ISO → "7월 30일 10:00". 연도는 뺀다(주간 갱신이라 같은 해가 아닐 일이 거의 없다). */
+/** ISO → "어제 10:04"·"11/1(일) 10:00" — 다른 탭 툴바와 같은 표기(formatWhen). */
 function fmtWhen(iso: string): string {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleString("ko-KR", {
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return Number.isNaN(d.getTime()) ? "-" : formatWhen(d, new Date());
 }
 
 /**
@@ -390,7 +385,7 @@ export function LottoBoard() {
                 {feedback.kind === "updated" ? "새 내용으로 갱신됨" : "이미 최신입니다 (주 1회 갱신)"}
               </span>
             )}
-            <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading}>
+            <Button variant="outline" onClick={() => void load(true)} disabled={loading}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               새로고침
             </Button>
@@ -404,10 +399,10 @@ export function LottoBoard() {
         {/* 다음 실행은 바로 뒤 '다음'(nextCycle — 스케줄 next.lotto 우선)이 이미 보여 주므로 버튼에서는 뺀다. */}
         <ScheduleControl tab="lotto" label="자동 갱신" showNext={false} />
         <MetaDot />
-        <Meta>새 추첨 결과로 지난 회차를 채점하고 다음 회차 번호를 뽑습니다.</Meta>
-        <MetaDot />
         <Meta>
-          다음 <strong>{nextCycle ? fmtWhen(nextCycle) : "자동 실행 꺼짐"}</strong>
+          <span title="새 추첨 결과로 지난 회차를 채점하고 다음 회차 번호를 뽑습니다">
+            다음 <strong>{nextCycle ? fmtWhen(nextCycle) : "자동 실행 꺼짐"}</strong>
+          </span>
         </Meta>
         {snap.state.lastCycleAt && (
           <>
