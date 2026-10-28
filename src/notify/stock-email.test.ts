@@ -618,4 +618,6 @@ test("buildStockEmailParts: 차트 이미지는 테두리·둥근 모서리 없�
   assert.ok(img.includes("height:auto"));
   assert.ok(img.includes("max-width:540px"));
   assert.ok(!img.includes("border-radius"));
+  // 깨짐 상태(540×540 상자)까지 200px 에 가두는 고정 높이 래퍼가 img 바로 바깥에 있어야 한다.
+  assert.match(html, /<div style="height:200px;overflow:hidden;[^"]*"><img src="cid:chart_kr_005930@dailystock"/);
 });

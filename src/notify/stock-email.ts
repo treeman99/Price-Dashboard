@@ -241,8 +241,11 @@ function analysisRow(a: StockAnalysis, cid: string | null): string {
   ])}</p>`;
   // 신문지 바탕 PNG 라 테두리 없이 지면에 그대로 얹는다. 폭은 첨부 PNG(540px)에 맞추고, 좁은 화면에선 줄어든다.
   // height 속성은 로드 전 자리 잡기용 — 없으면 차트가 0 → 200px 로 늘며 읽던 글이 밀린다(Gmail iPad 앱 튕김 완화).
+  // ⚠️ 속성만으로는 '깨짐' 상태를 못 막는다: cid 가 풀리기 전 깨진 img 로 그려지면 WebKit 이 속성 비율을 버리고
+  //    폭×폭 정사각형(540×540)을 잡아, 이미지가 뜰 때 장당 −340px 이 된다. 높이 고정 div 가 모든 상태를 200px 에
+  //    가둔다(data/gmail-jump-investigation/round2/report-A-residual.md §4.1). 좁은 화면에선 차트 아래 빈 띠가 남는다.
   const img = cid
-    ? `<img src="cid:${escapeAttr(cid)}" alt="${escapeAttr(a.name)} 최근 20거래일" width="${CHART_W}" height="${CHART_H}" style="display:block;width:100%;max-width:${CHART_W}px;height:auto;margin:12px 0 0;border:0"/>`
+    ? `<div style="height:${CHART_H}px;overflow:hidden;margin:12px 0 0"><img src="cid:${escapeAttr(cid)}" alt="${escapeAttr(a.name)} 최근 20거래일" width="${CHART_W}" height="${CHART_H}" style="display:block;width:100%;max-width:${CHART_W}px;height:auto;margin:0;border:0"/></div>`
     : "";
 
   return itemRow(
