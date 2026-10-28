@@ -613,6 +613,9 @@ test("buildStockEmailParts: 차트 이미지는 테두리·둥근 모서리 없�
   );
   const img = html.match(/<img [^>]*>/)?.[0] ?? "";
   assert.ok(img.includes('width="540"'));
+  // 로드 전에도 PNG 비율(540:200)만큼 자리를 잡아야 스크롤 중 글이 밀리지 않는다.
+  assert.ok(img.includes('height="200"'));
+  assert.ok(img.includes("height:auto"));
   assert.ok(img.includes("max-width:540px"));
   assert.ok(!img.includes("border-radius"));
 });

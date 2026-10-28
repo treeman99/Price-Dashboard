@@ -11,6 +11,15 @@
         ],
         "createdAt": "2026-10-26T13:24:38.582Z",
         "reason": "DESIGN.md Notice(안내 띠) 규격: 왼쪽 3px 신호색 선 + 옅은 바탕 — 화면 web/src/components/ui/page.tsx Notice 와 같은 시스템 부품(메일판)"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "src/notify/stock-email.test.ts"
+        ],
+        "createdAt": "2026-10-28T03:50:08.257Z",
+        "reason": "Claude 판단: L614 는 정규식 /<img [^>]*>/ 로 생성 HTML 을 검사하는 테스트 코드이지 실제 img 태그가 아님"
       }
     ]
   }

@@ -1,8 +1,9 @@
 import { createCanvas } from "@napi-rs/canvas";
 import { HAIRLINE, INK, MUTED, PAPER } from "./email-kit.ts";
 
-const W = 540;
-const H = 200;
+/** 차트 논리 크기(기본값). 메일 본문 img 의 width·height 속성도 이 값을 쓴다. */
+export const CHART_W = 540;
+export const CHART_H = 200;
 const PAD = { top: 28, right: 14, bottom: 26, left: 56 };
 
 // 메일 지면과 같은 인상(DESIGN.md Stock Chart · web/src/components/StockChart.tsx):
@@ -49,8 +50,8 @@ export function renderLineChartPng(opts: {
     title,
     formatY = manLabel,
     emptyText = "아직 가격 데이터가 없습니다",
-    width = W,
-    height = H,
+    width = CHART_W,
+    height = CHART_H,
     scale = 2,
   } = opts;
 

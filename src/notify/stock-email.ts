@@ -1,6 +1,6 @@
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
-import { renderLineChartPng } from "./chart.ts";
+import { CHART_H, CHART_W, renderLineChartPng } from "./chart.ts";
 import { isMailConfigured, sendMail, type MailAttachment } from "./mailer.ts";
 import { isIMessageConfigured, sendIMessage } from "./imessage.ts";
 import { isTabNotifyEnabled } from "../settings/tab-settings.ts";
@@ -240,8 +240,9 @@ function analysisRow(a: StockAnalysis, cid: string | null): string {
     ...ma,
   ])}</p>`;
   // 신문지 바탕 PNG 라 테두리 없이 지면에 그대로 얹는다. 폭은 첨부 PNG(540px)에 맞추고, 좁은 화면에선 줄어든다.
+  // height 속성은 로드 전 자리 잡기용 — 없으면 차트가 0 → 200px 로 늘며 읽던 글이 밀린다(Gmail iPad 앱 튕김 완화).
   const img = cid
-    ? `<img src="cid:${escapeAttr(cid)}" alt="${escapeAttr(a.name)} 최근 20거래일" width="540" style="display:block;width:100%;max-width:540px;height:auto;margin:12px 0 0;border:0"/>`
+    ? `<img src="cid:${escapeAttr(cid)}" alt="${escapeAttr(a.name)} 최근 20거래일" width="${CHART_W}" height="${CHART_H}" style="display:block;width:100%;max-width:${CHART_W}px;height:auto;margin:12px 0 0;border:0"/>`
     : "";
 
   return itemRow(
