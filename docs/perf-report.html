@@ -1,0 +1,1666 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="price 대시보드 성능 분석 리포트 — 실측 계측치, 12개 개선 항목, 우선순위와 착수 계획">
+  <title>price 대시보드 성능 분석 리포트</title>
+  <style>
+    :root {
+      --bg: #f3f0e8;
+      --surface: #fffdf7;
+      --surface-2: #e9e5da;
+      --surface-3: #242925;
+      --ink: #17201b;
+      --muted: #687168;
+      --faint: #8d958c;
+      --line: #d5d0c4;
+      --line-strong: #9da69d;
+      --accent: #e65326;
+      --accent-soft: #fbe2d7;
+      --signal: #087e6b;
+      --signal-soft: #d6eee7;
+      --warn: #996000;
+      --warn-soft: #f9e9bd;
+      --danger: #a53a32;
+      --danger-soft: #f5dcd8;
+      --code-bg: #17201b;
+      --code-ink: #e7efe8;
+      --shadow: 0 18px 50px rgba(42, 45, 39, .09);
+      --nav-bg: rgba(243, 240, 232, .94);
+      --selection: #ffd0bd;
+      --focus: #0a7565;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101512;
+        --surface: #171d19;
+        --surface-2: #222a24;
+        --surface-3: #dbe5dc;
+        --ink: #e4ebe5;
+        --muted: #a9b3aa;
+        --faint: #7f8a81;
+        --line: #313b33;
+        --line-strong: #657167;
+        --accent: #ff7548;
+        --accent-soft: #48281e;
+        --signal: #55ceb5;
+        --signal-soft: #183b34;
+        --warn: #f0c56e;
+        --warn-soft: #40351e;
+        --danger: #ff9187;
+        --danger-soft: #452724;
+        --code-bg: #090d0b;
+        --code-ink: #dbe6dd;
+        --shadow: 0 24px 70px rgba(0, 0, 0, .28);
+        --nav-bg: rgba(16, 21, 18, .94);
+        --selection: #66331f;
+        --focus: #70e1ca;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      margin: 0;
+      min-width: 280px;
+      overflow-x: hidden;
+      background-color: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.68;
+      text-rendering: optimizeLegibility;
+      word-break: keep-all;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image:
+        linear-gradient(var(--line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 56px 56px;
+      opacity: .16;
+      mask-image: linear-gradient(to bottom, #000, transparent 70%);
+    }
+    ::selection { background: var(--selection); }
+    a { color: inherit; }
+    a:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 4px;
+      border-radius: 4px;
+    }
+    .skip-link {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 100;
+      padding: 10px 14px;
+      color: var(--surface);
+      background: var(--surface-3);
+      transform: translateY(-150%);
+      transition: transform .15s ease;
+    }
+    .skip-link:focus { transform: translateY(0); }
+    .page-shell {
+      width: min(1520px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      gap: clamp(26px, 4vw, 68px);
+      padding: 0 clamp(18px, 3vw, 46px) 72px;
+    }
+    .rail {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      padding: 34px 0 26px;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+    }
+    .rail-mark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 26px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .rail-mark::before {
+      content: "P";
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--accent);
+      border-radius: 50%;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+    .rail-kicker {
+      margin: 0 20px 10px 0;
+      color: var(--faint);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    .toc {
+      overflow-y: auto;
+      padding: 0 20px 24px 0;
+      scrollbar-width: thin;
+    }
+    .toc ol { margin: 0; padding: 0; list-style: none; }
+    .toc a {
+      display: grid;
+      grid-template-columns: 27px minmax(0, 1fr);
+      gap: 8px;
+      padding: 7px 8px;
+      border-left: 2px solid transparent;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 12px;
+      line-height: 1.35;
+      transition: color .15s ease, background .15s ease, border-color .15s ease;
+    }
+    .toc a:hover, .toc a[aria-current="true"] {
+      color: var(--ink);
+      background: var(--surface-2);
+      border-left-color: var(--accent);
+    }
+    .toc-num {
+      color: var(--accent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 800;
+    }
+    .rail-foot {
+      margin-top: auto;
+      padding: 18px 20px 0 0;
+      border-top: 1px solid var(--line);
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .progress {
+      position: fixed;
+      inset: 0 auto auto 0;
+      z-index: 90;
+      width: 100%;
+      height: 3px;
+      background: transparent;
+    }
+    .progress > span {
+      display: block;
+      width: 0;
+      height: 100%;
+      background: var(--accent);
+    }
+    main { min-width: 0; }
+    .hero {
+      min-height: 720px;
+      padding: clamp(54px, 9vw, 112px) 0 60px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border-bottom: 1px solid var(--line-strong);
+    }
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 18px;
+      color: var(--accent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { content: ""; width: 42px; height: 2px; background: currentColor; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 920px;
+      margin-bottom: 28px;
+      font-size: clamp(44px, 7.2vw, 104px);
+      line-height: 1.18;
+      letter-spacing: -.065em;
+      font-weight: 860;
+    }
+    h1 .outline {
+      color: transparent;
+      -webkit-text-stroke: 1.5px var(--ink);
+    }
+    .verdict {
+      max-width: 910px;
+      margin-bottom: 28px;
+      padding-left: 22px;
+      border-left: 4px solid var(--accent);
+      font-size: clamp(19px, 2.3vw, 28px);
+      line-height: 1.48;
+      letter-spacing: -.025em;
+    }
+    .verdict strong { color: var(--accent); }
+    .meta-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 20px;
+      margin-bottom: 40px;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+    .meta-line span { display: inline-flex; align-items: center; gap: 7px; }
+    .meta-line span::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--signal); }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+    }
+    .metric {
+      min-height: 160px;
+      grid-column: span 3;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    .metric:nth-child(2) { transform: translateY(14px); }
+    .metric:nth-child(4) { background: var(--surface-3); color: var(--surface); }
+    .metric-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    .metric:nth-child(4) .metric-label, .metric:nth-child(4) .metric-note { color: var(--faint); }
+    .metric-value {
+      margin: 12px 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: clamp(20px, 1.35vw, 26px);
+      font-weight: 850;
+      letter-spacing: -.06em;
+      white-space: nowrap;
+    }
+    .metric-value .arrow { color: var(--accent); padding: 0 .08em; }
+    .metric-note { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .section {
+      padding: clamp(64px, 8vw, 104px) 0;
+      border-bottom: 1px solid var(--line-strong);
+    }
+    .section-head {
+      display: grid;
+      grid-template-columns: 104px minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+      margin-bottom: 34px;
+    }
+    .section-no {
+      color: var(--accent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+    }
+    .section h2 {
+      margin-bottom: 10px;
+      font-size: clamp(30px, 4.2vw, 54px);
+      line-height: 1.08;
+      letter-spacing: -.045em;
+    }
+    .section-deck { max-width: 780px; margin: 0; color: var(--muted); font-size: 17px; }
+    .measurement-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr);
+      gap: 18px;
+      margin-top: 28px;
+    }
+    .panel {
+      min-width: 0;
+      padding: 22px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+    }
+    .panel.dark { color: var(--code-ink); background: var(--code-bg); border-color: var(--code-bg); }
+    .panel-label, .detail-label {
+      margin-bottom: 13px;
+      color: var(--accent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .panel p:last-child, .detail-block > :last-child { margin-bottom: 0; }
+    .panel ul, .detail-block ul { margin: 0; padding-left: 20px; }
+    .panel li + li, .detail-block li + li { margin-top: 7px; }
+    .measurement-grid table { table-layout: fixed; }
+    .measurement-grid th:first-child { width: 44%; }
+    .measurement-grid td.num {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      overscroll-behavior-inline: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+    table {
+      width: 100%;
+      min-width: 0;
+      border-collapse: collapse;
+      font-size: 13px;
+      line-height: 1.48;
+    }
+    th, td {
+      padding: 14px 15px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      background: var(--surface-2);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: var(--accent-soft); }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    code, pre, .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+    :not(pre) > code {
+      padding: .15em .38em;
+      color: var(--ink);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-size: .88em;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .table-wrap td code {
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .priority-table { min-width: 0; }
+    .priority-table th:first-child, .priority-table td:first-child { width: 48px; text-align: center; }
+    .priority-table td:nth-child(2) { font-weight: 750; }
+    .priority-table td:nth-child(3) { color: var(--muted); }
+    .rank {
+      display: inline-grid;
+      width: 29px;
+      height: 29px;
+      place-items: center;
+      color: #fff;
+      background: var(--ink);
+      border-radius: 50%;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 42px;
+      padding: 3px 8px;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 850;
+      line-height: 1.3;
+      white-space: nowrap;
+    }
+    .badge.low { color: var(--signal); background: var(--signal-soft); }
+    .badge.mid { color: var(--warn); background: var(--warn-soft); }
+    .badge.high { color: var(--danger); background: var(--danger-soft); }
+    .audit-item {
+      scroll-margin-top: 20px;
+      padding: clamp(64px, 8vw, 100px) 0;
+      border-bottom: 1px solid var(--line-strong);
+    }
+    .audit-head {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 36px;
+    }
+    .audit-index {
+      display: grid;
+      width: 62px;
+      height: 62px;
+      place-items: center;
+      color: var(--surface);
+      background: var(--surface-3);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 21px;
+      font-weight: 850;
+      border-radius: 50%;
+    }
+    .audit-head h2 {
+      max-width: 860px;
+      margin: 0;
+      font-size: clamp(27px, 3.5vw, 45px);
+      line-height: 1.14;
+      letter-spacing: -.04em;
+    }
+    .badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding-top: 6px; }
+    .audit-grid {
+      display: grid;
+      grid-template-columns: minmax(220px, .36fr) minmax(0, .64fr);
+      gap: 28px;
+      align-items: start;
+    }
+    .audit-side, .audit-main { min-width: 0; }
+    .audit-side { position: sticky; top: 22px; }
+    .detail-block {
+      min-width: 0;
+      padding: 20px 0;
+      border-top: 1px solid var(--line);
+    }
+    .detail-block:first-child { padding-top: 0; border-top: 0; }
+    .evidence-list { margin: 0; padding: 0; list-style: none; }
+    .evidence-list li {
+      padding: 10px 0;
+      border-bottom: 1px dotted var(--line-strong);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .evidence-list li:last-child { border-bottom: 0; }
+    .evidence-list code { display: inline; }
+    .impact {
+      padding: 18px;
+      background: var(--accent-soft);
+      border-left: 4px solid var(--accent);
+      font-size: 15px;
+    }
+    .impact strong { color: var(--accent); }
+    .caution {
+      padding: 16px 18px;
+      color: var(--warn);
+      background: var(--warn-soft);
+      border: 1px solid currentColor;
+      font-size: 13px;
+    }
+    .codebox {
+      min-width: 0;
+      margin: 12px 0 22px;
+      overflow: hidden;
+      background: var(--code-bg);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .codebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      color: var(--faint);
+      border-bottom: 1px solid rgba(255,255,255,.12);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 10px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .codebar::after { content: "PROPOSAL"; color: var(--accent); }
+    pre {
+      max-width: 100%;
+      margin: 0;
+      padding: 20px;
+      overflow-x: auto;
+      color: var(--code-ink);
+      background: var(--code-bg);
+      font-size: 12px;
+      line-height: 1.62;
+      tab-size: 2;
+      white-space: pre;
+      overscroll-behavior-inline: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+    pre code { color: inherit; background: transparent; border: 0; padding: 0; }
+    .roadmap-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .week {
+      min-height: 280px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--line);
+    }
+    .week:first-child { color: var(--code-ink); background: var(--code-bg); border-color: var(--code-bg); }
+    .week-no { color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; font-weight: 800; }
+    .week h3 { margin: 22px 0 8px; font-size: 24px; line-height: 1.2; letter-spacing: -.03em; }
+    .week p { color: var(--muted); font-size: 13px; }
+    .week:first-child p { color: var(--faint); }
+    .sequence { margin-top: auto; color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 20px; font-weight: 850; }
+    .hold {
+      margin-top: 14px;
+      padding: 22px 24px;
+      display: grid;
+      grid-template-columns: 110px minmax(0, 1fr);
+      gap: 20px;
+      color: var(--danger);
+      background: var(--danger-soft);
+      border: 1px solid currentColor;
+    }
+    .hold strong { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; letter-spacing: .08em; }
+    details {
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+    }
+    summary {
+      padding: 22px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      cursor: pointer;
+      font-size: 17px;
+      font-weight: 800;
+      list-style: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::after {
+      content: "+";
+      width: 32px;
+      height: 32px;
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      color: var(--surface);
+      background: var(--surface-3);
+      border-radius: 50%;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 18px;
+    }
+    details[open] summary::after { content: "−"; }
+    details .table-wrap { border-width: 1px 0 0; }
+    .appendix-table { min-width: 0; }
+    .appendix-table td:first-child { width: 255px; font-weight: 750; }
+    .footer {
+      padding: 32px 0 0;
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      color: var(--faint);
+      font-size: 11px;
+    }
+    .top-link { text-decoration: none; font-weight: 800; }
+
+    @media (max-width: 1100px) {
+      .page-shell { grid-template-columns: 215px minmax(0, 1fr); gap: 30px; }
+      .metric { grid-column: span 6; }
+      .metric:nth-child(2) { transform: none; }
+      .audit-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+      .audit-side { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+      .roadmap-grid { grid-template-columns: 1fr; }
+      .week { min-height: 210px; }
+    }
+    @media (max-width: 760px) {
+      html { scroll-padding-top: 92px; }
+      body { word-break: normal; }
+      .page-shell { display: block; padding: 0 16px 50px; }
+      .rail {
+        position: sticky;
+        top: 0;
+        z-index: 80;
+        width: calc(100% + 32px);
+        height: auto;
+        margin-left: -16px;
+        padding: 10px 16px 9px;
+        display: block;
+        background: var(--nav-bg);
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(12px);
+      }
+      .rail-mark, .rail-kicker, .rail-foot { display: none; }
+      .toc { overflow-x: auto; overflow-y: hidden; padding: 0; scrollbar-width: none; }
+      .toc::-webkit-scrollbar { display: none; }
+      .toc ol { display: flex; width: max-content; gap: 4px; }
+      .toc a { display: block; padding: 8px 11px; border: 0; border-radius: 999px; white-space: nowrap; }
+      .toc a[aria-current="true"] { color: var(--surface); background: var(--surface-3); }
+      .toc-num { margin-right: 5px; }
+      .hero { min-height: auto; padding: 70px 0 58px; }
+      h1 { font-size: clamp(42px, 15vw, 68px); }
+      table { min-width: 760px; }
+      .priority-table { min-width: 980px; }
+      .appendix-table { min-width: 860px; }
+      .verdict { padding-left: 15px; font-size: 18px; }
+      .metric-grid { grid-template-columns: 1fr; }
+      .metric { grid-column: auto; min-height: 145px; }
+      .measurement-grid { grid-template-columns: 1fr; }
+      .section-head { grid-template-columns: 1fr; gap: 8px; }
+      .audit-head { grid-template-columns: 58px minmax(0, 1fr); gap: 12px; }
+      .audit-index { width: 48px; height: 48px; font-size: 16px; }
+      .badges { grid-column: 2; justify-content: flex-start; padding-top: 0; }
+      .audit-side { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .panel { padding: 17px; }
+      pre { padding: 16px; font-size: 11px; }
+      .hold { grid-template-columns: 1fr; gap: 8px; }
+      .footer { flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+    @media print {
+      body::before, .rail, .progress { display: none; }
+      .page-shell { display: block; max-width: none; padding: 0; }
+      .hero { min-height: auto; }
+      .audit-side { position: static; }
+      .codebox, .metric, .panel, .week { break-inside: avoid; box-shadow: none; }
+      details:not([open]) > *:not(summary) { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#report">본문으로 건너뛰기</a>
+  <div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+  <div class="page-shell">
+    <aside class="rail" aria-label="리포트 목차">
+      <div class="rail-mark">price / performance</div>
+      <p class="rail-kicker">Report index</p>
+      <nav class="toc" id="toc">
+        <ol>
+          <li><a href="#overview"><span class="toc-num">00</span><span>총평·계측</span></a></li>
+          <li><a href="#priority"><span class="toc-num">P</span><span>우선순위</span></a></li>
+          <li><a href="#item-1"><span class="toc-num">01</span><span>HTTP 압축</span></a></li>
+          <li><a href="#item-2"><span class="toc-num">02</span><span>번들 분리</span></a></li>
+          <li><a href="#item-3"><span class="toc-num">03</span><span>증시 페이로드</span></a></li>
+          <li><a href="#item-4"><span class="toc-num">04</span><span>보유 시세</span></a></li>
+          <li><a href="#item-5"><span class="toc-num">05</span><span>HTTP N+1</span></a></li>
+          <li><a href="#item-6"><span class="toc-num">06</span><span>유튜브 하베스트</span></a></li>
+          <li><a href="#item-7"><span class="toc-num">07</span><span>날짜 검증</span></a></li>
+          <li><a href="#item-8"><span class="toc-num">08</span><span>이벤트 수집</span></a></li>
+          <li><a href="#item-9"><span class="toc-num">09</span><span>프론트 렌더</span></a></li>
+          <li><a href="#item-10"><span class="toc-num">10</span><span>SQLite WAL</span></a></li>
+          <li><a href="#item-11"><span class="toc-num">11</span><span>인덱스 정리</span></a></li>
+          <li><a href="#item-12"><span class="toc-num">12</span><span>문장 캐시</span></a></li>
+          <li><a href="#roadmap"><span class="toc-num">→</span><span>착수 순서</span></a></li>
+          <li><a href="#appendix"><span class="toc-num">A</span><span>부록</span></a></li>
+        </ol>
+      </nav>
+      <div class="rail-foot">실서버 요청 · 실 DB 조사<br>Vite 재현 빌드 기반<br>2026.08.22</div>
+    </aside>
+
+    <main id="report">
+      <header class="hero" id="overview">
+        <p class="eyebrow">Performance field report · 2026.08.22</p>
+        <h1>price 대시보드<br><span class="outline">성능 분석</span></h1>
+        <p class="verdict">병목은 DB 질의가 아니라 <strong>네트워크로 나가는 바이트 수</strong>와 <strong>수집기의 직렬 대기</strong>입니다. 인덱스와 쿼리 플랜은 실제로 건강합니다.</p>
+        <div class="meta-line" aria-label="분석 환경">
+          <span>Node 26.5.0 / tsx / Express 4</span>
+          <span>node:sqlite / React 18 / Vite 6</span>
+          <span>라이브 서버 pid 3504 · :7777</span>
+          <span>코드 수정 없이 계측</span>
+        </div>
+        <div class="metric-grid" aria-label="핵심 지표">
+          <article class="metric">
+            <span class="metric-label">첫 방문 전송량</span>
+            <div class="metric-value">774 KB<span class="arrow">→</span>219 KB</div>
+            <span class="metric-note">HTTP 압축 적용 시 · −71.7%</span>
+          </article>
+          <article class="metric">
+            <span class="metric-label">GET /api/stock/us</span>
+            <div class="metric-value">102.8 KB<span class="arrow">→</span>25.9 KB</div>
+            <span class="metric-note">gzip 기준 · −74.9%</span>
+          </article>
+          <article class="metric">
+            <span class="metric-label">초기 JavaScript 청크</span>
+            <div class="metric-value">744.5 KB<span class="arrow">→</span>~300 KB</div>
+            <span class="metric-note">차트 지연 로딩 + 청크 분리</span>
+          </article>
+          <article class="metric">
+            <span class="metric-label">SQLite WAL</span>
+            <div class="metric-value">604 frames</div>
+            <span class="metric-note">미체크포인트 커밋 · 본 DB 8일 뒤처짐</span>
+          </article>
+        </div>
+      </header>
+
+      <section class="section" aria-labelledby="measurement-title">
+        <div class="section-head">
+          <span class="section-no">00 / BASELINE</span>
+          <div>
+            <h2 id="measurement-title">측정부터 시작한 결론</h2>
+            <p class="section-deck">실제 요청, 실 DB, 재현 빌드로 비용을 분해했습니다. 따라서 우선순위는 “쿼리 튜닝”이 아니라 “바이트와 대기”에 맞춰져 있습니다.</p>
+          </div>
+        </div>
+        <div class="measurement-grid">
+          <div class="table-wrap">
+            <table aria-label="계측 환경 요약">
+              <thead><tr><th>항목</th><th class="num">실측값</th></tr></thead>
+              <tbody>
+                <tr><td><code>web/dist/assets/index-BkByCRxN.js</code></td><td class="num">744,539 B (gzip 212,573 B)</td></tr>
+                <tr><td><code>web/dist/assets/index-CKtQTb36.css</code></td><td class="num">29,744 B (gzip 6,111 B)</td></tr>
+                <tr><td><code>GET /api/stock/us</code></td><td class="num">102,775 B / 1.7 ms</td></tr>
+                <tr><td><code>GET /api/youtube</code></td><td class="num">22,307 B / 3.0 ms</td></tr>
+                <tr><td><code>data/price.db</code></td><td class="num">4,468,736 B (1,099 페이지 × 4096)</td></tr>
+                <tr><td><code>data/price.db-wal</code></td><td class="num">4,136,512 B · 미체크포인트 604프레임</td></tr>
+                <tr><td>행 수</td><td class="num">stock_points 425 / price_points 191 / lotto_predictions 9,875 / stock_pulse_alerts 77</td></tr>
+                <tr><td>node:sqlite 기본 PRAGMA</td><td class="num"><code>busy_timeout=0</code>, <code>synchronous=2(FULL)</code>, <code>cache_size=-2000</code>, <code>mmap_size=0</code>, <code>wal_autocheckpoint=1000</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <aside class="panel dark">
+            <div class="panel-label">Decision rule</div>
+            <p><strong>1.</strong> 전송 바이트를 먼저 줄입니다.</p>
+            <p><strong>2.</strong> 직렬 네트워크 대기를 병렬 풀로 바꿉니다.</p>
+            <p><strong>3.</strong> SQLite는 속도보다 내구성 문제로 다룹니다.</p>
+            <p><strong>4.</strong> 측정상 미미한 최적화는 뒤로 보냅니다.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section" id="priority" aria-labelledby="priority-title">
+        <div class="section-head">
+          <span class="section-no">P / PRIORITY</span>
+          <div>
+            <h2 id="priority-title">영향 큰 순 우선순위</h2>
+            <p class="section-deck">측정된 효과를 먼저 보고, 구현 난이도와 운영 리스크를 함께 판단합니다. 번호는 실행 우선순위이며 상세 섹션 번호와는 다를 수 있습니다.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="priority-table" aria-label="성능 개선 우선순위 12개">
+            <thead><tr><th>#</th><th>항목</th><th>근거 파일</th><th>측정 효과</th><th>난이도</th><th>리스크</th></tr></thead>
+            <tbody>
+              <tr><td><span class="rank">1</span></td><td>HTTP 압축 도입</td><td><code>src/api/server.ts:13-38</code> (압축 미들웨어 없음)</td><td>첫 로딩 774 KB → 219 KB (−71.7%)<br><code>/api/stock/us</code> 102.8 KB → 25.9 KB (−74.9%)</td><td><span class="badge low">하</span></td><td><span class="badge low">하</span></td></tr>
+              <tr><td><span class="rank">2</span></td><td>recharts 지연 로딩 + 청크 분리</td><td><code>web/vite.config.ts:27-30</code>, <code>App.tsx:6-11,39-47</code>, <code>StockChart.tsx:1-9</code></td><td>초기 청크 744.5 KB → ~300 KB<br>charts 청크 실측 323.5 KB = 43.5%</td><td><span class="badge mid">중</span></td><td><span class="badge mid">중</span></td></tr>
+              <tr><td><span class="rank">3</span></td><td><code>/api/stock/:market</code> 페이로드 축소</td><td><code>routes.ts:1221-1236</code>, <code>StockBoard.tsx:346,349</code></td><td>102.8 KB → ~9 KB (−91%)<br><code>variants.both</code> 8.5 KB는 UI가 안 읽음</td><td><span class="badge mid">중</span></td><td><span class="badge mid">중</span></td></tr>
+              <tr><td><span class="rank">4</span></td><td>보유 종목 시세 병렬화 + 캐시</td><td><code>holdings.ts:140-164</code>, <code>quote.ts:132-151,231-252</code>, <code>routes.ts:1067</code></td><td>종목당 직렬(최악 20초) → 동시 3 + TTL 캐시로 2회차 0회</td><td><span class="badge low">하</span></td><td><span class="badge mid">중</span></td></tr>
+              <tr><td><span class="rank">5</span></td><td>유튜브 채널 캐시 메모리화 + 카테고리 병렬</td><td><code>channels.ts:118-137,177-191,212-222</code>, <code>curate.ts:549-562</code></td><td>84 KB 파싱 100회 → 1회<br>중복 채널 조회 제거 + lost update 결함 동시 해소</td><td><span class="badge mid">중</span></td><td><span class="badge mid">중</span></td></tr>
+              <tr><td><span class="rank">6</span></td><td>탭 언마운트 방지 + 카드 memo</td><td><code>App.tsx:287</code>, <code>YoutubeBoard.tsx:218,439-454,857</code></td><td>탭 재방문 요청 0회, 리렌더 31장 → 1장</td><td><span class="badge mid">중</span></td><td><span class="badge mid">중</span></td></tr>
+              <tr><td><span class="rank">7</span></td><td>StockCard 이력 벌크 조회</td><td><code>StockCard.tsx:80-94</code>, <code>StockBoard.tsx:546-557</code></td><td>증시 탭 요청 <code>3+N</code> → <code>3</code> (N=4~5)</td><td><span class="badge low">하</span></td><td><span class="badge low">하</span></td></tr>
+              <tr><td><span class="rank">8</span></td><td><code>events/gather.ts</code> 직렬 → 동시 3</td><td><code>gather.ts:39-46,54-86</code></td><td>원본 수집 ~8초 → ~2~3초 (sleep 3초 제거 포함)</td><td><span class="badge low">하</span></td><td><span class="badge mid">중</span></td></tr>
+              <tr><td><span class="rank">9</span></td><td>SQLite PRAGMA + 주기 체크포인트</td><td><code>db/index.ts:17-18</code>, WAL 헤더 실측(604프레임/ckptSeq 4)</td><td><strong>성능 아님 — 내구성.</strong> 본 DB 8일 뒤처짐 해소, WAL 4.1 MB 회수, <code>SQLITE_BUSY</code> 제거</td><td><span class="badge low">하</span></td><td><span class="badge low">하</span></td></tr>
+              <tr><td><span class="rank">10</span></td><td><code>verifyRealDates</code> 배리어 제거 + 조기 중단</td><td><code>curate.ts:344-374</code>, <code>oembed.ts:97-122</code></td><td>다운로드 −50%+, 배리어 대기 제거</td><td><span class="badge mid">중</span></td><td><span class="badge high">상</span></td></tr>
+              <tr><td><span class="rank">11</span></td><td>중복·미사용 인덱스 제거</td><td><code>db/index.ts:86,94</code>, <code>schema.sql:84,250</code>, <code>dbstat</code> 실측</td><td>241 KB 회수 + 로또 쓰기 인덱스 갱신 절반</td><td><span class="badge low">하</span></td><td><span class="badge low">하</span></td></tr>
+              <tr><td><span class="rank">12</span></td><td><code>prepare()</code> 문장 캐시</td><td><code>repo.ts</code> 전역, <code>lotto/store.ts</code> 전역</td><td>32.8 µs/호출 (요청당 &lt;0.1 ms — 낮은 우선순위)</td><td><span class="badge low">하</span></td><td><span class="badge mid">중</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <article class="audit-item" id="item-1" aria-labelledby="item-1-title">
+        <header class="audit-head">
+          <span class="audit-index">01</span>
+          <h2 id="item-1-title">HTTP 응답 압축이 아예 없다</h2>
+          <div class="badges"><span class="badge low">난이도 하</span><span class="badge low">리스크 하</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>src/api/server.ts:13-38</code> — <code>express.json()</code>과 <code>express.static</code>뿐</li>
+                <li><code>node_modules</code>에 <code>compression</code> 패키지 미설치</li>
+                <li><code>Accept-Encoding: gzip, br</code>에도 <code>Content-Encoding</code> 없음</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>첫 방문 1회당 <strong>774 KB → 219 KB</strong>로 줄일 여지가 있습니다. 증시 탭은 열 때마다 102 KB가 더 나갑니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="table-wrap">
+              <table aria-label="HTTP 압축 전후 리소스 크기">
+                <thead><tr><th>리소스</th><th class="num">현재 전송</th><th class="num">gzip -9</th><th class="num">절감</th></tr></thead>
+                <tbody>
+                  <tr><td><code>index-*.js</code></td><td class="num">744,539 B</td><td class="num">212,573 B</td><td class="num"><strong>−71.4%</strong></td></tr>
+                  <tr><td><code>index-*.css</code></td><td class="num">29,744 B</td><td class="num">6,111 B</td><td class="num">−79.4%</td></tr>
+                  <tr><td><code>GET /api/stock/us</code></td><td class="num">102,775 B</td><td class="num">25,851 B</td><td class="num"><strong>−74.9%</strong></td></tr>
+                  <tr><td><code>GET /api/youtube</code></td><td class="num">22,307 B</td><td class="num">7,175 B</td><td class="num">−67.8%</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">제안 코드 · 무의존 버전</div>
+              <div class="codebox"><div class="codebar">src/api/server.ts</div><pre><code>import zlib from "node:zlib";
+
+/** 1KB 이상 텍스트 응답만 gzip. 로컬 단일 사용자라 br(느림) 대신 gzip 고정. */
+function gzipMiddleware(): express.RequestHandler {
+  const MIN = 1024;
+  return (req, res, next) =&gt; {
+    if (!/\bgzip\b/.test(req.headers["accept-encoding"] ?? "")) return next();
+    const json = res.json.bind(res);
+    res.json = (body: unknown) =&gt; {
+      const buf = Buffer.from(JSON.stringify(body));
+      if (buf.length &lt; MIN) return json(body);
+      const gz = zlib.gzipSync(buf, { level: 6 });
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Vary", "Accept-Encoding");
+      res.removeHeader("Content-Length");
+      return res.end(gz);
+    };
+    next();
+  };
+}
+
+export function createApp() {
+  const app = express();
+  app.use(gzipMiddleware());
+  app.use(express.json());
+  app.use("/api", api);
+}</code></pre></div>
+              <p>정적 자산까지 함께 처리할 경우, tech-lead 승인 후 <code>compression</code> 패키지를 쓰는 방식이 가장 단순합니다.</p>
+              <div class="codebox"><div class="codebar">대안 · package 승인 필요</div><pre><code>import compression from "compression";
+app.use(compression({ threshold: 1024 })); // API + static 전부 커버</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 첫 로딩 전송량 −71%, 증시 탭 갱신마다 −75%. 서버가 소켓에 쓰는 바이트와 브라우저의 파싱 전 대기가 함께 줄어듭니다.</div>
+            <p class="caution">무의존판은 <code>res.json</code>만 감쌉니다. <code>res.send</code>·<code>sendFile</code> 경로는 영향받지 않으며, SPA fallback(<code>server.ts:24-26</code>) 동작만 확인하면 됩니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-2" aria-labelledby="item-2-title">
+        <header class="audit-head">
+          <span class="audit-index">02</span>
+          <h2 id="item-2-title">프론트 단일 번들 744 KB — recharts가 43%</h2>
+          <div class="badges"><span class="badge mid">난이도 중</span><span class="badge mid">리스크 중</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>web/vite.config.ts:27-30</code> — <code>manualChunks</code> 없음</li>
+                <li><code>web/src/App.tsx:6-11</code> — 6개 보드 모두 정적 import</li>
+                <li><code>App.tsx:39-47,287</code> — 기본 탭은 차트를 쓰지 않는 <code>events</code></li>
+                <li><code>StockChart.tsx:1-9</code>, <code>StockCard.tsx:265</code>, <code>StockBoard.tsx:96</code> — 차트는 증시 전용</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>팝업·전시 탭만 보는 사용자도 <strong>323.54 kB(gzip 84.86 kB)</strong> 차트 라이브러리를 매번 파싱합니다. Vite는 500 kB 초과 경고를 냅니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="codebox"><div class="codebar">재현 빌드 청크 분해</div><pre><code>charts (recharts + d3-* + victory-vendor + decimal.js)  323.54 kB │ gzip: 84.86 kB  ← 43.5%
+react  (react + react-dom + scheduler)                  143.49 kB │ gzip: 45.98 kB
+index  (앱 코드 전체)                                    133.12 kB │ gzip: 34.59 kB
+vendor                                                  103.71 kB │ gzip: 34.89 kB
+radix                                                    21.07 kB │ gzip:  7.19 kB
+icons  (lucide-react, 트리셰이킹 정상)                     18.67 kB │ gzip:  4.17 kB</code></pre></div>
+            <div class="detail-block">
+              <div class="detail-label">제안 코드 · 차트 지연 로딩</div>
+              <div class="codebox"><div class="codebar">web/src/components/StockChartLazy.tsx</div><pre><code>import { Suspense, lazy } from "react";
+import type { StockPoint } from "@shared/types";
+
+const StockChart = lazy(() =&gt;
+  import("./StockChart").then((m) =&gt; ({ default: m.StockChart }))
+);
+
+export function StockChartLazy({ points }: { points: StockPoint[] }) {
+  return (
+    &lt;Suspense fallback={&lt;div className="h-[220px] animate-pulse rounded bg-muted/40" /&gt;}&gt;
+      &lt;StockChart points={points} /&gt;
+    &lt;/Suspense&gt;
+  );
+}</code></pre></div>
+              <div class="codebox"><div class="codebar">web/vite.config.ts</div><pre><code>build: {
+  outDir: "dist",
+  emptyOutDir: true,
+  rollupOptions: {
+    output: {
+      manualChunks(id) {
+        if (/node_modules\/(recharts|d3-|victory-vendor|decimal\.js)/.test(id)) return "charts";
+        if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return "react";
+        if (id.includes("node_modules")) return "vendor";
+      },
+    },
+  },
+},</code></pre></div>
+              <p>보드 자체도 <code>React.lazy</code>로 전환합니다. <code>StockBoard</code>, <code>HoldingsBoard</code>, <code>LottoBoard</code>의 named export는 default export 형태로 감싸야 합니다.</p>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 기본 탭 첫 로딩 초기 청크 744.5 KB → <strong>약 300 KB 이하</strong>. §1 gzip과 합치면 실제 전송량 219 KB → <strong>약 90 KB</strong>.</div>
+            <p class="caution"><code>ResponsiveContainer</code>가 지연 마운트되므로 fallback에 동일한 높이 220px를 주어 CLS를 막아야 합니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-3" aria-labelledby="item-3-title">
+        <header class="audit-head">
+          <span class="audit-index">03</span>
+          <h2 id="item-3-title">증시 API가 쓰지 않는 스냅샷까지 3벌 동봉</h2>
+          <div class="badges"><span class="badge mid">난이도 중</span><span class="badge mid">리스크 중</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>src/api/routes.ts:1221-1236</code> — <code>variants: {close, preview, both}</code></li>
+                <li><code>StockBoard.tsx:346</code> — latest 또는 variants 선택</li>
+                <li><code>StockBoard.tsx:349</code> — UI는 close·preview만 사용</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>시장 토글(<code>kr</code>↔<code>us</code>)마다 <strong>102 KB</strong>가 재전송됩니다. <code>variants.both</code>는 root와 바이트 단위로 같지만 UI는 읽지 않습니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="codebox"><div class="codebar">실측 페이로드 분해</div><pre><code>total                       102,781 B
+root(latest, variants 제외)    8,538 B
+variants.close                41,158 B
+variants.preview              44,506 B
+variants.both                  8,538 B  ← root 와 바이트 단위로 동일</code></pre></div>
+            <div class="detail-block">
+              <div class="detail-label">제안 코드 · 서버</div>
+              <div class="codebox"><div class="codebar">src/api/routes.ts:1221 부근</div><pre><code>api.get("/stock/:market", (req, res) =&gt; {
+  const market = parseMarket(req.params.market);
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  const q = req.query.role;
+  if (q === "close" || q === "preview" || q === "both") {
+    return res.json(getStockSnapshot(market, q));
+  }
+
+  const latest = getStockSnapshot(market);
+  if (!latest) return res.json(null);
+  const meta = (role: "close" | "preview") =&gt; {
+    const s = getStockSnapshot(market, role);
+    return s ? { updatedAt: s.updatedAt, sessionDate: s.sessionDate ?? null, date: s.date } : null;
+  };
+  res.json({ ...latest, variantsMeta: { close: meta("close"), preview: meta("preview") } });
+});</code></pre></div>
+              <div class="detail-label">제안 코드 · 클라이언트</div>
+              <div class="codebox"><div class="codebar">web/src/components/StockBoard.tsx</div><pre><code>const [roleSnaps, setRoleSnaps] = useState&lt;Partial&lt;Record&lt;StockSlotRole, StockSnapshot&gt;&gt;&gt;({});
+useEffect(() =&gt; {
+  if (view === "latest" || roleSnaps[view]) return;
+  api.stock(market, view).then((s) =&gt;
+    s &amp;&amp; setRoleSnaps((p) =&gt; ({ ...p, [view]: s }))
+  );
+}, [view, market, roleSnaps]);
+const snap = view === "latest" ? resp : (roleSnaps[view] ?? null);</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 증시 탭 첫 페인트 페이로드 102.8 KB → <strong>약 9 KB(−91%)</strong>. gzip과 합치면 25.9 KB → 약 3 KB.</div>
+            <p class="caution"><code>variants</code> 계약이 바뀝니다. 프론트 선빌드 후 서비스 재시작을 한 배포로 묶어야 합니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-4" aria-labelledby="item-4-title">
+        <header class="audit-head">
+          <span class="audit-index">04</span>
+          <h2 id="item-4-title">보유 종목 수만큼 네이버를 직렬 호출</h2>
+          <div class="badges"><span class="badge low">난이도 하</span><span class="badge mid">리스크 중</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>routes.ts:1067-1076</code> — <code>summarizeHoldings</code> 완료까지 대기</li>
+                <li><code>holdings.ts:140-164</code> — 보유 종목 직렬 <code>for</code></li>
+                <li><code>quote.ts:132-151,231-252</code> — timeout 10초 × 재시도 2회 + 300 ms delay</li>
+                <li><code>stock.ts:288-292</code>, <code>repo.ts:294-303</code> — 같은 이력이 DB에 존재</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>현재 2종목 기준 최선 <strong>~0.6초</strong>, 네이버가 느리면 종목당 최대 <strong>20여 초</strong>. 종목 수에 선형으로 증가합니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="detail-block">
+              <div class="detail-label">제안 코드</div>
+              <div class="codebox"><div class="codebar">src/stock/holdings.ts</div><pre><code>const QUOTE_TTL_MS = 5 * 60_000;
+const quoteMemo = new Map&lt;string, { at: number; points: StockPoint[] }&gt;();
+
+async function pointsFor(h: StockHolding): Promise&lt;StockPoint[]&gt; {
+  const key = `${h.market}|${h.quoteCode}`;
+  const hit = quoteMemo.get(key);
+  if (hit &amp;&amp; Date.now() - hit.at &lt; QUOTE_TTL_MS) return hit.points;
+  try {
+    const fresh = await fetchHistory(h.quoteCode, h.market, HISTORY_DAYS);
+    if (fresh.length) {
+      quoteMemo.set(key, { at: Date.now(), points: fresh });
+      return fresh;
+    }
+  } catch (e) {
+    log.warn(`보유 종목 시세 조회 실패 ${h.name}(${h.symbol}): ${(e as Error).message}`);
+  }
+  const ticker = getStockBySymbol(h.market, h.symbol);
+  return ticker ? getStockPoints(ticker.id, HISTORY_DAYS) : [];
+}
+
+export async function summarizeHoldings(market?: StockMarket) {
+  const holdings = listHoldings(market);
+  return mapWithLimit(holdings, 3, async (h) =&gt; {
+    const points = await pointsFor(h);
+    const last = points.length ? points[points.length - 1] : null;
+    return summarizeHolding(h, {
+      close: last?.close ?? null,
+      changePct: last?.changePct ?? null,
+      currency: last?.currency ?? (h.market === "kr" ? "KRW" : "USD"),
+    }, points);
+  });
+}</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 2회차 이후 네트워크 0회(수 ms). 첫 조회도 직렬 N회 → 동시 3개. 장애 시 DB 폴백으로 화면이 비지 않습니다.</div>
+            <p class="caution">TTL 5분 동안 가격이 최대 5분 낡습니다. <code>schema.sql:145-146</code>의 “시세는 저장하지 않는다” 결정과 충돌하므로 응답에 <code>quotedAt</code>을 포함해 “N분 전 시세”로 밝혀야 합니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-5" aria-labelledby="item-5-title">
+        <header class="audit-head">
+          <span class="audit-index">05</span>
+          <h2 id="item-5-title">StockCard마다 시세 이력을 개별 요청</h2>
+          <div class="badges"><span class="badge low">난이도 하</span><span class="badge low">리스크 하</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>StockCard.tsx:80-94</code> — 카드별 <code>tickerHistory</code></li>
+                <li><code>StockBoard.tsx:546-557</code> — ticker map 렌더</li>
+                <li><code>StockCard.tsx:96</code> — 스냅샷 history가 이미 존재</li>
+                <li><code>routes.ts:1383</code> — 개별 history 라우트</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>등록 종목 kr 4개 / us 5개. 진입마다 개별 요청 <strong>4~5회</strong>. 로컬에서 총 ~10 ms로 작지만 종목에 따라 선형 증가하고 차트가 순차적으로 깜빡입니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="detail-block">
+              <div class="detail-label">제안 코드 · 벌크 라우트</div>
+              <div class="codebox"><div class="codebar">src/api/routes.ts</div><pre><code>api.get("/stock/:market/histories", (req, res) =&gt; {
+  const market = parseMarket(req.params.market);
+  if (!market) return res.status(400).json({ error: "시장은 kr 또는 us 여야 합니다." });
+  const days = Math.min(Math.max(Number(req.query.days) || 20, 1), 120);
+  const out: Record&lt;number, StockPoint[]&gt; = {};
+  for (const t of listStocks(market)) out[t.id] = getStockPoints(t.id, days);
+  res.json(out);
+});</code></pre></div>
+              <div class="detail-label">제안 코드 · 부모에서 주입</div>
+              <div class="codebox"><div class="codebar">web/src/components/StockBoard.tsx</div><pre><code>const [s, t, hs] = await Promise.all([
+  api.stock(market),
+  api.stockTickers(market),
+  api.tickerHistories(market, 20),
+]);
+setHistories(hs);
+
+&lt;StockCard ticker={t} history={histories[t.id]} ... /&gt;
+
+// StockCard: 부모가 주입했으면 개별 요청 불필요
+useEffect(() =&gt; {
+  if (!ticker || historyProp) return;
+  // ...
+}, [ticker, historyProp]);</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 증시 탭 진입 요청 수 <code>3 + N</code> → <code>3</code>. 차트가 동시에 채워져 깜빡임이 사라집니다.</div>
+            <p class="caution"><code>StockCard</code>는 ticker 없이도 관심 종목·해외 참고에 쓰입니다(<code>StockBoard.tsx:577,596</code>). <code>history</code> prop은 optional로 유지합니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-6" aria-labelledby="item-6-title">
+        <header class="audit-head">
+          <span class="audit-index">06</span>
+          <h2 id="item-6-title">유튜브 RSS 하베스트의 세 겹 대기</h2>
+          <div class="badges"><span class="badge mid">난이도 중</span><span class="badge mid">리스크 중</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>channels.ts:107,118-137</code> — 84,627 B / 709항목 캐시를 호출마다 읽고 씀</li>
+                <li><code>channels.ts:177-191,212-222</code> — 동시 read-modify-write로 lost update</li>
+                <li><code>curate.ts:549-562</code> — 카테고리 직렬, 카테고리 간 중복 제거 없음</li>
+                <li>추천 26개 + 발견 최대 75개 → 최대 약 100채널</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>100회 해석 시 <strong>8.4 MB 읽기 + JSON.parse 100회</strong>. 카테고리별 배치 배리어로 라운드 수가 누적됩니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="detail-block">
+              <div class="detail-label">제안 코드 · 캐시 메모리화</div>
+              <div class="codebox"><div class="codebar">src/youtube/channels.ts</div><pre><code>let memo: ChannelCache | null = null;
+let dirty = false;
+let flushTimer: NodeJS.Timeout | null = null;
+
+function cache(): ChannelCache {
+  if (!memo) memo = readCache();
+  return memo;
+}
+
+function markDirty(): void {
+  dirty = true;
+  if (flushTimer) return;
+  flushTimer = setTimeout(() =&gt; {
+    flushTimer = null;
+    if (!dirty || !memo) return;
+    dirty = false;
+    writeCache(memo);
+  }, 1000);
+  flushTimer.unref?.();
+}
+
+export async function resolveChannelId(query: string): Promise&lt;string | null&gt; {
+  const key = cacheKey(query);
+  if (!key) return null;
+  const c = cache();
+  const hit = c[key];
+  if (hit) {
+    if (hit.channelId) return hit.channelId;
+    const age = Date.now() - new Date(hit.resolvedAt).getTime();
+    if (Number.isFinite(age) &amp;&amp; age &lt; NEG_TTL_MS) return null;
+  }
+  const id = await resolveUncached(query);
+  c[key] = { channelId: id, resolvedAt: new Date().toISOString() };
+  markDirty();
+  return id;
+}</code></pre></div>
+              <div class="detail-label">제안 코드 · 공용 슬라이딩 윈도우</div>
+              <div class="codebox"><div class="codebar">src/util/pool.ts</div><pre><code>export async function mapWithLimit&lt;T, R&gt;(
+  items: readonly T[], limit: number, fn: (item: T, i: number) =&gt; Promise&lt;R&gt;
+): Promise&lt;R[]&gt; {
+  const out = new Array&lt;R&gt;(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () =&gt; {
+    for (;;) {
+      const i = next++;
+      if (i &gt;= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}</code></pre></div>
+              <p>카테고리별 query를 합쳐 전역 중복을 제거한 뒤 동시성 6의 공용 풀에서 <code>harvestOneChannel</code>을 실행하고, 결과를 카테고리에 다시 배분합니다.</p>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 84 KB 파싱 100회 → 1회, 84 KB 쓰기 N회 → 디바운스 1회. 카테고리 수 5만큼 누적되던 벽시계 시간과 lost update 결함을 함께 줄입니다.</div>
+            <p class="caution">메모리 캐시는 파일 수동 수정이 재시작 전 반영되지 않습니다. 프로세스 종료 시 디바운스 플러시가 유실되지 않도록 <code>process.on("beforeExit")</code> 훅이 필요합니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-7" aria-labelledby="item-7-title">
+        <header class="audit-head">
+          <span class="audit-index">07</span>
+          <h2 id="item-7-title">1 MB watch 페이지를 배치 배리어로 받는다</h2>
+          <div class="badges"><span class="badge mid">난이도 중</span><span class="badge high">리스크 중~상</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>curate.ts:344-374</code> — 동시성 6의 배치 배리어</li>
+                <li><code>oembed.ts:97-122</code> — timeout 8초 × 재시도 2회</li>
+                <li><code>r.text()</code>로 전문을 만든 뒤 날짜·라이브 여부만 추출</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>후보 60건이면 10라운드 × 최악 16초 = <strong>160초</strong>. 약 <strong>60 MB</strong>를 받은 뒤 거의 전부 폐기합니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="detail-block">
+              <div class="detail-label">제안 코드 · 배리어 제거</div>
+              <div class="codebox"><div class="codebar">src/youtube/curate.ts</div><pre><code>const checked = await mapWithLimit(items, 6, async (v) =&gt; {
+  if (!v.videoId) return v;
+  const { date: real, live } = await fetchWatchInfo(v.videoId);
+  if (live) {
+    log.info(`유튜브 라이브(방송중/예정) 제외 — ${v.videoId} "${v.title}"`);
+    return null;
+  }
+  if (!real) return v;
+  if (!isFresh(real, today, cutoff)) return null;
+  return v.date === real ? v : { ...v, date: real };
+});
+return checked.filter((v): v is YoutubeVideo =&gt; v != null);</code></pre></div>
+              <div class="detail-label">제안 코드 · 512 KB 조기 중단</div>
+              <div class="codebox"><div class="codebar">src/youtube/oembed.ts:97</div><pre><code>const MAX_SCAN_BYTES = 512 * 1024;
+const reader = r.body!.getReader();
+const dec = new TextDecoder();
+let html = "";
+try {
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    html += dec.decode(value, { stream: true });
+    if (html.length &gt;= MAX_SCAN_BYTES) break;
+    if (extractUploadIso(html)) break;
+  }
+} finally {
+  await reader.cancel().catch(() =&gt; {});
+}</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 다운로드 바이트 최대 −50% 이상. 배리어 제거로 검증 구간이 “가장 느린 한 건”에 덜 지배됩니다.</div>
+            <p class="caution">조기 중단은 마커 위치 가정에 의존합니다. 실제 watch 페이지 라이브/일반 각 5건 이상에서 앞 512 KB 안에 <code>uploadDate</code>와 <code>isLiveBroadcast</code>가 모두 있는지 먼저 검증해야 합니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-8" aria-labelledby="item-8-title">
+        <header class="audit-head">
+          <span class="audit-index">08</span>
+          <h2 id="item-8-title">이벤트 수집 25회가 전부 직렬</h2>
+          <div class="badges"><span class="badge low">난이도 하</span><span class="badge mid">리스크 중</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>events/gather.ts:39-46</code> — 매 호출 뒤 120 ms sleep</li>
+                <li><code>gather.ts:54-68</code> — 팝업 11개</li>
+                <li><code>gather.ts:72-78</code> — 전시장 5곳 × 2 = 10개</li>
+                <li><code>gather.ts:81-86</code> — 축제 4개</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>25 × (네이버 왕복 + 120 ms). 왕복 200 ms 가정 시 <strong>약 8초</strong>, 그중 <strong>3초</strong>는 순수 sleep입니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="detail-block">
+              <div class="detail-label">제안 코드</div>
+              <div class="codebox"><div class="codebar">src/events/gather.ts</div><pre><code>import { mapWithLimit } from "../util/pool.ts";
+
+async function runPool(tasks: (() =&gt; Promise&lt;RawGroup&gt;)[]): Promise&lt;RawGroup[]&gt; {
+  return mapWithLimit(tasks, 3, (t) =&gt; t());
+}
+
+export async function gatherCorpus(): Promise&lt;RawCorpus&gt; {
+  const month = monthLabel();
+  const [popupGroups, venues, festivalGroups] = await Promise.all([
+    runPool([/* 팝업 11개 */]),
+    mapWithLimit(MANDATORY_VENUES, 2, async (venue) =&gt; ({
+      venue,
+      groups: await runPool([
+        () =&gt; group(`${venue}(웹)`, `${venue} 전시회 일정 ${month}`, "webkr"),
+        () =&gt; group(`${venue}(블로그)`, `${venue} 박람회 ${month}`, "blog"),
+      ]),
+    })),
+    runPool([/* 축제 4개 */]),
+  ]);
+  // ...
+}</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 원본 수집 구간 <strong>약 8초 → 약 2~3초</strong>. <code>group()</code>(28-36행)의 기존 try/catch 실패 격리는 유지됩니다.</div>
+            <p class="caution">리스크는 네이버 rate limit입니다. 동시성을 3 이하로 두고, 429가 관측되면 풀 한도만 낮춥니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-9" aria-labelledby="item-9-title">
+        <header class="audit-head">
+          <span class="audit-index">09</span>
+          <h2 id="item-9-title">메모이제이션 전무 + 탭 전환 시 전량 언마운트</h2>
+          <div class="badges"><span class="badge mid">난이도 중</span><span class="badge mid">리스크 중</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>YoutubeBoard.tsx:218,439-454</code> — memo 없음, 카드당 핸들러 6개</li>
+                <li><code>YoutubeBoard.tsx:857-858</code> — 렌더마다 새 Map</li>
+                <li><code>App.tsx:287</code> — activeTab 하나만 렌더</li>
+                <li>각 보드는 마운트 시 무조건 <code>load()</code></li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>실측 카드 <strong>31장</strong>, 증시 차트 <strong>11개</strong>. 수집 중 5초 폴링이나 카드 조작 때 31장 전부 리렌더. 증시 재방문마다 102.8 KB 재요청.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="table-wrap">
+              <table aria-label="프론트 보드 메모이제이션 현황">
+                <thead><tr><th>파일</th><th class="num">React.memo</th><th class="num">useMemo</th><th class="num">useCallback</th></tr></thead>
+                <tbody>
+                  <tr><td>YoutubeBoard.tsx (995행)</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+                  <tr><td>EventsBoard.tsx (451행)</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+                  <tr><td>NewsBoard.tsx (346행)</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+                  <tr><td>StockBoard.tsx (630행)</td><td class="num">0</td><td class="num">0</td><td class="num">3</td></tr>
+                  <tr><td>HoldingsBoard.tsx</td><td class="num">0</td><td class="num">0</td><td class="num">3</td></tr>
+                  <tr><td>LottoBoard.tsx</td><td class="num">0</td><td class="num">0</td><td class="num">3</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">제안 코드 · 카드 안정화</div>
+              <div class="codebox"><div class="codebar">web/src/components/YoutubeBoard.tsx</div><pre><code>const VideoCard = memo(function VideoCard({ ... }) { ... });
+
+export function YoutubeBoard() {
+  const onDismiss = useCallback((v: YoutubeVideo, key: string) =&gt; dismissVideo(v, key), []);
+  const onMove = useCallback(moveVideo, [collecting]);
+  const onOpen = useCallback((v: YoutubeVideo) =&gt; { /* ... */ }, []);
+  const itemsByKey = useMemo(() =&gt; {
+    const m = new Map&lt;string, YoutubeVideo[]&gt;();
+    snap?.categories.forEach((c) =&gt; m.set(c.key, c.items));
+    return m;
+  }, [snap]);
+}</code></pre></div>
+              <div class="detail-label">제안 코드 · 방문 탭 유지</div>
+              <div class="codebox"><div class="codebar">web/src/App.tsx</div><pre><code>const [visited, setVisited] = useState&lt;Set&lt;string&gt;&gt;(() =&gt; new Set([TABS[0].id]));
+function selectTab(id: string) {
+  setVisited((s) =&gt; (s.has(id) ? s : new Set(s).add(id)));
+  setActive(id);
+}
+
+&lt;main className="mx-auto max-w-[1920px] px-4 py-6"&gt;
+  {TABS.filter((t) =&gt; visited.has(t.id)).map((t) =&gt; (
+    &lt;div key={t.id} hidden={t.id !== active}&gt;{t.content}&lt;/div&gt;
+  ))}
+&lt;/main&gt;</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 카드 조작·수집 폴링 시 리렌더 31장 → 실제 바뀐 1장. 탭 재방문 API 요청 0회.</div>
+            <p class="caution"><code>hidden</code> 탭의 interval은 계속 실행됩니다. 대부분 보드에는 collecting guard가 있지만 <code>HoldingsBoard.tsx:149</code>의 60초 무조건 폴링에는 active 탭 또는 <code>document.visibilityState</code> 조건이 필요합니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-10" aria-labelledby="item-10-title">
+        <header class="audit-head">
+          <span class="audit-index">10</span>
+          <h2 id="item-10-title">SQLite WAL 미체크포인트 + busy_timeout=0</h2>
+          <div class="badges"><span class="badge low">난이도 하</span><span class="badge low">리스크 하</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li>WAL 헤더 실측 — 604 미체크포인트 프레임, <code>ckptSeq=4</code></li>
+                <li><code>src/db/index.ts:17-18</code> — WAL·foreign_keys만 설정</li>
+                <li>node:sqlite 기본 <code>busy_timeout=0</code></li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">판단</div>
+              <p><strong>속도가 아니라 내구성 문제</strong>입니다. 읽기 성능은 체크포인트 전후 약 4% 차이에 불과합니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="codebox"><div class="codebar">WAL 헤더 직접 파싱</div><pre><code>file bytes 4,136,512   pageSize 4096   ckptSeq 4
+파일 용량상 프레임 수                    1,004
+헤더 salt 와 일치하는 선두 프레임 수      604  ← 미체크포인트 커밋</code></pre></div>
+            <div class="table-wrap">
+              <table aria-label="본 DB와 WAL 포함 데이터 비교">
+                <thead><tr><th>테이블</th><th>price.db 단독</th><th>price.db + WAL(라이브)</th></tr></thead>
+                <tbody>
+                  <tr><td><code>max(stock_pulse_alerts.created_at)</code></td><td>2026-08-13T17:01</td><td>2026-08-21T00:01</td></tr>
+                  <tr><td><code>max(stock_points.collected_at)</code></td><td>2026-08-15T05:23</td><td>2026-08-21T23:02</td></tr>
+                  <tr><td><code>max(lotto_predictions.scored_at)</code></td><td>2026-08-09T01:08</td><td>2026-08-16T01:00</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="codebox"><div class="codebar">성능 계측</div><pre><code>WAL 604프레임 :  48.3ms
+체크포인트 후  :  46.2ms  ← 약 4%, 이 데이터 규모에선 유의미하지 않음
+콜드 오픈+첫 질의:  0.7ms vs 0.4ms
+
+cache_size 2 MB vs 16 MB: 48.9ms vs 46.1ms
+재측정:                 45.8ms vs 44.5ms</code></pre></div>
+            <div class="detail-block">
+              <div class="detail-label">제안 코드 · PRAGMA</div>
+              <div class="codebox"><div class="codebar">src/db/index.ts:16-21</div><pre><code>const conn = new DatabaseSync(config.dbPath);
+conn.exec("PRAGMA journal_mode = WAL;");
+conn.exec("PRAGMA foreign_keys = ON;");
+conn.exec("PRAGMA busy_timeout = 5000;");
+conn.exec("PRAGMA synchronous = NORMAL;");
+conn.exec("PRAGMA wal_autocheckpoint = 200;");</code></pre></div>
+              <div class="detail-label">제안 코드 · 일일 TRUNCATE</div>
+              <div class="codebox"><div class="codebar">src/scheduler/scheduler.ts</div><pre><code>cron.schedule("30 4 * * *", () =&gt; {
+  try {
+    const r = db().prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+      { busy: number; log: number; checkpointed: number };
+    log.info(`WAL 체크포인트: busy=${r.busy} log=${r.log} checkpointed=${r.checkpointed}`);
+  } catch (e) {
+    log.warn(`WAL 체크포인트 실패: ${(e as Error).message}`);
+  }
+});</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 본 DB의 8일 지연 해소, WAL 4.1 MB 회수, 동시 접근의 <code>SQLITE_BUSY</code> 제거, 커밋 지연 0.042 ms → 0.007 ms. <strong>읽기 응답 속도 개선은 4% 이내</strong>입니다.</div>
+            <p class="caution"><code>synchronous=NORMAL</code>은 WAL 모드에서 DB 손상 위험이 없습니다. 다만 전원 차단 시 최근 커밋 몇 건이 유실될 수 있습니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-11" aria-labelledby="item-11-title">
+        <header class="audit-head">
+          <span class="audit-index">11</span>
+          <h2 id="item-11-title">사용되지 않는 인덱스 2개</h2>
+          <div class="badges"><span class="badge low">난이도 하</span><span class="badge low">리스크 하</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>db/index.ts:94</code> — PK와 같은 <code>idx_lotto_pred_run</code></li>
+                <li><code>schema.sql:250</code>, <code>index.ts:86</code> — 사용 질의 없는 version 인덱스</li>
+                <li><code>schema.sql:84</code> — 제거된 가격 탭의 date 인덱스</li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>디스크 <strong>241 KB</strong>와 로또 예측 INSERT 때 중복 인덱스 갱신. 절대량은 작아 성능보다 청소에 가깝습니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="codebox"><div class="codebar">dbstat 실측</div><pre><code>lotto_predictions                        2,699,264 B
+sqlite_autoindex_lotto_predictions_1       135,168 B  ← PK(run, round)
+idx_lotto_pred_run                         135,168 B  ← (run, round) 완전 중복
+idx_lotto_pred_version                     106,496 B  ← (version)</code></pre></div>
+            <div class="detail-block">
+              <div class="detail-label">제안 코드</div>
+              <div class="codebox"><div class="codebar">src/db/index.ts · migrate()</div><pre><code>conn.exec("DROP INDEX IF EXISTS idx_lotto_pred_run");
+conn.exec("DROP INDEX IF EXISTS idx_lotto_pred_version");
+
+// 읽는 질의가 사라진 보존 아카이브의 인덱스. 행은 그대로 둔다.
+conn.exec("DROP INDEX IF EXISTS idx_price_points_date");</code></pre></div>
+              <p><code>schema.sql:250</code>의 <code>idx_lotto_pred_version</code> 생성도 함께 삭제해야 재생성되지 않습니다.</p>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 241 KB 회수 + 로또 쓰기 시 인덱스 갱신 절반. 되돌리기는 <code>CREATE INDEX</code> 한 줄입니다.</div>
+            <p class="caution"><code>price_points</code>·<code>listings</code>·<code>reviews</code>·<code>source_fetch_cache</code> 테이블은 보존 아카이브이므로 삭제하지 않습니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="audit-item" id="item-12" aria-labelledby="item-12-title">
+        <header class="audit-head">
+          <span class="audit-index">12</span>
+          <h2 id="item-12-title"><code>prepare()</code>를 호출마다 다시 컴파일</h2>
+          <div class="badges"><span class="badge low">난이도 하</span><span class="badge mid">리스크 중</span></div>
+        </header>
+        <div class="audit-grid">
+          <aside class="audit-side">
+            <div class="detail-block">
+              <div class="detail-label">근거 · 파일:라인</div>
+              <ul class="evidence-list">
+                <li><code>src/db/repo.ts:54,62,71,80,85,93,100,171,185,297,309,340,398,404,411,419,550,666,681,695,709</code></li>
+                <li><code>src/lotto/store.ts:71,79,205,213,221,233,322,351</code></li>
+              </ul>
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">현재 비용</div>
+              <p>같은 SQL 2,000회 기준 차이 <strong>65.7 ms = 32.8 µs/호출</strong>. 요청당 체감은 0.1 ms 미만입니다.</p>
+            </div>
+          </aside>
+          <div class="audit-main">
+            <div class="codebox"><div class="codebar">반복 계측</div><pre><code>prepare 매번:        482.3ms
+준비된 문장 재사용: 416.6ms
+차이:                65.7ms = 32.8µs/호출</code></pre></div>
+            <div class="detail-block">
+              <div class="detail-label">제안 코드</div>
+              <div class="codebox"><div class="codebar">src/db/index.ts</div><pre><code>const stmts = new Map&lt;string, StatementSync&gt;();
+
+export function stmt(sql: string): StatementSync {
+  let s = stmts.get(sql);
+  if (!s) {
+    s = db().prepare(sql);
+    stmts.set(sql, s);
+  }
+  return s;
+}
+
+export function closeDb(): void {
+  if (_db) {
+    stmts.clear();
+    _db.close();
+    _db = null;
+  }
+}</code></pre></div>
+              <div class="codebox"><div class="codebar">호출부 예시</div><pre><code>export function getStockPoints(stockId: number, days: number): StockPoint[] {
+  const limit = Math.max(0, Math.trunc(days));
+  if (!limit) return [];
+  const rows = stmt(
+    "SELECT * FROM stock_points WHERE stock_id = ? ORDER BY date DESC LIMIT ?"
+  ).all(stockId, limit) as unknown as StockPointRow[];
+  return rows.map(rowToStockPoint).reverse();
+}</code></pre></div>
+            </div>
+            <div class="impact"><strong>기대 효과</strong> · 호출당 32.8 µs. 일반 요청에는 낮은 우선순위이며, <code>pruneOldData</code>나 로또 채점 같은 반복 루프에서 의미가 있습니다.</div>
+            <p class="caution"><code>closeDb()</code>에서 캐시를 비우지 않으면 닫힌 DB의 문장을 재사용해 repo 테스트가 실패합니다.</p>
+          </div>
+        </div>
+      </article>
+
+      <section class="section" id="roadmap" aria-labelledby="roadmap-title">
+        <div class="section-head">
+          <span class="section-no">→ / ROADMAP</span>
+          <div>
+            <h2 id="roadmap-title">권장 착수 순서</h2>
+            <p class="section-deck">효과 대비 비용, 배포 결합도, 검증 위험을 기준으로 3주에 나눕니다.</p>
+          </div>
+        </div>
+        <div class="roadmap-grid">
+          <article class="week">
+            <span class="week-no">WEEK 01</span>
+            <h3>효과 대비 비용이 압도적</h3>
+            <p><code>compression</code> 한 줄 + 벌크 이력 라우트 + 보유 시세 캐시 + PRAGMA. 모두 백엔드 국소 변경이고 프론트 계약을 깨지 않습니다.</p>
+            <div class="sequence">1 → 7 → 4 → 9</div>
+          </article>
+          <article class="week">
+            <span class="week-no">WEEK 02</span>
+            <h3>프론트 배포 결합</h3>
+            <p><code>deploy-after-code-change</code> 원칙대로 프론트 선빌드 후 launchd 서비스 재시작을 반드시 함께 진행합니다.</p>
+            <div class="sequence">2 → 3 → 6</div>
+          </article>
+          <article class="week">
+            <span class="week-no">WEEK 03</span>
+            <h3>수집기와 정리 작업</h3>
+            <p>5번은 성능 개선과 함께 lost update 결함을 제거하므로 측정된 속도 이상의 가치가 있습니다.</p>
+            <div class="sequence">5 → 8 → 11 → 12</div>
+          </article>
+        </div>
+        <div class="hold">
+          <strong>HOLD · 10</strong>
+          <div>조기 중단이 라이브 판정을 조용히 망가뜨릴 수 있습니다. 실제 watch 페이지 라이브/일반 각 5건 이상에서 “앞 512 KB 안에 두 신호가 모두 있는가”를 검증한 뒤에만 착수하십시오. <strong>합성 픽스처로 검증하면 안 됩니다.</strong></div>
+        </div>
+      </section>
+
+      <section class="section" id="appendix" aria-labelledby="appendix-title">
+        <div class="section-head">
+          <span class="section-no">A / APPENDIX</span>
+          <div>
+            <h2 id="appendix-title">확인했지만 문제가 아니었던 것</h2>
+            <p class="section-deck">추측을 걷어낸 기록입니다. 접어서 핵심 흐름을 유지하되, 필요할 때 검증 근거를 바로 확인할 수 있습니다.</p>
+          </div>
+        </div>
+        <details>
+          <summary>검증 결과 7건 펼쳐보기</summary>
+          <div class="table-wrap">
+            <table class="appendix-table" aria-label="확인했지만 문제가 아니었던 항목">
+              <thead><tr><th>의심</th><th>확인 결과</th></tr></thead>
+              <tbody>
+                <tr><td>인덱스 미사용 / N+1 쿼리 (<code>repo.ts</code>)</td><td><strong>건강함.</strong> <code>EXPLAIN QUERY PLAN</code> 실행: <code>stock_points</code> → PK 자동인덱스 직행, <code>stock_pulse_alerts</code> → <code>idx_pulse_created</code>, <code>lotto_predictions</code> JOIN → <code>idx_lotto_pred_run</code> + <code>lotto_draws</code> rowid. 풀스캔 없음.</td></tr>
+                <tr><td>스냅샷 JSON을 요청마다 디스크에서 읽는가</td><td><strong>아니오.</strong> <code>news.ts:138</code>, <code>youtube.ts:58</code>, <code>events.ts:124</code>, <code>stock.ts:137</code> 모두 메모리 memo 우선. <code>blocklist.ts:50</code>, <code>dismissed.ts:32</code>, <code>watched.ts:29</code>도 memo 있음. 유일한 예외는 <code>channels.ts:118</code>이며 §6에서 다뤘습니다.</td></tr>
+                <tr><td>ETag가 없어 매번 전량 재전송하는가</td><td><strong>아니오.</strong> <code>ETag: W/&quot;b5c5b-...&quot;</code>가 붙고 <code>If-None-Match</code> 재요청은 <code>304 / 0 bytes</code>. 해시 파일명에는 <code>express.static(webDist, { maxAge: &quot;1y&quot;, immutable: true })</code>를 적용할 수 있지만 효과가 작아 별도 항목으로 올리지 않았습니다.</td></tr>
+                <tr><td>App이 6개 보드를 전부 마운트하는가</td><td><strong>아니오.</strong> <code>App.tsx:39-47</code>의 <code>TABS</code>가 모듈 상수라 엘리먼트 참조가 안정적이고 React가 bail-out합니다. 단, 정적 import라 번들에는 전부 들어갑니다(§2).</td></tr>
+                <tr><td><code>tsx</code> 런타임 오버헤드</td><td><strong>미미.</strong> Node 26 네이티브 타입 스트리핑으로 그대로 기동. <code>routes.ts</code> 모듈 그래프 로드 기준 <code>tsx</code> 0.24–0.30 s vs <code>node</code> 0.22–0.23 s — 재시작당 ~60 ms.</td></tr>
+                <tr><td><code>cache_size</code> 기본 2 MB가 문제인가</td><td><strong>아니오.</strong> 2 MB vs 16 MB에서 48.9 ms vs 46.1 ms. DB가 4.4 MB라 차이가 없습니다.</td></tr>
+                <tr><td><code>getDowntimeView()</code>가 60초마다 원장을 다시 읽는가</td><td>맞습니다(<code>uptime/store.ts:237-264</code>, 캐시 없음). 다만 파일은 7.2 KB이고 <code>store.ts:230-236</code> 주석상 의도적인 결정입니다. 비용은 60초에 1 ms 미만이라 변경을 권하지 않습니다.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <footer class="footer">
+        <span>price 성능 분석 · 라이브 서버 / 실 DB / 재현 빌드 · 2026-08-22</span>
+        <a class="top-link" href="#overview">맨 위로 ↑</a>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const bar = document.getElementById("progress-bar");
+      const links = [...document.querySelectorAll("#toc a")];
+      const targets = links
+        .map((link) => document.querySelector(link.getAttribute("href")))
+        .filter(Boolean);
+
+      const updateProgress = () => {
+        const max = document.documentElement.scrollHeight - innerHeight;
+        const value = max > 0 ? Math.min(1, scrollY / max) : 0;
+        bar.style.width = `${value * 100}%`;
+      };
+
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        if (!visible) return;
+        links.forEach((link) => {
+          const active = link.getAttribute("href") === `#${visible.target.id}`;
+          if (active) link.setAttribute("aria-current", "true");
+          else link.removeAttribute("aria-current");
+        });
+      }, { rootMargin: "-15% 0px -72% 0px", threshold: 0 });
+
+      targets.forEach((target) => observer.observe(target));
+      addEventListener("scroll", updateProgress, { passive: true });
+      addEventListener("resize", updateProgress, { passive: true });
+      updateProgress();
+    })();
+  </script>
+</body>
+</html>
