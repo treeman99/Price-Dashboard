@@ -96,9 +96,13 @@ export function dateline(ymd: string): string {
   return d.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" });
 }
 
-/** 툴바 메타 줄처럼 조각을 가운데점으로 잇는다. 빈 조각은 건너뛴다. */
+/**
+ * 툴바 메타 줄처럼 조각을 가운데점으로 잇는다. 빈 조각은 건너뛴다.
+ * 점 뒤는 일반 공백이라 거기서 줄이 바뀐다 — 양쪽을 &nbsp; 로 묶으면 메타 줄 전체가 끊을 수 없는 한 덩어리가 돼
+ * 유튜브 썸네일 칸을 찌그러뜨리거나 표를 밀어낸다(data/gmail-jump-investigation/round3/report-C-all-mails.md §4.3).
+ */
 export function metaLine(parts: (string | null | undefined | false)[]): string {
-  return parts.filter(Boolean).join(`<span style="color:${onPaper(MUTED, 0.5)}">&nbsp;·&nbsp;</span>`);
+  return parts.filter(Boolean).join(`<span style="color:${onPaper(MUTED, 0.5)}">&nbsp;· </span>`);
 }
 
 /** 메타 안의 값(시각·건수) — 잉크색 medium 으로 올린다. html 그대로. */
@@ -187,7 +191,7 @@ export function subHeader(label: string, o: { count?: number | string; dot?: str
     : "";
   const count = o.count != null ? ` <span style="font-family:${FONT.mono};font-size:12px;font-weight:400;color:${MUTED}">${escapeHtml(String(o.count))}</span>` : "";
   const note = o.note ? ` <span style="font-size:12px;font-weight:400;color:${MUTED}">${o.note}</span>` : "";
-  return `<p style="margin:20px 0 0;padding:0 0 6px;border-bottom:1px solid ${HAIRLINE};font-size:13px;font-weight:600;letter-spacing:0.02em;color:${INK}">${dot}${escapeHtml(label)}${count}${note}</p>`;
+  return `<p style="margin:20px 0 0;padding:0 0 6px;border-bottom:1px solid ${HAIRLINE};font-size:13px;font-weight:600;letter-spacing:0.02em;color:${INK}">${dot}${breakLongRuns(escapeHtml(label))}${count}${note}</p>`;
 }
 
 /**
@@ -208,9 +212,8 @@ export function articleRow(o: {
   summary?: string;
   after?: string;
 }): string {
-  const title = o.href
-    ? `<a href="${escapeAttr(o.href)}" style="color:${INK};text-decoration:none">${escapeHtml(o.title)}</a>`
-    : escapeHtml(o.title);
+  const text = breakLongRuns(escapeHtml(o.title));
+  const title = o.href ? `<a href="${escapeAttr(o.href)}" style="color:${INK};text-decoration:none">${text}</a>` : text;
   return `<div style="padding:14px 0;border-bottom:1px solid ${HAIRLINE}">
 <p style="margin:0;font-size:15px;font-weight:600;line-height:1.45;color:${INK}">${o.lead ? `${o.lead} ` : ""}${title}</p>
 ${o.meta ? `<p style="margin:4px 0 0;font-size:12.5px;color:${MUTED};${TNUM}">${o.meta}</p>` : ""}
@@ -220,17 +223,21 @@ ${o.after ? `<p style="margin:8px 0 0;font-size:12.5px;color:${MUTED}">${o.after
 }
 
 /**
- * 요약에 섞여 오는 긴 URL(공백 없는 30자 이상 ASCII)만 아무 데서나 끊게 감싼다. 한국어 어절은 keep-all 그대로.
- * 이게 없으면 URL 한 줄이 표 칸을 밀어 메일 전체 폭이 680px 을 넘는다(유튜브 실데이터 763px 로 확인).
- * escaped 는 이미 escapeHtml 을 거친 텍스트 — 태그가 없으므로 엔티티째 감싸도 안전하다.
+ * 공백 없는 20자 이상 덩어리(긴 URL, 띄어쓰기 없는 한국어 낱말)만 아무 데서나 끊게 감싼다. 짧은 어절은 keep-all 그대로.
+ * 이게 없으면 덩어리 하나가 표 칸을 밀어 메일 전체 폭이 680px 을 넘는다(유튜브 실데이터 763px, 제목 URL 600px 에서 +354px).
+ * 한국어도 body 의 keep-all 때문에 한 덩어리가 되므로 ASCII 만 보지 않는다. 끊기는 word-break 로만 한다 —
+ * Gmail iOS 는 overflow-wrap 을 지운다(caniemail css-overflow-wrap "n", data/gmail-jump-investigation/round3/report-C-all-mails.md §4).
+ * escaped 는 이미 escapeHtml 을 거친 평문 — 태그가 없고, 엔티티(&amp; 등)는 공백이 없어 덩어리째 감싸지므로 잘리지 않는다.
+ * 태그가 섞인 html 에는 쓰지 않는다(태그 안의 속성까지 덩어리로 잡힌다).
+ * 데이터에 섞인 &nbsp;(U+00A0)는 줄을 바꾸지 않는 글자라 덩어리의 일부로 센다(JS 의 \s 는 이것을 공백으로 본다).
  */
 export function breakLongRuns(escaped: string): string {
-  return escaped.replace(/[!-~]{30,}/g, (run) => `<span style="word-break:break-all">${run}</span>`);
+  return escaped.replace(/(?:\S| ){20,}/g, (run) => `<span style="word-break:break-all">${run}</span>`);
 }
 
 /** 행 안의 보조 링크('원문 보기'). href 는 safeHref 를 통과한 값, label 은 텍스트. */
 export function textLink(href: string, label: string): string {
-  return `<a href="${escapeAttr(href)}" style="color:${MUTED};text-decoration:underline;text-underline-offset:3px">${escapeHtml(label)}</a>`;
+  return `<a href="${escapeAttr(href)}" style="color:${MUTED};text-decoration:underline;text-underline-offset:3px">${breakLongRuns(escapeHtml(label))}</a>`;
 }
 
 export type TagTone = "new" | "urgent" | "soon" | "warn" | "neutral" | "info" | "success" | "error";
@@ -265,7 +272,7 @@ export function notice(html: string, tone: Tone | "muted" = "muted"): string {
 
 /** 섹션 안 한 줄 회색 문구(빈 상태). text 는 텍스트. */
 export function emptyLine(text: string): string {
-  return `<p style="margin:0;padding:12px 0;border-bottom:1px solid ${HAIRLINE};font-size:14px;color:${MUTED}">${escapeHtml(text)}</p>`;
+  return `<p style="margin:0;padding:12px 0;border-bottom:1px solid ${HAIRLINE};font-size:14px;color:${MUTED}">${breakLongRuns(escapeHtml(text))}</p>`;
 }
 
 export interface Column {

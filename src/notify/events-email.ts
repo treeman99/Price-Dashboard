@@ -9,6 +9,7 @@ import { escapeHtml, safeHref } from "./html.ts";
 import {
   MUTED,
   TNUM,
+  breakLongRuns,
   cellNote,
   dataTable,
   emailDocument,
@@ -127,21 +128,23 @@ const festivalRow = (f: FestivalItem): EventRowData => ({ ...f, title: f.name, p
  */
 function eventCells(r: EventRowData, today: string): string[] {
   // 붙여 쓴 긴 한국어 낱말(전시회 이름 등)이 좁은 칸을 밀어내지 않게, 넘칠 때만 낱말 안에서 끊는다.
+  // overflow-wrap 은 Apple Mail 용이다 — Gmail iOS 는 지우므로(32자 이름이면 600px 에서 넘침) breakLongRuns 를 함께 건다.
   const name =
-    `<span style="font-size:15px;font-weight:600;line-height:1.45;word-wrap:break-word;overflow-wrap:anywhere">${escapeHtml(r.title)}</span>` +
-    (r.category ? ` <span style="font-size:12.5px;color:${MUTED}">${escapeHtml(r.category)}</span>` : "");
+    `<span style="font-size:15px;font-weight:600;line-height:1.45;word-wrap:break-word;overflow-wrap:anywhere">${breakLongRuns(escapeHtml(r.title))}</span>` +
+    (r.category ? ` <span style="font-size:12.5px;color:${MUTED}">${breakLongRuns(escapeHtml(r.category))}</span>` : "");
   const links = metaLine([
     linkAnchor(r.link),
     calAnchor(r.title, r.startDate, r.endDate, r.place, r.summary, r.link),
   ]);
   // 기간은 "2026.10.12~2026.11.10" 처럼 띄어쓰기가 없어 좁은 폭에서 칸을 밀어낸다 — '~' 뒤에서 줄을 바꿀 수 있게 한다.
+  // 긴 덩어리 끊기는 '~' 양쪽에 따로 건다: 통째로 걸면 평범한 기간도 20자를 넘어 날짜 중간에서 끊긴다.
   const period = r.period
-    ? `<span style="${TNUM}">${escapeHtml(r.period).replace(/~/g, "~<wbr>")}</span>`
+    ? `<span style="${TNUM}">${escapeHtml(r.period).split("~").map(breakLongRuns).join("~<wbr>")}</span>`
     : "";
   return [
     statusCell(r.tag, r.isNew, r.endDate, today),
-    name + (r.summary ? cellNote(escapeHtml(r.summary)) : "") + (links ? cellNote(links) : ""),
-    `<span style="font-size:13px;word-wrap:break-word;overflow-wrap:anywhere">${escapeHtml(r.place)}</span>` +
+    name + (r.summary ? cellNote(breakLongRuns(escapeHtml(r.summary))) : "") + (links ? cellNote(links) : ""),
+    `<span style="font-size:13px;word-wrap:break-word;overflow-wrap:anywhere">${breakLongRuns(escapeHtml(r.place))}</span>` +
       (period ? cellNote(period) : ""),
   ];
 }

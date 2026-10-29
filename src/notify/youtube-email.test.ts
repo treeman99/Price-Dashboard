@@ -66,6 +66,15 @@ test("buildYoutubeEmailHtml: 정상 url 은 앵커·썸네일로 렌더된다", 
   assert.ok(html.includes(`<img src="https://i.ytimg.com/vi/abc123/hqdefault.jpg"`));
 });
 
+test("buildYoutubeEmailHtml: 썸네일은 144×108 속성 + 높이만 고정한 래퍼(대기·깨짐·표시가 같은 자리)", () => {
+  const html = buildYoutubeEmailHtml(snapshot());
+  // hqdefault 480×360 → 144×108. height 가 없으면 깨진 썸네일이 144×144 로 행을 늘린다(10-29 수신본 +554px).
+  assert.ok(html.includes('width="144" height="108"'));
+  assert.ok(html.includes('<div style="height:108px;overflow:hidden"><a href='));
+  // 래퍼 폭은 고정하지 않는다 — width:144px 래퍼는 ≤414px 에서 썸네일 칸이 줄지 못해 가로로 넘친다.
+  assert.doesNotMatch(html, /<div style="[^"]*width:144px[^"]*height:108px/);
+});
+
 test("buildYoutubeEmailHtml: thumbnail 이 null 이면 img 없이 본문만", () => {
   const html = buildYoutubeEmailHtml(snapshot({ categories: [category({ items: [video({ thumbnail: null })] })] }));
   assert.ok(!html.includes("<img"));

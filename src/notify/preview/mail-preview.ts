@@ -69,12 +69,15 @@ function inlineCid(html: string, attachments: MailAttachment[]): { html: string;
 
 // ── 유튜브 썸네일 자리표시 ────────────────────────────────────────────────────────
 
-/** 16:9 회색 판 — 픽스처 썸네일 주소(.invalid)·i.ytimg.com 주소를 렌더 뒤 이것으로 바꾼다(외부 요청 없음). */
+/**
+ * 4:3 회색 판 — 픽스처 썸네일 주소(.invalid)·i.ytimg.com 주소를 렌더 뒤 이것으로 바꾼다(외부 요청 없음).
+ * 실발송 썸네일(hqdefault 480×360)과 같은 비율이라, 메일의 144×108 고정 자리에 빈 띠 없이 꼭 맞는다.
+ */
 const THUMB_PLACEHOLDER = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">` +
-    `<rect width="320" height="180" fill="${SUNKEN}"/>` +
-    `<path d="M146 72v36l30-18z" fill="${MUTED}"/>` +
-    `<text x="160" y="150" font-family="sans-serif" font-size="24" fill="${MUTED}" text-anchor="middle">썸네일 예시</text>` +
+  `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240" viewBox="0 0 320 240">` +
+    `<rect width="320" height="240" fill="${SUNKEN}"/>` +
+    `<path d="M146 92v36l30-18z" fill="${MUTED}"/>` +
+    `<text x="160" y="180" font-family="sans-serif" font-size="24" fill="${MUTED}" text-anchor="middle">썸네일 예시</text>` +
     `</svg>`
 )}`;
 

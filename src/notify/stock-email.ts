@@ -156,7 +156,7 @@ function quoteLine(valueHtml: string, pct: number | null, label?: string): strin
 /** 행 제목 — 이름(semibold) 뒤에 상태 태그. name 은 텍스트, tags 는 html. */
 function nameLine(name: string, tags: string[] = []): string {
   const after = tags.filter(Boolean).map((t) => ` ${t}`).join("");
-  return `<p style="margin:0;font-size:15px;font-weight:600;line-height:1.45;color:${INK}">${escapeHtml(name)}${after}</p>`;
+  return `<p style="margin:0;font-size:15px;font-weight:600;line-height:1.45;color:${INK}">${breakLongRuns(escapeHtml(name))}${after}</p>`;
 }
 
 /** 이름 아래 회색 한 줄 — Mono 종목코드 + 덧붙일 조각(html). */
@@ -205,8 +205,8 @@ function newsSection(items: StockNewsItem[]): string {
             title: it.title,
             href,
             meta: metaLine([
-              escapeHtml(it.source),
-              it.date ? `<span style="font-family:${FONT.mono}">${escapeHtml(it.date)}</span>` : null,
+              breakLongRuns(escapeHtml(it.source)),
+              it.date ? `<span style="font-family:${FONT.mono}">${breakLongRuns(escapeHtml(it.date))}</span>` : null,
             ]),
             summary: it.summary ? breakLongRuns(escapeHtml(it.summary)) : undefined,
             after: href ? textLink(href, "원문 보기") : undefined,
@@ -288,9 +288,9 @@ function summaryTable(s: StockSnapshot): string {
   // 분리한 게 표에서 다시 섞인다 → 이름 아래 회색 묶음 표기에 시장명을 박는다.
   // 미국장 브리핑의 한국 종목은 '해외'가 아니라 '국내'다 — 라벨은 시장 상대적이다(foreignSectionTitle 과 같다).
   const row = (name: string, group: string, tone: number | null, outlook: string | null, rationale: string | null) => [
-    `<span style="font-weight:600">${escapeHtml(name)}</span> ${changeText(tone)}${cellNote(escapeHtml(group))}`,
-    outlook && rationale ? escapeHtml(outlook) : DASH,
-    rationale ? `<span style="font-size:13px;color:${INK_80}">${escapeHtml(rationale)}</span>` : DASH,
+    `<span style="font-weight:600">${breakLongRuns(escapeHtml(name))}</span> ${changeText(tone)}${cellNote(escapeHtml(group))}`,
+    outlook && rationale ? breakLongRuns(escapeHtml(outlook)) : DASH,
+    rationale ? `<span style="font-size:13px;color:${INK_80}">${breakLongRuns(escapeHtml(rationale))}</span>` : DASH,
   ];
 
   const { domestic, foreign } = partitionWatchlist(s);
@@ -331,7 +331,7 @@ function documentHtml(s: StockSnapshot, meta: (string | null | false)[], body: s
     date: s.date,
     meta: metaLine([sessionFactOf(s), ...meta]),
     body,
-    footnote: s.disclaimer ? escapeHtml(s.disclaimer) : undefined,
+    footnote: s.disclaimer ? breakLongRuns(escapeHtml(s.disclaimer)) : undefined,
   });
 }
 
@@ -345,7 +345,7 @@ function documentHtml(s: StockSnapshot, meta: (string | null | false)[], body: s
 export function buildStockEmailHtml(s: StockSnapshot, chartSymbols?: ReadonlySet<string>): string {
   // 휴장이면 오케스트레이터가 호출을 막지만, 방어적으로 짧은 안내만 렌더한다.
   if (s.closed) {
-    const reason = s.closedReason ? `(${escapeHtml(s.closedReason)})` : "";
+    const reason = s.closedReason ? `(${breakLongRuns(escapeHtml(s.closedReason))})` : "";
     return documentHtml(s, ["휴장"], notice(`휴장일${reason}입니다. 오늘은 브리핑이 없습니다.`, "muted"));
   }
 
@@ -387,7 +387,7 @@ export function buildStockEmailHtml(s: StockSnapshot, chartSymbols?: ReadonlySet
     sectionHeader({ title: "종합 테이블", accent }),
     summaryTable(s),
     s.notes
-      ? `<p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:${MUTED};white-space:pre-line">${escapeHtml(s.notes)}</p>`
+      ? `<p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:${MUTED};white-space:pre-line">${breakLongRuns(escapeHtml(s.notes))}</p>`
       : "",
   ].join("\n");
 

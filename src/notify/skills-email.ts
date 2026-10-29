@@ -10,6 +10,7 @@ import {
   MUTED,
   TNUM,
   TONE,
+  breakLongRuns,
   cellNote,
   dataTable,
   emailDocument,
@@ -133,10 +134,13 @@ function repoCell(e: SkillRankEntry): string {
   const archived = repo.archived ? ` ${statusTag("보관됨", "warn")}` : "";
   // 요약이 없으면 원문 description 으로 폴백한다(둘 다 없으면 안내 문구) — 목록이 비면 안 된다.
   const desc = repo.summary ?? repo.description ?? "설명이 없는 저장소입니다.";
-  const badges = metaLine([repo.language && escapeHtml(repo.language), repo.license && escapeHtml(repo.license)]);
+  const badges = metaLine([
+    repo.language && breakLongRuns(escapeHtml(repo.language)),
+    repo.license && breakLongRuns(escapeHtml(repo.license)),
+  ]);
   return (
     `<span style="font-size:15px">${title}</span>${archived}` +
-    cellNote(`<span style="white-space:pre-line">${escapeHtml(desc)}</span>`) +
+    cellNote(`<span style="white-space:pre-line">${breakLongRuns(escapeHtml(desc))}</span>`) +
     (badges ? cellNote(badges) : "")
   );
 }
@@ -220,7 +224,7 @@ export function buildSkillsEmailHtml(s: SkillsSnapshot, cycleLabel: string = ski
   }
 
   // 수집이 실패하면 지난 회차 스냅샷이 그대로 남는다 — notes 는 그 사실을 적어 둔 유일한 자리라 맨 위에 띄운다(화면과 같음).
-  const notes = s.notes ? notice(`<span style="white-space:pre-line">${escapeHtml(s.notes)}</span>`, "warn") : "";
+  const notes = s.notes ? notice(`<span style="white-space:pre-line">${breakLongRuns(escapeHtml(s.notes))}</span>`, "warn") : "";
 
   return emailDocument({
     tab: "skills",

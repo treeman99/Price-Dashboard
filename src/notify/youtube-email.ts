@@ -50,17 +50,20 @@ export async function sendYoutubeIMessage(s: YoutubeSnapshot): Promise<boolean> 
 
 /** 채널 · 핸들 · 게시일 · 조회수 · 길이. 아이콘 대신 가운데점으로만 나눈다(화면 행 메타와 같은 순서). */
 function videoMeta(v: YoutubeVideo): string {
+  const text = (s: string) => breakLongRuns(escapeHtml(s));
   return metaLine([
-    escapeHtml(v.channel),
-    v.channelHandle && escapeHtml(v.channelHandle),
-    escapeHtml(v.date),
-    v.views && escapeHtml(v.views),
-    v.duration && escapeHtml(v.duration),
+    text(v.channel),
+    v.channelHandle && text(v.channelHandle),
+    text(v.date),
+    v.views && text(v.views),
+    v.duration && text(v.duration),
   ]);
 }
 
 /** 썸네일 폭. 화면 좁은 폭(w-36)과 같은 144px — 390px 에서도 글 칸이 200px 남는다. */
 const THUMB_W = 144;
+/** 썸네일 높이. curate.ts thumbFor() 가 늘 hqdefault(480×360, 4:3)를 주므로 144px 폭이면 108px. */
+const THUMB_H = 108;
 
 /**
  * 영상 한 행 — 화면 VideoRow 처럼 카드 없이 [썸네일 | 제목·메타·요약·영상 보기] 두 칸, 아래 헤어라인.
@@ -79,11 +82,16 @@ function videoRow(v: YoutubeVideo): string {
   };
   if (!thumbSrc) return articleRow(row);
 
-  const img = `<img src="${escapeAttr(thumbSrc)}" alt="" width="${THUMB_W}" style="display:block;width:${THUMB_W}px;max-width:100%;height:auto;border:0;border-radius:3px;background:${SUNKEN}" />`;
-  const thumb = href ? `<a href="${escapeAttr(href)}" style="display:block;text-decoration:none">${img}</a>` : img;
-  const title = href
-    ? `<a href="${escapeAttr(href)}" style="color:${INK};text-decoration:none">${escapeHtml(v.title)}</a>`
-    : escapeHtml(v.title);
+  // height 속성은 로드 전 자리(144×108) 잡기용 — 없으면 깨진 썸네일이 144×144 정사각형이 돼 행이 늘어난다(10-29 +554px).
+  // 속성 비율은 alt 가 비어 있을 때만 깨진 상자에 먹으므로, 증시 차트(9f73ddb)처럼 높이 고정 div 로 모든 상태를 108px 에 가둔다.
+  // 폭은 고정하지 않는다: width:144px 를 주면 ≤414px 에서 썸네일 칸이 줄지 못해 가로로 넘친다
+  // (data/gmail-jump-investigation/round3/report-A-coldload.md §5).
+  const img = `<img src="${escapeAttr(thumbSrc)}" alt="" width="${THUMB_W}" height="${THUMB_H}" style="display:block;width:${THUMB_W}px;max-width:100%;height:auto;border:0;border-radius:3px;background:${SUNKEN}" />`;
+  const link = href ? `<a href="${escapeAttr(href)}" style="display:block;text-decoration:none">${img}</a>` : img;
+  const thumb = `<div style="height:${THUMB_H}px;overflow:hidden">${link}</div>`;
+  // 제목은 표 칸 안이라 긴 덩어리(URL 등)가 그대로 남으면 칸 최소 폭이 돼 표 전체를 민다(600px 에서 +354px).
+  const text = breakLongRuns(escapeHtml(v.title));
+  const title = href ? `<a href="${escapeAttr(href)}" style="color:${INK};text-decoration:none">${text}</a>` : text;
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid ${HAIRLINE}"><tr>
 <td valign="top" width="${THUMB_W}" style="width:${THUMB_W}px;padding:14px 14px 14px 0;vertical-align:top">${thumb}</td>
 <td valign="top" style="padding:14px 0;vertical-align:top">
@@ -96,7 +104,7 @@ ${row.after ? `<p style="margin:8px 0 0;font-size:12.5px;color:${MUTED}">${row.a
 
 /** 카테고리 제목 — 이모지는 사용자가 정한 데이터라 화면처럼 그대로 둔다. */
 function categoryTitle(cat: YoutubeCategory): string {
-  return `${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ""}${escapeHtml(cat.label)}`;
+  return `${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ""}${breakLongRuns(escapeHtml(cat.label))}`;
 }
 
 /** 유튜브 소식 이메일 HTML. 순수 함수 — 발송하지 않는다. */

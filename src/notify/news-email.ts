@@ -38,7 +38,7 @@ function relatedHtml(item: NewsItem): string {
   const links = item.related
     .map((r) => {
       const href = safeHref(r.link);
-      return href ? textLink(href, r.label) : escapeHtml(r.label);
+      return href ? textLink(href, r.label) : breakLongRuns(escapeHtml(r.label));
     })
     .join(" · ");
   return `관련 출처: ${links}`;
@@ -46,11 +46,12 @@ function relatedHtml(item: NewsItem): string {
 
 function itemRow(item: NewsItem): string {
   const href = safeHref(item.link);
-  const links = [href ? textLink(href, "원문 보기") : "", relatedHtml(item)].filter(Boolean).join("&nbsp;&nbsp;·&nbsp;&nbsp;");
+  // 점 뒤는 일반 공백 — 관련 출처가 길면 거기서 줄이 바뀐다(metaLine 과 같은 규칙).
+  const links = [href ? textLink(href, "원문 보기") : "", relatedHtml(item)].filter(Boolean).join("&nbsp;&nbsp;· ");
   return articleRow({
     title: item.title,
     href,
-    meta: metaLine([escapeHtml(item.source), escapeHtml(item.date)]),
+    meta: metaLine([breakLongRuns(escapeHtml(item.source)), breakLongRuns(escapeHtml(item.date))]),
     summary: breakLongRuns(escapeHtml(item.summary)),
     after: links || undefined,
   });
@@ -58,7 +59,7 @@ function itemRow(item: NewsItem): string {
 
 /** 카테고리 제목 — 이모지는 사용자가 정한 데이터라 화면처럼 그대로 둔다. */
 function categoryTitle(cat: NewsCategory): string {
-  return `${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ""}${escapeHtml(cat.label)}`;
+  return `${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ""}${breakLongRuns(escapeHtml(cat.label))}`;
 }
 
 /** 뉴스 다이제스트 이메일 HTML. 순수 함수 — 발송하지 않는다. */
