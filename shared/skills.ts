@@ -135,7 +135,71 @@ export interface SkillAccess {
   network: number;
   /** 발견된 신호 종류(중복 제거, 표시용). 예: ["WebFetch","curl","MCP"] */
   signals: string[];
+  /**
+   * 외부 스킬을 빼도 나머지가 도는가. **kind 가 `partial` 일 때만** 있다 — 전부 로컬이면 뺄 것이
+   * 없고, 전부 외부면 빼고 남는 것이 없다. 옛 스냅샷·캐시에는 없으므로 화면은 없으면 그리지 않는다.
+   */
+  separability?: SkillSeparability;
 }
+
+/**
+ * ── 분리 가능성 판정 ──────────────────────────────────────────────────────────
+ *
+ * 질문은 하나다 — **"네트워크를 쓰는 스킬을 지우고 나머지만 남겨도 문제없이 도는가."**
+ * 근거는 네트워크 판정과 같은 SKILL.md 본문이다. 로컬 스킬 본문이 외부 스킬을 가리키는지를 본다.
+ * ★ LLM 이 판정하지 않는다(위 네트워크 판정과 같은 이유).
+ *
+ * 참조는 강도가 다른 두 갈래로 나눈다(2026-10-31 실제 저장소 표본으로 정했다).
+ *   - `file`   — 외부 스킬 **디렉터리 안의 파일**을 쓴다. 예: kharmanskyi/open-steps 의
+ *                `bash <this skill's folder>/../os-big-picture/scripts/census.sh`.
+ *                그 디렉터리를 지우면 파일이 사라지므로 **깨진다고 확정**할 수 있다.
+ *   - `invoke` — 외부 스킬을 **이름으로 부르거나 가리킨다**(`/story-long-scan`, "the pr-lens skill",
+ *                백틱으로 감싼 스킬 이름). 다음 단계 추천일 수도, 필수 단계일 수도 있다 —
+ *                본문만으로는 가릴 수 없으므로 단정하지 않고 '확인 필요'로 둔다.
+ *
+ * ★★ 판정은 네트워크 판정과 같은 방향으로 **비대칭**이다.
+ *   - 참조를 **찾으면** 그 사실은 참이다(근거를 links 로 화면까지 올린다).
+ *   - 참조를 **못 찾은 것**은 전수 검사일 때만 "분리 가능"으로 단정한다. 표본이면 읽지 않은 스킬이
+ *     외부 스킬을 부를 수 있으므로 `separable-sampled`(추정)로 내린다.
+ *
+ * ⚠️ 한계: SKILL.md 본문만 본다. 로컬 스킬의 scripts/·references/ 안에서 외부 스킬을 부르는 경우와,
+ *    여러 스킬이 함께 쓰는 공용 스크립트는 보지 못한다. 화면 툴팁이 이 한계를 함께 적는다.
+ */
+export type SkillSeparabilityKind =
+  /** 전수 검사, 외부 스킬을 참조하는 로컬 스킬 0 → 빼도 된다 */
+  | "separable"
+  /** 표본 검사, 참조 0 → 빼도 될 것으로 '추정' */
+  | "separable-sampled"
+  /** 로컬 스킬이 외부 스킬을 이름으로 부르거나 가리킨다(파일 의존은 없음) → 확인 필요 */
+  | "referenced"
+  /** 로컬 스킬이 외부 스킬 디렉터리의 파일을 쓴다 → 빼면 깨진다 */
+  | "dependent";
+
+/** 참조 강도. 위 머리말의 두 갈래. */
+export type SkillRefVia = "file" | "invoke";
+
+/** 로컬 스킬 1건이 외부 스킬 1건을 가리키는 근거 1건. */
+export interface SkillRef {
+  /** 가리키는 외부 스킬 이름(SkillUnit.name). */
+  to: string;
+  via: SkillRefVia;
+  /** 본문에서 잡힌 그 부분(최대 80자). 사용자가 툴팁에서 "무엇을 보고"를 그대로 읽는다. */
+  evidence: string;
+}
+
+/** 저장소 단위 분리 가능성 판정. */
+export interface SkillSeparability {
+  kind: SkillSeparabilityKind;
+  /** 검사한 로컬 스킬 수(= access.checked - access.network). */
+  local: number;
+  /** 그중 외부 스킬을 하나라도 참조하는 로컬 스킬 수. */
+  dependents: number;
+  /** 근거 목록(from = 로컬 스킬 이름). 화면 툴팁용이라 최대 SKILLS_SEPARABILITY_LINKS 건만 싣는다. */
+  links: Array<SkillRef & { from: string }>;
+}
+
+/** SkillSeparability.links 최대 건수. 툴팁 한 칸에 들어갈 만큼만. */
+export const SKILLS_SEPARABILITY_LINKS = 6;
 
 /** 저장소 안의 개별 스킬 1건. 펼쳐보기 목록의 한 줄. */
 export interface SkillUnit {
@@ -147,6 +211,11 @@ export interface SkillUnit {
   url: string;
   /** 이 스킬에서 발견된 네트워크 신호. **빈 배열이면 로컬**이다. */
   signals: string[];
+  /**
+   * **로컬 스킬에만** 있다: 이 스킬 본문이 가리키는 같은 저장소의 외부(네트워크) 스킬.
+   * 비었거나 없으면 외부 스킬을 참조하지 않는다. 옛 캐시에는 없다(신호 정의 버전이 바뀌어 재스캔된다).
+   */
+  refs?: SkillRef[];
 }
 
 /**
