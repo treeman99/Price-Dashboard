@@ -3,16 +3,21 @@ import assert from "node:assert/strict";
 import {
   attachAccess,
   decideAccessKind,
+  decideSeparability,
   detectSignals,
+  detectSkillRefs,
   frontMatter,
+  linkSkillRefs,
   pickSkillPaths,
   sampleEvenly,
   scanRepo,
   scanRepos,
   SCAN_SIGNATURE_VERSION,
   unitName,
+  type RepoScan,
 } from "./scan.ts";
-import type { SkillRankEntry, SkillRepo } from "../../shared/skills.ts";
+import { SKILLS_SEPARABILITY_LINKS } from "../../shared/skills.ts";
+import type { SkillAccess, SkillRankEntry, SkillRepo, SkillUnit } from "../../shared/skills.ts";
 
 /**
  * 네트워크 접근 스캐너 회귀 테스트.
@@ -252,9 +257,347 @@ test("frontMatter 는 머리 YAML 블록만 돌려준다(없으면 빈 문자열
 // ── ★ 신호 정의 버전 (캐시 무효화) ──
 
 test("★ 신호 정의 버전은 결정적이고 개정 번호를 담는다", () => {
-  assert.match(SCAN_SIGNATURE_VERSION, /^v2-[0-9a-f]{8}$/);
+  // v3 = 참조(refs) 추가. 옛 v2 캐시 행은 units 에 refs 가 없어 '분리 가능'으로 오판되므로
+  // 버전이 바뀌어 통째로 재스캔돼야 한다.
+  assert.match(SCAN_SIGNATURE_VERSION, /^v3-[0-9a-f]{8}$/);
   // 같은 프로세스에서 두 번 읽어도 같다(캐시 키라 흔들리면 매주 전수 재스캔이 된다).
   assert.equal(SCAN_SIGNATURE_VERSION, SCAN_SIGNATURE_VERSION);
+});
+
+// ── ★ 로컬 → 외부 스킬 참조 (분리 가능성의 근거) ──
+
+/**
+ * 아래 다섯 본문은 2026-10-31 실제 저장소에서 받은 SKILL.md 의 **원문 발췌**다(줄 그대로).
+ * 규칙은 이 다섯으로 정했으므로, 규칙을 고치다 이 중 하나라도 뒤집히면 그 수정이 틀린 것이다.
+ */
+
+/** kharmanskyi/open-steps skills/os-whats-next/SKILL.md 63~67행 — 형제 스킬 디렉터리의 스크립트를 실행한다. */
+const OS_WHATS_NEXT = [
+  '   list, the "Worth retiring" rows, and each `Stage` with the date beside it.',
+  '   Before you put a "Worth retiring" row to the user, measure it again. From the project root, run',
+  "   `bash <this skill's folder>/../os-big-picture/scripts/census.sh .`. The `.`",
+  "   is the project, not the skill folder. If the script is missing or does not",
+  '   run, say so and call that row "not checked".',
+].join("\n");
+
+/** zenstory-ai/oh-story-claudecode skills/story-long-write/SKILL.md 120~129행 — 흐름표의 슬래시 명령. */
+const STORY_LONG_WRITE = [
+  "## 流程衔接",
+  "",
+  "**流水线：** 长篇",
+  "**位置：** 写作（第 3/3 步）",
+  "",
+  "| 时机 | 跳转到 | 命令 |",
+  "|---|---|---|",
+  "| 写完，去 AI 味 | story-deslop | `/story-deslop` |",
+  "| 想对比参考书 | story-long-analyze | `/story-long-analyze` |",
+  "| 需要市场方向 | story-long-scan | `/story-long-scan` |",
+  "| 想改写成短篇 | story-short-write | `/story-short-write` |",
+].join("\n");
+
+/** coldteadotai/pr-lens skills/eli5/SKILL.md 16·27·37행 — 산문 "the pr-lens skill" 과, 참조가 아닌 CLI·디렉터리. */
+const PR_LENS_ELI5 = [
+  "The PR Lens manual and its reference pages. The PR Lens CLI prints both. Run `npx @coldtea/pr-lens-cli@latest skill`, then `npx @coldtea/pr-lens-cli@latest skill references`, and read both before your first document. The manual's rules hold here except where this page marks an **Override**.",
+  "3. **Write `.pr-lens/graph.json`.** Follow `references/graph-document.md`, plus these rules:",
+  "4. **Write the growing views.** **Override, views.** This replaces the C4 decision tree in the pr-lens skill. eli5 views are the same picture growing, not a drill-down.",
+].join("\n");
+
+/**
+ * alibaba/open-code-review skills/open-code-review-delegate/SKILL.md 1~18·205~207행.
+ * 외부 스킬 `open-code-review` 가 제 이름의 **앞부분**·npm 패키지·저장소 URL 로만 나온다 → 참조 0건이어야 한다.
+ */
+const OCR_DELEGATE = [
+  "---",
+  "name: open-code-review-delegate",
+  "description: >",
+  "  Delegation mode for open-code-review (OCR). Instead of OCR calling an LLM",
+  "  endpoint, this skill instructs the host agent to perform the code review",
+  "  itself, using OCR only for deterministic engineering: file selection and",
+  "  rule resolution. Use when the host agent should drive the review with its",
+  "  own LLM capabilities.",
+  "license: Apache-2.0",
+  "compatibility: >",
+  "  Requires the `ocr` CLI installed (via `npm install -g",
+  "  @alibaba-group/open-code-review` or GitHub release binary). Does NOT",
+  "  require a configured LLM endpoint — delegation mode is LLM-free on the",
+  "  OCR side.",
+  "metadata:",
+  "  author: alibaba",
+  "  homepage: https://github.com/alibaba/open-code-review",
+  '  version: "1.0.0"',
+  "---",
+  "",
+  "```bash",
+  "npm install -g @alibaba-group/open-code-review",
+  "```",
+].join("\n");
+
+/** kharmanskyi/open-steps skills/os-step-by-step/SKILL.md 1~25행 — 백틱으로 감싼 형제 스킬 언급. */
+const OS_STEP_BY_STEP = [
+  "---",
+  "name: os-step-by-step",
+  "description: >-",
+  "  ALWAYS invoke this skill when you need the user to act - run a command,",
+  "  paste a secret, click, approve - and whenever they ask how to do something",
+  "  or say they do not know what to do. Picking which task comes next",
+  "  is os-whats-next; this skill is for doing the thing in front of you.",
+  "allowed-tools:",
+  '  - "Read(~/.claude/open-steps/**)"',
+  "---",
+  "",
+  "# os-step-by-step",
+  "",
+  "The user is not stuck because the task is hard - they cannot tell what they",
+  "are being asked to do. This skill turns \"I need something from you\" into an",
+  "instruction a person who does not read code can follow without a follow-up",
+  "question. `os-done-or-not` reports *that* something is needed; this one says",
+  "exactly *how*.",
+].join("\n");
+
+const OPEN_STEPS_EXTERNALS = [
+  { name: "os-big-picture", path: "skills/os-big-picture/SKILL.md" },
+  { name: "os-check-work", path: "skills/os-check-work/SKILL.md" },
+  { name: "os-done-or-not", path: "skills/os-done-or-not/SKILL.md" },
+  { name: "os-whats-next", path: "skills/os-whats-next/SKILL.md" },
+];
+
+/** 외부 스킬 1건(skills/<name>/SKILL.md) 짧은 표기. */
+const ext = (name: string, path = `skills/${name}/SKILL.md`) => ({ name, path });
+
+test("★ 실측: 형제 스킬 디렉터리의 스크립트를 쓰면 file 참조다 (open-steps os-whats-next)", () => {
+  assert.deepEqual(detectSkillRefs(OS_WHATS_NEXT, OPEN_STEPS_EXTERNALS, "os-whats-next"), [
+    { to: "os-big-picture", via: "file", evidence: "../os-big-picture/scripts/census.sh" },
+  ]);
+});
+
+test("★ 실측: 흐름표의 `/외부스킬` 은 invoke, 로컬 스킬 명령은 externals 에 없으니 무시한다 (oh-story)", () => {
+  const externals = [ext("story-cover"), ext("story-long-scan"), ext("story-short-scan"), ext("story")];
+  // `/story-deslop` 은 외부 `story` 의 접두 일치일 뿐이다 — 이름 경계가 `-` 를 이름 글자로 쳐야 한다.
+  assert.deepEqual(detectSkillRefs(STORY_LONG_WRITE, externals, "story-long-write"), [
+    { to: "story-long-scan", via: "invoke", evidence: "/story-long-scan" },
+  ]);
+});
+
+test("★ 실측: 산문 'the pr-lens skill' 은 invoke 다 — CLI 패키지·.pr-lens/ 디렉터리는 아니다 (pr-lens eli5)", () => {
+  const externals = [ext("agent-skill", "packages/agent-skill/SKILL.md"), ext("pr-lens")];
+  assert.deepEqual(detectSkillRefs(PR_LENS_ELI5, externals, "eli5"), [
+    { to: "pr-lens", via: "invoke", evidence: "pr-lens skill" },
+  ]);
+});
+
+test("★ 실측: 제 이름의 앞부분·URL·npm 패키지로만 나오는 외부 스킬은 참조가 아니다 (open-code-review-delegate)", () => {
+  // 같은 이름의 외부 스킬이 두 디렉터리에 있다(실제 저장소 구조 그대로).
+  const externals = [
+    ext("open-code-review", "plugins/open-code-review/skills/open-code-review/SKILL.md"),
+    ext("open-code-review"),
+  ];
+  assert.deepEqual(detectSkillRefs(OCR_DELEGATE, externals, "open-code-review-delegate"), []);
+});
+
+test("★ 실측: 백틱으로 감싼 형제 스킬 언급은 invoke 다 — 산문 속 맨 이름은 아니다 (open-steps os-step-by-step)", () => {
+  // "is os-whats-next;" 는 맨 이름이라 잡지 않는다. 백틱 언급은 찾은 사실이라 '확인 필요'로 올린다.
+  assert.deepEqual(detectSkillRefs(OS_STEP_BY_STEP, OPEN_STEPS_EXTERNALS, "os-step-by-step"), [
+    { to: "os-done-or-not", via: "invoke", evidence: "`os-done-or-not`" },
+  ]);
+});
+
+test("★ 이름 경계: 외부 이름을 접두로 가진 더 긴 이름은 참조가 아니다(`\\b` 를 쓰면 잡힌다)", () => {
+  const externals = [ext("open-code-review")];
+  const text = [
+    "Run /open-code-review-delegate now.",
+    "See `open-code-review-delegate` and $open-code-review-delegate.",
+    "The open-code-review-delegate skill does it.",
+    "skill: open-code-review-delegate",
+    "Skill(open-code-review-delegate)",
+    "python ../open-code-review-delegate/scripts/x.py",
+    "skills/open-code-review-delegate/SKILL.md",
+  ].join("\n");
+  assert.deepEqual(detectSkillRefs(text, externals, "other"), []);
+});
+
+test("★ URL·패키지 안의 이름은 참조가 아니다", () => {
+  const externals = [ext("open-code-review"), ext("pdf")];
+  const text = [
+    "homepage: https://github.com/alibaba/open-code-review",
+    "npm install -g @alibaba-group/open-code-review",
+    "`@alibaba-group/open-code-review`",
+    // 원격 페이지 링크는 로컬 디렉터리를 지워도 안 깨진다 — file 이 아니다.
+    "https://github.com/acme/skills/blob/main/skills/pdf/scripts/fill.py",
+    "see github.com/acme/skills/tree/main/skills/pdf/README.md",
+    "[pdf](https://example.org/x/skills/pdf/SKILL.md)",
+  ].join("\n");
+  assert.deepEqual(detectSkillRefs(text, externals, "other"), []);
+});
+
+test("슬래시 명령은 경로·파일과 구분한다", () => {
+  const externals = [ext("pdf")];
+  for (const notRef of ["cat /tmp/pdf", "~/pdf", "./pdf", "/pdf/scripts", "open /pdf.md", "a/pdf", "skills/pdf/"]) {
+    assert.deepEqual(detectSkillRefs(notRef, externals, "other"), [], notRef);
+  }
+  for (const ref of ["/pdf", "Run /pdf.", "(/pdf)", "| /pdf |", "`/pdf`", "**/pdf**", "运行「/pdf」", "use $pdf"]) {
+    assert.equal(detectSkillRefs(ref, externals, "other")[0]?.via, "invoke", ref);
+  }
+});
+
+test("invoke 의 명시 형태 — Skill(…)·skill: …·skill \"…\"·<name> skill(줄바꿈 1회 허용)", () => {
+  const externals = [ext("pdf")];
+  const cases: Array<[string, string]> = [
+    ["Skill(pdf)", "Skill(pdf"],
+    ['Use the Skill tool with skill: "pdf"', 'skill: "pdf'],
+    ['load skill "pdf" first', 'skill "pdf"'],
+    ["use the **pdf** skill", "**pdf** skill"],
+    ["use the `pdf` skill", "`pdf` skill"],
+    ["then hand off to the pdf\n   skill for output", "pdf skill"],
+  ];
+  for (const [text, evidence] of cases) {
+    assert.deepEqual(detectSkillRefs(text, externals, "other"), [{ to: "pdf", via: "invoke", evidence }], text);
+  }
+});
+
+test("file 갈래의 세 형태 — ../<name>/…, …skills/<name>/…, 저장소 기준 <dir>/…", () => {
+  const pdf = [ext("pdf")];
+  for (const text of [
+    "python ../pdf/scripts/fill.py",
+    "python ../../pdf/scripts/fill.py",
+    "python .claude/skills/pdf/scripts/fill.py",
+    "python ${CLAUDE_PLUGIN_ROOT}/skills/pdf/fill.py",
+    "read .agents/skills/pdf/reference.md",
+    "[pdf](../pdf/SKILL.md)",
+  ]) {
+    assert.equal(detectSkillRefs(text, pdf, "other")[0]?.via, "file", text);
+  }
+  // `my-skills/` 는 다른 디렉터리다(앞 경계). 디렉터리만 적고 파일이 없으면 위치 안내다.
+  assert.deepEqual(detectSkillRefs("cp my-skills/pdf/x.py .", pdf, "other"), []);
+  assert.deepEqual(detectSkillRefs("put it under skills/pdf/ please", pdf, "other"), []);
+  // 저장소 기준 디렉터리 경로. dir 에 `/` 가 있을 때만 — 한 마디짜리는 아무 상대 경로와 겹친다.
+  assert.deepEqual(detectSkillRefs("bash tools/pdf/run.sh", [ext("pdf", "tools/pdf/SKILL.md")], "other"), [
+    { to: "pdf", via: "file", evidence: "tools/pdf/run.sh" },
+  ]);
+  assert.deepEqual(detectSkillRefs("bash pdf/run.sh", [ext("pdf", "pdf/SKILL.md")], "other"), []);
+});
+
+test("file 이 invoke 보다 우선하고, 같은 외부 스킬은 1건이다", () => {
+  const refs = detectSkillRefs("first /pdf, then `pdf`, then python ../pdf/scripts/fill.py", [ext("pdf")], "x");
+  assert.deepEqual(refs, [{ to: "pdf", via: "file", evidence: "../pdf/scripts/fill.py" }]);
+  // 여러 외부 스킬이면 file 근거가 앞에 온다.
+  const two = detectSkillRefs("/alpha then ../beta/x.sh", [ext("alpha"), ext("beta")], "x");
+  assert.deepEqual(two.map((r) => `${r.to}:${r.via}`), ["beta:file", "alpha:invoke"]);
+});
+
+test("자기 이름은 건너뛰고, 3자 미만 이름은 invoke 를 보지 않는다(file 은 본다)", () => {
+  assert.deepEqual(detectSkillRefs("/pdf and `pdf`", [ext("pdf")], "pdf"), []);
+  assert.deepEqual(detectSkillRefs("/ai and `ai` and the ai skill", [ext("ai")], "x"), []);
+  assert.deepEqual(detectSkillRefs("python skills/ai/run.py", [ext("ai")], "x"), [
+    { to: "ai", via: "file", evidence: "skills/ai/run.py" },
+  ]);
+});
+
+test("루트 SKILL.md 외부 스킬은 file 갈래가 없다(디렉터리가 따로 없다) — invoke 는 본다", () => {
+  const root = [ext("toolkit", "SKILL.md")];
+  assert.deepEqual(detectSkillRefs("bash ../toolkit/scripts/x.sh", root, "x"), []);
+  assert.deepEqual(detectSkillRefs("Use the toolkit skill.", root, "x"), [
+    { to: "toolkit", via: "invoke", evidence: "toolkit skill" },
+  ]);
+});
+
+test("이름의 정규식 메타문자는 글자 그대로다", () => {
+  assert.deepEqual(detectSkillRefs("run /c++-tools", [ext("c++-tools")], "x")[0]?.to, "c++-tools");
+  assert.deepEqual(detectSkillRefs("run /cxx-tools", [ext("c.x-tools")], "x"), []);
+});
+
+test("근거는 80자 안으로 자른다", () => {
+  const refs = detectSkillRefs(`python ../pdf/${"a".repeat(200)}.py`, [ext("pdf")], "x");
+  assert.equal(refs[0].evidence.length, 80);
+  assert.ok(refs[0].evidence.startsWith("../pdf/aaa"));
+  assert.ok(refs[0].evidence.endsWith("…"));
+});
+
+// ── ★★ 분리 가능성 판정 (비대칭) ──
+
+function acc(kind: SkillAccess["kind"], total: number, checked: number, network: number): SkillAccess {
+  return { kind, total, checked, network, signals: network > 0 ? ["WebFetch"] : [] };
+}
+function unit(name: string, over: Partial<SkillUnit> = {}): SkillUnit {
+  return { name, path: `skills/${name}/SKILL.md`, url: "u", signals: [], ...over };
+}
+const EXT = unit("fetcher", { signals: ["WebFetch"] });
+
+test("★ partial 이 아니면 분리 가능성은 없다(undefined) — 뺄 것도, 남을 것도 없다", () => {
+  const units = [EXT, unit("a", { refs: [{ to: "fetcher", via: "file", evidence: "../fetcher/x" }] })];
+  for (const kind of ["local", "local-sampled", "external", "no-skill", "unknown"] as const) {
+    assert.equal(decideSeparability(acc(kind, 2, 2, kind === "external" ? 2 : 0), units), undefined, kind);
+  }
+});
+
+test("★ file 참조가 하나라도 있으면 dependent — invoke 가 섞여 있어도", () => {
+  const units = [
+    EXT,
+    unit("a", { refs: [{ to: "fetcher", via: "invoke", evidence: "/fetcher" }] }),
+    unit("b", { refs: [{ to: "fetcher", via: "file", evidence: "../fetcher/x.sh" }] }),
+    unit("c"),
+  ];
+  const s = decideSeparability(acc("partial", 4, 4, 1), units)!;
+  assert.equal(s.kind, "dependent");
+  assert.equal(s.local, 3);
+  assert.equal(s.dependents, 2);
+  // 강한 근거가 앞이다 — 툴팁 칸이 모자라도 "빼면 깨진다"의 근거는 잘리지 않는다.
+  assert.deepEqual(s.links, [
+    { from: "b", to: "fetcher", via: "file", evidence: "../fetcher/x.sh" },
+    { from: "a", to: "fetcher", via: "invoke", evidence: "/fetcher" },
+  ]);
+});
+
+test("invoke 참조만 있으면 referenced(확인 필요) — 단정하지 않는다", () => {
+  const units = [EXT, unit("a", { refs: [{ to: "fetcher", via: "invoke", evidence: "`fetcher`" }] }), unit("b")];
+  const s = decideSeparability(acc("partial", 3, 3, 1), units)!;
+  assert.equal(s.kind, "referenced");
+  assert.equal(s.dependents, 1);
+});
+
+test("★ 참조 0건: 전수면 separable, 표본이면 separable-sampled 다(비대칭)", () => {
+  const units = [EXT, unit("a"), unit("b")];
+  assert.equal(decideSeparability(acc("partial", 3, 3, 1), units)!.kind, "separable");
+  // 하나만 덜 봐도 단정하지 않는다 — 읽지 않은 스킬이 외부 스킬을 부를 수 있다.
+  assert.equal(decideSeparability(acc("partial", 4, 3, 1), units)!.kind, "separable-sampled");
+  assert.equal(decideSeparability(acc("partial", 864, 40, 38), units)!.kind, "separable-sampled");
+  const s = decideSeparability(acc("partial", 3, 3, 1), units)!;
+  assert.deepEqual([s.local, s.dependents, s.links], [2, 0, []]);
+});
+
+test("links 는 최대 SKILLS_SEPARABILITY_LINKS 건, 같은 이름 복제 유닛의 같은 줄은 한 번만 싣는다", () => {
+  const many = Array.from({ length: 10 }, (_, i) =>
+    unit(`l${i}`, { refs: [{ to: "fetcher", via: "invoke", evidence: "/fetcher" }] })
+  );
+  const s = decideSeparability(acc("partial", 11, 11, 1), [EXT, ...many])!;
+  assert.equal(s.links.length, SKILLS_SEPARABILITY_LINKS);
+  assert.equal(s.dependents, 10);
+  // 실측: claude-mem 은 mem-search 가 두 디렉터리에 있고 둘 다 install 을 부른다.
+  const dup = [
+    unit("install", { signals: ["WebFetch"] }),
+    unit("mem-search", { path: "a/skills/mem-search/SKILL.md", refs: [{ to: "install", via: "invoke", evidence: "install skill" }] }),
+    unit("mem-search", { path: "b/skills/mem-search/SKILL.md", refs: [{ to: "install", via: "invoke", evidence: "install skill" }] }),
+  ];
+  const d = decideSeparability(acc("partial", 3, 3, 1), dup)!;
+  assert.equal(d.links.length, 1, "툴팁에서 구별되지 않는 같은 줄은 한 칸이면 된다");
+  assert.equal(d.dependents, 2, "깨지는 디렉터리는 둘이므로 유닛 수는 그대로 센다");
+});
+
+test("외부 유닛에 refs 가 있어도 판정에 넣지 않는다(외부끼리의 참조는 함께 지워진다)", () => {
+  const units = [unit("fetcher", { signals: ["WebFetch"], refs: [{ to: "x", via: "file", evidence: "../x/y" }] }), unit("a")];
+  assert.equal(decideSeparability(acc("partial", 2, 2, 1), units)!.kind, "separable");
+});
+
+test("linkSkillRefs 는 로컬 유닛에만, 찾았을 때만 refs 를 붙인다", () => {
+  const out = linkSkillRefs([
+    { unit: unit("fetcher", { signals: ["WebFetch"] }), text: "WebFetch ../other/x.sh" },
+    { unit: unit("a"), text: "run /fetcher" },
+    { unit: unit("b"), text: "로컬만" },
+  ]);
+  assert.equal("refs" in out[0], false, "외부 유닛에는 붙이지 않는다");
+  assert.deepEqual(out[1].refs, [{ to: "fetcher", via: "invoke", evidence: "/fetcher" }]);
+  assert.equal("refs" in out[2], false, "비면 필드 자체를 넣지 않는다");
+  // 외부가 하나도 없으면(=local 저장소) 아무것도 붙지 않는다.
+  assert.equal("refs" in linkSkillRefs([{ unit: unit("a"), text: "/fetcher" }])[0], false);
 });
 
 // ── 트리 → 경로·이름·표본 ──
@@ -467,6 +810,28 @@ test("레이트리밋(403)은 브랜치를 바꿔 재시도하지 않는다 — 
   assert.equal(calls.length, 1, "master 로 다시 시도하지 않는다");
 });
 
+test("★ scanRepo 는 로컬 유닛에 외부 스킬 참조(refs)를 붙이고, 본문은 결과에 싣지 않는다", async () => {
+  const net = fakeNet({
+    "skills/fetcher/SKILL.md": "Use WebFetch to load pages.",
+    "skills/report/SKILL.md": "Run `python ../fetcher/scripts/pull.py` first. BODY-MARKER-7f3a",
+    "skills/notes/SKILL.md": "Local notes only. If you need fresh data, run /fetcher.",
+    "skills/plain/SKILL.md": "Local only.",
+  });
+  const r = await scanRepo(repo(), { ...fast, ...net });
+  assert.equal(r.access.kind, "partial");
+  const byName = new Map(r.units.map((u) => [u.name, u]));
+  assert.deepEqual(byName.get("report")!.refs, [
+    { to: "fetcher", via: "file", evidence: "../fetcher/scripts/pull.py" },
+  ]);
+  assert.deepEqual(byName.get("notes")!.refs, [{ to: "fetcher", via: "invoke", evidence: "/fetcher" }]);
+  assert.equal("refs" in byName.get("plain")!, false, "참조가 없으면 필드를 넣지 않는다");
+  assert.equal("refs" in byName.get("fetcher")!, false, "외부 유닛에는 붙이지 않는다");
+  // 본문은 판정이 끝나면 버린다 — 캐시(skill_scans.units)로 SKILL.md 원문이 새면 안 된다.
+  assert.ok(!JSON.stringify(r).includes("BODY-MARKER-7f3a"));
+  // 저장소 판정은 scanRepo 가 아니라 attachAccess 가 붙인다(캐시분과 한 경로).
+  assert.equal(r.access.separability, undefined);
+});
+
 // ── scanRepos (캐시·레이트리밋·집계) ──
 
 test("캐시가 맞으면 트리를 조회하지 않는다(유일한 core 쿼터 소비 지점을 아낀다)", async () => {
@@ -591,4 +956,48 @@ test("스캔 결과가 있는 항목에만 access/units 를 붙인다(원본은 
   // 스캔이 없으면 access 를 아예 넣지 않는다 — 화면은 없으면 칩을 그리지 않는다.
   assert.equal(out[1].repo.access, undefined);
   assert.equal(a.access, undefined, "원본 SkillRepo 는 그대로다");
+  // partial 이 아니면 separability 필드 자체가 없다.
+  assert.equal("separability" in out[0].repo.access!, false);
+});
+
+/**
+ * skills.ts 가 캐시 적중분을 RepoScan 으로 되돌리는 모양 그대로다 — branch 는 null, access 는
+ * 캐시 컬럼 5개로 다시 만든 것(separability 없음), units 는 JSON 컬럼을 파싱한 것.
+ */
+function cachedScan(id: number, access: SkillAccess, units: SkillUnit[]): RepoScan {
+  return { repoId: id, fullName: "acme/skills", branch: null, access, units: JSON.parse(JSON.stringify(units)) };
+}
+
+test("★ attachAccess 는 캐시 모양(units 에 refs)에서도 분리 가능성을 유도한다", () => {
+  const a = repo({ id: 1 });
+  const units = [
+    unit("fetcher", { signals: ["WebFetch"] }),
+    unit("report", { refs: [{ to: "fetcher", via: "invoke", evidence: "`fetcher`" }] }),
+    unit("plain"),
+  ];
+  const [out] = attachAccess(
+    [{ rank: 1, repo: a, prevRank: null, starsGained: null }],
+    new Map([[1, cachedScan(1, acc("partial", 3, 3, 1), units)]])
+  );
+  assert.deepEqual(out.repo.access!.separability, {
+    kind: "referenced",
+    local: 2,
+    dependents: 1,
+    links: [{ from: "report", to: "fetcher", via: "invoke", evidence: "`fetcher`" }],
+  });
+  // 네트워크 판정 필드는 그대로 남는다.
+  assert.equal(out.repo.access!.kind, "partial");
+  assert.equal(out.repo.units!.length, 3);
+});
+
+test("★ refs 를 모르는 옛 캐시 모양은 '분리 가능'으로 읽힌다 — 그래서 버전 무효화가 필수다", () => {
+  // 이 테스트는 결함을 고정하는 것이 아니라 **왜 SCAN_SIGNATURE_VERSION 을 올렸는지**를 고정한다.
+  // v2 행이 loadScans 를 통과하면 화면에 근거 없는 "빼도 됨"이 뜬다.
+  const old = [unit("fetcher", { signals: ["WebFetch"] }), unit("report"), unit("plain")];
+  const [out] = attachAccess(
+    [{ rank: 1, repo: repo({ id: 1 }), prevRank: null, starsGained: null }],
+    new Map([[1, cachedScan(1, acc("partial", 3, 3, 1), old)]])
+  );
+  assert.equal(out.repo.access!.separability!.kind, "separable");
+  assert.ok(!SCAN_SIGNATURE_VERSION.startsWith("v2-"), "옛 버전 행은 캐시 미스여야 한다");
 });

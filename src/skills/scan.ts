@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
-import { SKILLS_SCAN_CAP } from "../../shared/skills.ts";
+import { SKILLS_SCAN_CAP, SKILLS_SEPARABILITY_LINKS } from "../../shared/skills.ts";
 import type {
   SkillAccess,
   SkillAccessKind,
   SkillRankEntry,
+  SkillRef,
+  SkillRefVia,
   SkillRepo,
+  SkillSeparability,
+  SkillSeparabilityKind,
   SkillUnit,
 } from "../../shared/skills.ts";
 
@@ -36,6 +40,13 @@ import type {
  * pushed_at 만 봐서, 신호를 고쳐도 그 저장소가 다시 푸시될 때까지 옛 판정이 그대로 나왔다
  * (= 이 파일을 고치는 일 자체가 반영되지 않았다). 지금은 신호표가 바뀌면 버전 문자열이 바뀌고
  * 캐시가 통째로 미스가 되므로, 손으로 `DELETE FROM skill_scans;` 를 칠 일이 없다.
+ * 로컬→외부 스킬 **참조 규칙**(아래 SKILL_REF_RULES)도 같은 해시에 들어간다.
+ *
+ * ── 분리 가능성: 참조는 스캔 때, 판정은 붙일 때 ─────────────────────────────
+ * "외부 스킬을 지워도 나머지가 도는가"는 로컬 스킬 본문이 같은 저장소의 외부 스킬을 가리키는지로
+ * 본다. 본문은 스캔하는 그 순간에만 메모리에 있으므로 참조(refs)는 scanRepo 가 units 에 붙여
+ * 캐시까지 싣고, 저장소 판정(separability)은 attachAccess 가 units 에서 **매번 유도**한다.
+ * 그래서 캐시 적중분과 신규 스캔분이 한 경로로 판정되고, 캐시 표(skill_scans)는 그대로다.
  *
  * ── 쿼터: GITHUB_TOKEN 을 넣으면 이 절 전체가 사라진다 ──────────────────────
  * 트리 호출은 core 버킷을 쓰고 **무인증은 60회/시간**이다. 노출 후보가 byStars TOP 50 ∪
@@ -263,28 +274,268 @@ export function detectSignals(text: string): string[] {
   return out;
 }
 
+// ── 로컬 → 외부 스킬 참조 (분리 가능성의 근거) ───────────
+
+/**
+ * 질문은 하나다 — **"네트워크를 쓰는 스킬을 지우고 나머지만 남겨도 도는가."**
+ * 두 갈래(file / invoke)의 뜻과 판정의 비대칭은 shared/skills.ts '분리 가능성 판정' 머리말이 정본이고,
+ * 여기는 그 근거를 SKILL.md 본문에서 **형태로만** 찾는 규칙표다(LLM 은 관여하지 않는다).
+ *
+ * 스킬마다 이름이 달라 정규식을 미리 하나로 굳힐 수 없다. 그래서 규칙은 **(이름, 디렉터리) → 정규식**
+ * 함수이고, 캐시 버전 해시에는 자리표시 이름으로 한 번 만들어 본 source 를 넣는다
+ * (SCAN_SIGNATURE_VERSION) — 신호표와 똑같이, 규칙만 고쳐도 옛 캐시가 저절로 버려진다.
+ *
+ * ★ 이름 경계는 `\b` 가 아니라 `(?<![\w-])` / `(?![\w-])` 다. 스킬 이름은 kebab-case 라 `-` 가
+ *   이름의 일부인데 `\b` 는 `-` 를 경계로 친다. 실측(2026-10-31): alibaba/open-code-review 의
+ *   로컬 스킬 `open-code-review-delegate` 본문에는 외부 스킬 이름 `open-code-review` 가 다섯 번
+ *   나오지만 전부 제 이름의 앞부분·`@alibaba-group/open-code-review` 패키지·저장소 URL 이다.
+ *   `\b` 로 끊으면 `-delegate` 앞에서 이름이 끝난 것으로 보고 참조로 잡는다.
+ *
+ * ★ 규칙표는 **강한 것부터** 적는다. 외부 스킬 1건당 첫 적중 하나만 남기므로, 순서가 곧
+ *   "file 이 invoke 보다 우선"이고 툴팁에 올라갈 근거의 우선순위다.
+ */
+interface SkillRefRule {
+  via: SkillRefVia;
+  /**
+   * 외부 스킬 이름·디렉터리(저장소 기준, SKILL.md 를 뺀 경로)로 정규식을 만든다.
+   * 루트 SKILL.md 는 dir 이 null 이다. null 을 돌려주면 이 외부 스킬에는 적용하지 않는다.
+   */
+  build: (name: string, dir: string | null) => RegExp | null;
+}
+
+/** 정규식 메타문자 이스케이프. 스킬 이름에 `.`·`+` 가 든 저장소가 실제로 있다. */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 디렉터리 **뒤에 무언가**(파일·하위 경로)가 와야 file 이다. `skills/x/` 만 적은 문장은 위치 안내이지
+ * 그 디렉터리 안의 파일을 **쓰는** 것이 아니다. 끝은 공백·따옴표·괄호·백틱·`|`(표 칸) 에서 끊는다.
+ */
+const REF_PATH_TAIL = "[\\w.-][^\\s`'\"()<>\\[\\]{}|]*";
+
+/** 이름 뒤 경계. `-` 도 이름 글자로 친다(위 머리말 ★). */
+const REF_NAME_END = "(?![\\w-])";
+
+/**
+ * 슬래시·달러 명령(`/x`, `$x`) **앞에 올 수 있는 글자**. 줄머리·공백·백틱·여는 괄호·따옴표·`|`(표 칸)
+ * 에 마크다운 강조(`*`)·인용(`>`)과 CJK 문장부호를 더했다(zenstory-ai/oh-story-claudecode 처럼 중국어
+ * 본문 저장소가 상위권에 실제로 있다). 부정 후방탐색이라 문자열 맨 앞도 통과한다.
+ * 이 목록에 **없는** 글자 뒤의 `/x` 는 경로·URL·패키지다 — `a/x`, `~/x`, `./x`, `@scope/x`.
+ */
+const REF_CMD_BEFORE = "(?<![^\\s`'\"(\\[{|*>（「『【《“‘：，、])";
+
+/** 스킬 키워드. 이름 쪽은 대소문자를 가리고(PDF ≠ pdf 일 수 있다), 키워드만 세 표기를 받는다. */
+const REF_SKILL_WORD = "(?:skill|Skill|SKILL)";
+
+/**
+ * 참조 규칙표. 위에서부터 강한 순서다.
+ *
+ * file — 외부 스킬 **디렉터리 안의 파일**을 쓴다. 지우면 파일이 사라지므로 깨진다고 확정한다.
+ *   1) `../<name>/…` — 형제 스킬 디렉터리 상대 경로.
+ *      실측: kharmanskyi/open-steps 의 `bash <this skill's folder>/../os-big-picture/scripts/census.sh .`
+ *   2) `skills/<name>/…` — `.claude/skills/`, `.agents/skills/`, `${CLAUDE_PLUGIN_ROOT}/skills/` 도 이
+ *      꼬리로 잡힌다. 앞 경계가 `[\w-]` 가 아니어야 한다(`my-skills/x/` 는 다른 디렉터리다).
+ *   3) `<dir>/…` — 저장소 기준 디렉터리 경로 그대로. dir 에 `/` 가 하나 이상일 때만 쓴다 —
+ *      `pdf/…` 처럼 한 마디짜리는 아무 상대 경로와도 겹친다.
+ *   루트 SKILL.md(dir 없음)는 file 갈래가 없다. 저장소 전체가 그 스킬이라 "그 디렉터리"가 따로 없다.
+ *
+ * invoke — 이름으로 **부르거나 가리킨다**. 다음 단계 추천인지 필수 단계인지는 본문으로 못 가리므로
+ *   '확인 필요'(referenced)까지만 간다. 이름 3자 미만은 이 갈래를 아예 쓰지 않는다(`/ai`, `` `go` ``
+ *   같은 짧은 낱말은 스킬 이름이 아니어도 흔하다).
+ *   4) `Skill(<name>)` — Claude Code 권한 규칙·도구 호출 표기.
+ *   5) `skill: <name>` — Skill 도구 인자·YAML 키.
+ *   6) `skill "<name>"` — 따옴표·백틱으로 감싼 이름.
+ *   7) `/<name>`·`$<name>` — 슬래시 명령(Claude Code)·달러 명령(Codex). 뒤에 이름 글자·`/`·`.`+영숫자가
+ *      오면 경로·파일이다(`/pdf/x`, `/pdf.md`). 실측: oh-story-claudecode 흐름표의 `` `/story-long-scan` ``.
+ *   8) `<name> skill` — 산문. 실측: coldteadotai/pr-lens 의 "the C4 decision tree in the pr-lens skill".
+ *      줄바꿈 하나는 건넌다(open-steps 처럼 78자에서 줄을 꺾어 쓰는 본문이 있다). 앞에 `/`·`.`·`@` 이
+ *      붙으면 경로·패키지라 뺀다(`npx @coldtea/pr-lens-cli@latest skill` 은 CLI 호출이다).
+ *   9) `` `<name>` `` — 백틱으로 **정확히** 감싼 이름. 언급일 수도 있지만 찾은 사실이라 확인 필요로 올린다.
+ *      실측: open-steps 의 "`os-done-or-not` reports *that* something is needed".
+ */
+export const SKILL_REF_RULES: ReadonlyArray<SkillRefRule> = [
+  {
+    via: "file",
+    build: (name, dir) =>
+      dir === null ? null : new RegExp(`(?:\\.\\./)+${escapeRe(name)}/${REF_PATH_TAIL}`),
+  },
+  {
+    via: "file",
+    build: (name, dir) =>
+      dir === null ? null : new RegExp(`(?<![\\w-])skills/${escapeRe(name)}/${REF_PATH_TAIL}`),
+  },
+  {
+    via: "file",
+    build: (_name, dir) =>
+      dir === null || !dir.includes("/")
+        ? null
+        : new RegExp(`(?<![\\w-])${escapeRe(dir)}/${REF_PATH_TAIL}`),
+  },
+  {
+    via: "invoke",
+    build: (name) => new RegExp(`(?<![\\w-])Skill\\([ \\t]*[\`'"]?${escapeRe(name)}${REF_NAME_END}`),
+  },
+  {
+    via: "invoke",
+    build: (name) =>
+      new RegExp(`(?<![\\w-])${REF_SKILL_WORD}[ \\t]*:[ \\t]*[\`'"]?${escapeRe(name)}${REF_NAME_END}`),
+  },
+  {
+    via: "invoke",
+    build: (name) =>
+      new RegExp(`(?<![\\w-])${REF_SKILL_WORD}[ \\t]+[\`'"]${escapeRe(name)}[\`'"]`),
+  },
+  {
+    via: "invoke",
+    build: (name) =>
+      new RegExp(`${REF_CMD_BEFORE}[/$]${escapeRe(name)}(?![\\w/-]|\\.[A-Za-z0-9])`),
+  },
+  {
+    via: "invoke",
+    build: (name) =>
+      new RegExp(
+        `(?<![\\w/.@$-])[\`'"*]{0,2}${escapeRe(name)}[\`'"*]{0,2}` +
+          `(?:[ \\t]+|[ \\t]*\\r?\\n[ \\t]*)${REF_SKILL_WORD}${REF_NAME_END}`
+      ),
+  },
+  {
+    via: "invoke",
+    build: (name) => new RegExp(`\`${escapeRe(name)}\``),
+  },
+];
+
+/** invoke 갈래를 쓰는 최소 이름 길이(위 규칙표 invoke 설명). */
+export const SKILL_REF_INVOKE_MIN_NAME = 3;
+
+/** SkillRef.evidence 최대 길이(계약: 80자). */
+const SKILL_REF_EVIDENCE_MAX = 80;
+
+/**
+ * URL 로 보이는 구간. 참조를 찾기 전에 **같은 길이의 공백으로 지운다**(위치는 그대로라 근거는 원문에서
+ * 자른다). URL 안의 이름은 참조가 아니다 — `https://github.com/alibaba/open-code-review` 는 저장소
+ * 주소이고, `…/blob/main/skills/pdf/SKILL.md` 는 **원격 페이지**라 로컬 디렉터리를 지워도 안 깨진다.
+ * 스킴 없는 `github.com/…` 도 흔해서 흔한 최상위 도메인 뒤 `/` 를 함께 지운다.
+ */
+const REF_URL_MASKS: ReadonlyArray<RegExp> = [
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'`)\]]*/gi,
+  /\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|ai|app|co)\/[^\s<>"'`)\]]*/gi,
+];
+
+function maskUrls(text: string): string {
+  let out = text;
+  for (const re of REF_URL_MASKS) out = out.replace(re, (m) => " ".repeat(m.length));
+  return out;
+}
+
+/** 근거 문구: 공백을 접고 80자 안으로 자른다(툴팁 한 줄). */
+function clipEvidence(s: string): string {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > SKILL_REF_EVIDENCE_MAX ? `${one.slice(0, SKILL_REF_EVIDENCE_MAX - 1)}…` : one;
+}
+
+/**
+ * 로컬 스킬 본문 1건이 가리키는 같은 저장소의 외부 스킬들. 순수 함수다.
+ *
+ * @param text      로컬 스킬의 SKILL.md 본문
+ * @param externals 같은 저장소에서 **읽어 본** 외부(신호 ≥1) 스킬들의 이름·경로
+ * @param selfName  이 로컬 스킬의 이름 — 같은 이름은 건너뛴다(다른 디렉터리의 동명 스킬일 수 있다)
+ *
+ * 외부 스킬 이름 1개당 1건만 돌려준다(file 이 invoke 보다 우선). 같은 이름의 외부 스킬이 여러
+ * 디렉터리에 있으면(alibaba/open-code-review 는 `skills/` 와 `plugins/…/skills/` 에 같은 이름이 둘)
+ * 각각의 디렉터리로 file 갈래를 다시 본다.
+ */
+export function detectSkillRefs(
+  text: string,
+  externals: Array<{ name: string; path: string }>,
+  selfName: string
+): SkillRef[] {
+  if (!text || externals.length === 0) return [];
+  const body = maskUrls(text);
+  const found = new Map<string, SkillRef>();
+  for (const ext of externals) {
+    const name = ext.name;
+    if (!name || name === selfName) continue;
+    const prev = found.get(name);
+    if (prev?.via === "file") continue; // 이미 가장 강한 근거가 있다
+    const slash = ext.path.lastIndexOf("/");
+    const dir = slash < 0 ? null : ext.path.slice(0, slash);
+    for (const rule of SKILL_REF_RULES) {
+      // invoke 는 이름당 1건이면 충분하다(동명 두 번째 외부 스킬은 file 로 올라갈 기회만 본다).
+      if (rule.via === "invoke" && (prev || name.length < SKILL_REF_INVOKE_MIN_NAME)) continue;
+      const re = rule.build(name, dir);
+      const m = re?.exec(body);
+      if (!m) continue;
+      found.set(name, {
+        to: name,
+        via: rule.via,
+        evidence: clipEvidence(text.slice(m.index, m.index + m[0].length)),
+      });
+      break; // 규칙표가 강한 순서라 첫 적중이 이 외부 스킬의 가장 강한 근거다
+    }
+  }
+  const refs = [...found.values()];
+  return [...refs.filter((r) => r.via === "file"), ...refs.filter((r) => r.via === "invoke")];
+}
+
+/**
+ * 읽어 둔 본문으로 **로컬** 유닛에 refs 를 붙인다(비면 필드를 넣지 않는다). 순수 함수다.
+ * 외부 유닛에는 붙이지 않는다 — 질문은 "외부를 지우면 **남는 것**이 도는가"이고, 외부끼리의
+ * 참조(open-steps 의 os-whats-next → os-big-picture 가 바로 그 경우다)는 함께 지워지니 무관하다.
+ */
+export function linkSkillRefs(read: Array<{ unit: SkillUnit; text: string }>): SkillUnit[] {
+  const externals = read
+    .filter((r) => r.unit.signals.length > 0)
+    .map((r) => ({ name: r.unit.name, path: r.unit.path }));
+  return read.map(({ unit, text }) => {
+    if (unit.signals.length > 0 || externals.length === 0) return unit;
+    const refs = detectSkillRefs(text, externals, unit.name);
+    return refs.length > 0 ? { ...unit, refs } : unit;
+  });
+}
+
+/**
+ * 참조 규칙 지문. 자리표시 이름으로 규칙을 한 번씩 만들어 그 source 를 이어 붙인다.
+ * dir 에 `/` 를 넣어야 3번 규칙(`<dir>/…`)도 정규식을 내놓는다.
+ */
+const SKILL_REF_FINGERPRINT = [
+  ...SKILL_REF_RULES.map((r) => {
+    const re = r.build("n4me", "d1r/n4me");
+    return `${r.via} ${re?.source ?? ""} ${re?.flags ?? ""}`;
+  }),
+  ...REF_URL_MASKS.map((re) => `mask ${re.source} ${re.flags}`),
+  `invokeMin=${SKILL_REF_INVOKE_MIN_NAME} evidenceMax=${SKILL_REF_EVIDENCE_MAX}`,
+].join("\n");
+
 /**
  * 신호 정의 버전. **캐시 행에 함께 저장하고, 다르면 캐시를 버리고 다시 스캔한다.**
  *
  * 예전 캐시 키는 `pushed_at` 뿐이었다. 그래서 이 파일의 신호를 고쳐도 그 저장소가 다시 푸시될
  * 때까지 옛 판정이 그대로 나왔다 — 즉 **신호를 고치는 일 자체가 라이브에 반영되지 않았다.**
  *
- * 수동 번호와 신호표 해시를 함께 쓴다. 번호는 "이번에 무엇을 왜 바꿨나"를 사람이 읽는 자리이고,
- * 해시는 그 번호를 **올리는 걸 잊어도** 캐시가 저절로 무효화되게 하는 안전망이다(정확히 그
- * 망각이 이번 회귀의 원인이었다).
+ * 수동 번호와 신호표·참조 규칙 해시를 함께 쓴다. 번호는 "이번에 무엇을 왜 바꿨나"를 사람이 읽는
+ * 자리이고, 해시는 그 번호를 **올리는 걸 잊어도** 캐시가 저절로 무효화되게 하는 안전망이다(정확히
+ * 그 망각이 이번 회귀의 원인이었다).
+ *
+ * ★ 참조 규칙이 해시에 들어가야 하는 이유: 옛 캐시 행의 units 에는 refs 가 없다. 그 행을 그대로
+ *   쓰면 attachAccess 는 "참조 0건" 으로 읽어 partial 저장소를 전부 **분리 가능**으로 내놓는다 —
+ *   찾지 않은 것을 없는 것으로 적는, 이 탭이 가장 피하는 오류다.
  *
  *   1: 최초 정의 (WebFetch·curl·api호스트·MCP(mcp__|mcpServers)·외부CLI)
  *   2: MCP 선언형·원격 URL 추가, curl 설치 관용구·예시 도메인 위양성 제거 (2026-09-02)
+ *   3: 로컬→외부 스킬 참조(refs) 추가 (2026-10-31)
  */
-export const SCAN_SIGNATURE_REVISION = 2;
+export const SCAN_SIGNATURE_REVISION = 3;
 
-/** `v2-<신호표 sha256 앞 8자>`. skill_scans.sig_version 에 그대로 들어간다. */
+/** `v3-<신호표+참조 규칙 sha256 앞 8자>`. skill_scans.sig_version 에 그대로 들어간다. */
 export const SCAN_SIGNATURE_VERSION = `v${SCAN_SIGNATURE_REVISION}-${createHash("sha256")
   .update(
     NETWORK_SIGNALS.map(
       (s) => `${s.name} ${s.re.source} ${s.re.flags} ${s.scope ?? ""} ${s.skipLine?.source ?? ""}`
     ).join("\n")
   )
+  .update("\n--refs--\n")
+  .update(SKILL_REF_FINGERPRINT)
   .digest("hex")
   .slice(0, 8)}`;
 
@@ -318,6 +569,58 @@ export function decideAccessKind(input: {
   if (input.checked <= 0) return "unknown";
   if (input.network > 0) return input.network >= input.checked ? "external" : "partial";
   return input.checked >= input.total ? "local" : "local-sampled";
+}
+
+/**
+ * 분리 가능성 판정 — "외부 스킬을 지우고 나머지만 남겨도 도는가". 순수 함수다.
+ * **위 decideAccessKind 와 같은 방향으로 비대칭이다.**
+ *
+ *   - 참조를 **찾으면 사실**이다. 표본이어도 "이 로컬 스킬이 저 외부 스킬을 가리킨다"는 참이다.
+ *       file 참조가 하나라도 → dependent   (지우면 파일이 사라진다 = 깨진다)
+ *       invoke 참조만        → referenced  (부르긴 하는데 필수인지는 본문으로 못 가린다)
+ *   - 참조를 **못 찾은 것은 없다는 증거가 아니다.**
+ *       전수(checked >= total)에서 0건 → separable          (단정 OK)
+ *       표본(checked <  total)에서 0건 → separable-sampled  (읽지 않은 스킬이 부를 수 있다)
+ *
+ * partial 이 아니면 undefined 다 — 전부 로컬이면 뺄 것이 없고, 전부 외부면 남는 것이 없다.
+ * units 에 refs 가 없다는 것은 "참조 0건"으로 읽힌다. 그래서 refs 를 모르는 **옛 캐시 행이 여기로
+ * 오면 안 되고**, 그것을 SCAN_SIGNATURE_VERSION(참조 규칙 해시 포함)이 막는다.
+ */
+export function decideSeparability(
+  access: SkillAccess,
+  units: SkillUnit[]
+): SkillSeparability | undefined {
+  if (access.kind !== "partial") return undefined;
+  const locals = units.filter((u) => u.signals.length === 0);
+  const refs = locals.flatMap((u) => (u.refs ?? []).map((r) => ({ from: u.name, ...r })));
+  const files = refs.filter((r) => r.via === "file");
+  const invokes = refs.filter((r) => r.via === "invoke");
+  // 같은 이름의 로컬 스킬이 여러 디렉터리에 복제된 저장소가 있다(실측: thedotmack/claude-mem 의
+  // claude-mem-cursor/·claude-mem-grok-bot/ 아래 mem-search 둘이 똑같이 install 을 부른다).
+  // 툴팁에서는 구별되지 않는 같은 줄이 6칸을 나눠 먹으므로 from→to 로 한 번만 싣는다.
+  // (dependents 는 유닛 수 그대로 센다 — 실제로 깨지는 디렉터리는 둘이다.)
+  const seen = new Set<string>();
+  const links = [...files, ...invokes].filter((l) => {
+    const key = `${l.from}\u0000${l.to}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const kind: SkillSeparabilityKind =
+    files.length > 0
+      ? "dependent"
+      : invokes.length > 0
+        ? "referenced"
+        : access.checked >= access.total
+          ? "separable"
+          : "separable-sampled";
+  return {
+    kind,
+    local: Math.max(0, access.checked - access.network),
+    dependents: locals.filter((u) => (u.refs?.length ?? 0) > 0).length,
+    // 툴팁에는 강한 근거부터 — "빼면 깨진다"의 근거가 "부른다" 뒤로 밀려 잘리면 안 된다.
+    links: links.slice(0, SKILLS_SEPARABILITY_LINKS),
+  };
 }
 
 // ── 트리 → SKILL.md 경로 ────────────────────────────────
@@ -587,15 +890,21 @@ export async function scanRepo(
     const raw = `https://raw.githubusercontent.com/${repo.fullName}/${encodeURIComponent(branch)}/${encodePath(path)}`;
     const got = await getText(raw, { "User-Agent": "daily-price-dashboard/skills" }, deps);
     if (!got || got.status !== 200) return null; // 못 읽은 파일은 '신호 없음'이 아니라 '미검사'다
-    return {
+    const unit: SkillUnit = {
       name: unitName(path, repo.name),
       path,
       url: `https://github.com/${repo.fullName}/blob/${encodeURIComponent(branch)}/${encodePath(path)}`,
       signals: detectSignals(got.text),
-    } satisfies SkillUnit;
+    };
+    // 본문은 참조 판정이 끝날 때까지만 들고 있다. 어느 스킬이 외부인지는 **전부 읽은 뒤에야**
+    // 알 수 있으므로 파일을 읽는 이 자리에서는 참조를 판정할 수 없다.
+    return { unit, text: got.text };
   });
 
-  const units = results.filter((u): u is SkillUnit => u !== null);
+  // 결과(=캐시)에는 본문을 싣지 않는다 — units 의 refs 만 남는다.
+  const units = linkSkillRefs(
+    results.filter((r): r is { unit: SkillUnit; text: string } => r !== null)
+  );
   const network = units.filter((u) => u.signals.length > 0).length;
   const signals = [...new Set(units.flatMap((u) => u.signals))];
 
@@ -808,6 +1117,10 @@ export function formatKindCounts(scans: Map<number, RepoScan>): string {
 /**
  * 랭킹 항목에 판정을 붙인다(attachSummaries 와 같은 모양 — 원본을 변형하지 않는다).
  * 스캔 결과가 없는 항목은 access 를 **아예 넣지 않는다** — 화면은 없으면 칩을 그리지 않는다.
+ *
+ * 분리 가능성(access.separability)은 **여기 한 곳에서** units 의 refs 로 유도한다. 캐시 적중분도
+ * units 에 refs 가 그대로 남아 있으므로 캐시·신규 스캔이 같은 판정을 받는다(캐시 표는 무수정).
+ * partial 이 아니면 separability 필드 자체를 넣지 않는다.
  */
 export function attachAccess(
   entries: SkillRankEntry[],
@@ -816,6 +1129,8 @@ export function attachAccess(
   return entries.map((e) => {
     const scan = scans.get(e.repo.id);
     if (!scan) return e;
-    return { ...e, repo: { ...e.repo, access: scan.access, units: scan.units } };
+    const separability = decideSeparability(scan.access, scan.units);
+    const access: SkillAccess = separability ? { ...scan.access, separability } : scan.access;
+    return { ...e, repo: { ...e.repo, access, units: scan.units } };
   });
 }
