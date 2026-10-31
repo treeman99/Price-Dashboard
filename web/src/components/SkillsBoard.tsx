@@ -1,9 +1,23 @@
 import { Fragment, useEffect, useId, useState } from "react";
-import { Archive, ChevronDown, Globe, Loader2, Lock, RefreshCw, Star, TrendingUp } from "lucide-react";
+import {
+  Archive,
+  ChevronDown,
+  FileSymlink,
+  Globe,
+  Link2,
+  Loader2,
+  Lock,
+  RefreshCw,
+  Scissors,
+  Star,
+  TrendingUp,
+} from "lucide-react";
 import type {
   SkillAccess,
   SkillRankEntry,
   SkillRankKind,
+  SkillRef,
+  SkillSeparability,
   SkillUnit,
   SkillWindow,
   SkillsSnapshot,
@@ -206,11 +220,175 @@ function AccessTag({ access }: { access: SkillAccess }) {
 }
 
 /**
+ * 분리 판정 툴팁에만 붙는 **판정의 한계** 한 줄. LOCAL_LIMIT 과 같은 자리·같은 이유다.
+ *
+ * ★ 우리가 뒷받침할 수 있는 주장은 "빼도 된다"가 아니라 **"SKILL.md 본문에서 외부 스킬을 가리키는
+ *   근거를 찾지 못했다"** 이다. 스캐너는 로컬 스킬의 scripts/·references/ 안쪽과 공용 스크립트를 읽지 않는다.
+ * ★ 그래서 '못 찾은' 쪽(separable·separable-sampled)에만 붙인다. referenced·dependent 는 **찾은 것**이라
+ *   근거(links)를 그대로 보여 주고, 그 옆에 "놓칠 수 있다"를 적어 발견 사실을 흐리지 않는다.
+ */
+const SEP_LIMIT =
+  "SKILL.md 본문 기준입니다 — 로컬 스킬의 scripts/·references/ 안의 호출과 여러 스킬이 함께 쓰는 공용 스크립트는 보지 못합니다.";
+
+/** 참조 강도 → 툴팁·펼침 목록에 쓰는 짧은 말. 계약 머리말의 두 갈래(file | invoke)와 1:1. */
+const VIA_LABEL: Record<SkillRef["via"], string> = { file: "파일", invoke: "호출" };
+
+/**
+ * 분리 가능성 태그의 표기 규칙(라벨·톤·툴팁 줄). accessTag() 와 같은 모양으로 한자리에 모은다.
+ *
+ * ★ 강도 순서 dependent > referenced > separable 을 **톤으로도** 읽히게 한다.
+ *   - dependent  → warn: 외부 스킬 폴더의 파일을 쓴다 = 빼면 깨진다는 **확정**이다. 바로 위
+ *                  '외부 접근' 태그와 같은 무게(주의)이고, 앱 오류가 아니므로 error(빨강)까지는 가지 않는다.
+ *   - referenced → info: 참조는 찾았지만 필수 단계인지는 **모른다**. "모른다"를 위험색으로 칠하지
+ *                  않는다는 accessTag 의 원칙 그대로 — 경고가 아니라 '확인할 거리'로 둔다.
+ *   - separable  → success. 표본 추정(separable-sampled)은 local-sampled 처럼 점선 + '추정 · 표본'
+ *                  문구로 확정과 구분한다 — 계약이 두 kind 를 나눈 이유를 화면이 뭉개지 않게.
+ * ★ 네 상태는 라벨 문구(분리 가능 / 추정 · 표본 / 확인 필요 / 불가)와 아이콘만으로도 갈린다(색을 못 봐도).
+ */
+function separabilityTag(
+  s: SkillSeparability,
+  a: SkillAccess,
+  refsListed: boolean
+): {
+  label: string;
+  tone: TagTone;
+  icon: "cut" | "ref" | "file";
+  dashed?: boolean;
+  /** 툴팁·sr-only 에 한 줄씩 싣는 문장들. */
+  lines: string[];
+} | null {
+  // 파일 의존(확정)을 이름 참조보다 먼저 — 판정을 '불가'로 만든 근거가 맨 위에 와야 한다.
+  const links = [...s.links].sort((x, y) => Number(y.via === "file") - Number(x.via === "file"));
+  const linkLines = links.map((l) => `· ${l.from} → ${l.to} (${VIA_LABEL[l.via]}: ${l.evidence})`);
+  // links 는 (로컬 스킬, 외부 스킬) 쌍이라 한 스킬이 여러 줄일 수 있다 — links 길이가 아니라
+  // **근거에 나온 로컬 스킬 수**를 dependents 와 비교해야 '외 N개'가 실제로 빠진 스킬 수가 된다.
+  const hidden = s.dependents - new Set(links.map((l) => l.from)).size;
+  const moreLine =
+    hidden > 0
+      ? [`외 ${num(hidden)}개 스킬도 참조합니다${refsListed ? " (펼치기 목록에 전부 표시)" : ""}.`]
+      : [];
+  const found = `로컬 스킬 ${num(s.local)}개 중 ${num(s.dependents)}개가 외부 스킬을 참조합니다`;
+
+  switch (s.kind) {
+    case "separable":
+      return {
+        label: "분리 가능",
+        tone: "success",
+        icon: "cut",
+        lines: [
+          `로컬 스킬 ${num(s.local)}개 모두 외부 스킬을 참조하지 않습니다(전수 검사).`,
+          "외부 스킬을 빼도 나머지는 그대로 동작할 것으로 봅니다.",
+          SEP_LIMIT,
+        ],
+      };
+    case "separable-sampled":
+      return {
+        label: "분리 가능 추정 · 표본",
+        tone: "success",
+        icon: "cut",
+        dashed: true,
+        lines: [
+          `검사한 로컬 스킬 ${num(s.local)}개는 외부 스킬을 참조하지 않습니다.`,
+          `표본(${num(a.total)}개 중 ${num(a.checked)}개 검사)이라 나머지는 확인하지 못했습니다 — 분리 가능하다고 단정하지 않습니다.`,
+          SEP_LIMIT,
+        ],
+      };
+    case "referenced":
+      return {
+        label: `분리 확인 필요 · 참조 ${num(s.dependents)}`,
+        tone: "info",
+        icon: "ref",
+        lines: [
+          `${found} — 이름으로 부르거나 가리킵니다. 필수 단계인지는 본문만으로 가릴 수 없어 확인이 필요합니다.`,
+          ...linkLines,
+          ...moreLine,
+        ],
+      };
+    case "dependent":
+      return {
+        label: `분리 불가 · 의존 ${num(s.dependents)}`,
+        tone: "warn",
+        icon: "file",
+        lines: [
+          `${found} — 외부 스킬 폴더의 파일을 쓰는 스킬이 있어, 외부 스킬을 빼면 깨집니다.`,
+          ...linkLines,
+          ...moreLine,
+        ],
+      };
+    default:
+      // 계약에 없는 kind(서버가 먼저 배포된 경우 등)를 '불가'로 떨어뜨리면 없는 판정을 단정하게 된다.
+      // separability 가 없을 때와 똑같이 아무것도 그리지 않는다.
+      return null;
+  }
+}
+
+/**
+ * 분리 가능성 태그 1개 — "외부(네트워크) 스킬을 지우고 나머지만 남겨도 도는가". AccessTag 바로 아래에 둔다.
+ * 구조는 AccessTag 와 같다(규칙 함수 + StatusTag + Tip + 같은 문장의 sr-only).
+ *
+ * `refsListed` = 펼치기 목록에 참조가 실려 있는가. 툴팁의 '외 N개'가 어디서 나머지를 볼 수 있는지
+ * 가리킬 수 있을 때만 그렇게 적는다(목록이 없는데 "펼치기에 표시"라고 하면 거짓 안내다).
+ *
+ * `tipUp` = 툴팁을 위로 연다. 근거가 붙으면 툴팁이 행 3~4개 높이라, 아래쪽 행에서 아래로 열면
+ * 좁은 화면에선 가로 스크롤 상자 밑에 잘리고, 넓은 화면에선 화면 밖으로 나간다 — 그걸 보려고
+ * 스크롤하는 순간 hover 가 풀려 툴팁이 닫히므로 사실상 못 읽는다.
+ */
+function SeparabilityTag({
+  sep,
+  access,
+  refsListed,
+  tipUp,
+}: {
+  sep: SkillSeparability;
+  access: SkillAccess;
+  refsListed: boolean;
+  tipUp: boolean;
+}) {
+  const c = separabilityTag(sep, access, refsListed);
+  if (!c) return null;
+  return (
+    <StatusTag tone={c.tone} className={cn("group/tt relative gap-1", c.dashed && "border-dashed")}>
+      {c.icon === "cut" && <Scissors aria-hidden className="h-3 w-3" />}
+      {c.icon === "ref" && <Link2 aria-hidden className="h-3 w-3" />}
+      {c.icon === "file" && <FileSymlink aria-hidden className="h-3 w-3" />}
+      {c.label}
+      <span className="sr-only"> — {c.lines.join(" ")}</span>
+      {/*
+        AccessTag 툴팁과 같은 왼쪽 정렬·줄바꿈에, 근거(links)가 최대 6줄 붙어 더 길다.
+        - 폭: 기본은 AccessTag 와 같은 13rem 이다. 375px 에서 표를 오른쪽 끝까지 밀었을 때 태그 왼쪽에서
+          스크롤 상자 오른쪽 끝까지가 ≈236px 라(실측) 그보다 넓으면 오른쪽이 잘린다. 열 폭이 넉넉해지는
+          xl 부터만 넓혀 근거 문장(최대 80자)이 덜 잘게 접히게 한다. 경로·백틱 문자열은 공백이 없어
+          [overflow-wrap:anywhere] 로 끊는다.
+        - hidden → block: Tip 기본은 opacity 만 바꿔 **숨은 동안에도 자리를 차지**한다. 이 툴팁은 키가
+          커서, 숨어 있는 동안에도 좁은 화면의 가로 스크롤 상자(overflow-x 면 y 도 auto)를 세로로 늘리고
+          넓은 화면에선 페이지 아래에 빈 스크롤을 만든다. 보일 때만 자리를 차지하게 한다.
+      */}
+      <Tip
+        className={cn(
+          "left-0 hidden w-max max-w-[13rem] translate-x-0 whitespace-normal text-left leading-snug xl:max-w-[17rem]",
+          "group-focus-within/tt:block group-hover/tt:block",
+          tipUp && "bottom-full top-auto mb-1.5 mt-0"
+        )}
+      >
+        {c.lines.map((line, i) => (
+          <span key={i} className={cn("block [overflow-wrap:anywhere]", i > 0 && "mt-1")}>
+            {line}
+          </span>
+        ))}
+      </Tip>
+    </StatusTag>
+  );
+}
+
+/**
  * 펼침 목록 — 표본에 든 개별 스킬을 한 줄씩. 표 아래 전체 폭 확장 행에 다단으로 흘린다
  * (최대 40줄이라 한 단으로 두면 행 하나가 화면을 다 먹는다).
  *
  * ★ `units` 는 표본이라 `access.total` 보다 짧을 수 있다. 남은 개수를 그냥 "N개 더" 로만
  *   적으면 나머지가 로컬인 줄 오해하므로, 검사하지 못했다는 사실을 함께 적는다.
+ * ★ 로컬 유닛이 외부 스킬을 가리키면(refs) 줄 끝에 "→ 대상" 을 단다. 분리 태그 툴팁은 근거를
+ *   최대 6건만 싣지만(SKILLS_SEPARABILITY_LINKS) 여기엔 검사한 유닛의 참조가 **전부** 있다 —
+ *   "어느 스킬을 같이 남겨야 하나"를 실제로 따져 볼 자리는 이 목록이다.
  */
 function UnitsList({ units, access, id }: { units: SkillUnit[]; access?: SkillAccess; id: string }) {
   const rest = access ? access.total - units.length : 0;
@@ -220,8 +398,13 @@ function UnitsList({ units, access, id }: { units: SkillUnit[]; access?: SkillAc
         {units.map((u) => {
           const href = safeHref(u.url);
           const net = u.signals.length > 0;
+          // refs 는 로컬 유닛에만 온다(계약). 혹시 외부 유닛에 실려 와도 '외부가 외부를 부른다'는
+          // 분리 판정과 무관한 정보라 그리지 않는다.
+          const refs = net ? [] : unitRefs(u.refs);
           return (
-            <li key={u.path} className="flex break-inside-avoid gap-1.5 py-0.5 text-[12px] leading-relaxed">
+            // relative: sr-only(absolute)의 기준을 이 줄로 묶는다. 없으면 기준이 표의 가로 스크롤 상자
+            // **바깥** 조상이 되어 상자에 잘리지 않고, 줄 끝 참조 문구의 sr-only 가 375px 에서 문서 폭을 늘린다.
+            <li key={u.path} className="relative flex break-inside-avoid gap-1.5 py-0.5 text-[12px] leading-relaxed">
               {net ? (
                 <Globe aria-hidden className="mt-[4px] h-3 w-3 shrink-0 text-tone-warn" />
               ) : (
@@ -244,6 +427,31 @@ function UnitsList({ units, access, id }: { units: SkillUnit[]; access?: SkillAc
                 {net && (
                   <span className="ml-2 break-words text-muted-foreground">{u.signals.join(", ")}</span>
                 )}
+                {refs.length > 0 && (
+                  <>
+                    {/* 보이는 쪽은 짧게("→ a, b (파일)"), 읽는 쪽은 강도까지 문장으로 — 화살표만으론 뜻이 안 읽힌다. */}
+                    <span aria-hidden className="ml-2 break-words text-[11px] text-muted-foreground">
+                      →{" "}
+                      {refs.map((r, i) => (
+                        <Fragment key={r.to}>
+                          {i > 0 && ", "}
+                          <span
+                            title={`${VIA_LABEL[r.via]}: ${r.evidence}`}
+                            className={cn(r.via === "file" && "font-medium text-tone-warn")}
+                          >
+                            {r.to}
+                            {r.via === "file" && " (파일)"}
+                          </span>
+                        </Fragment>
+                      ))}
+                    </span>
+                    <span className="sr-only">
+                      {" "}
+                      — 외부 스킬 참조:{" "}
+                      {refs.map((r) => `${r.to}(${r.via === "file" ? "파일 의존" : "이름 호출"})`).join(", ")}
+                    </span>
+                  </>
+                )}
               </span>
             </li>
           );
@@ -256,6 +464,19 @@ function UnitsList({ units, access, id }: { units: SkillUnit[]; access?: SkillAc
       )}
     </div>
   );
+}
+
+/**
+ * 유닛 1건의 참조를 대상(외부 스킬)별 1건으로 접는다. 같은 대상을 이름으로도 부르고 파일로도 쓰면
+ * **파일(더 강한 쪽)** 을 남긴다 — "빼면 깨진다"가 "확인 필요"에 묻히면 안 된다. 파일 의존을 앞에 둔다.
+ */
+function unitRefs(refs: SkillRef[] | undefined): SkillRef[] {
+  const byTo = new Map<string, SkillRef>();
+  for (const r of refs ?? []) {
+    const prev = byTo.get(r.to);
+    if (!prev || (prev.via !== "file" && r.via === "file")) byTo.set(r.to, r);
+  }
+  return [...byTo.values()].sort((x, y) => Number(y.via === "file") - Number(x.via === "file"));
 }
 
 /** 순위 변동 표시. prevRank 가 null 이면 신규 진입(NEW). */
@@ -283,8 +504,14 @@ function RankDelta({ rank, prevRank }: { rank: number; prevRank: number | null }
 /** 값이 없는 칸. 빈칸으로 두면 표에서 줄이 밀린 것처럼 보인다. */
 const Dash = () => <span className="text-muted-foreground/50">—</span>;
 
-/** 랭킹 한 줄(+ 펼쳤을 때 그 아래 확장 행). */
-function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }) {
+/**
+ * 분리 태그 툴팁을 위로 여는 아래쪽 행 수. 근거 6건이 붙은 툴팁이 행 3~4개 높이라(실측 ≈300px,
+ * 행 ≈85px) 그만큼은 위로 열고, 그 위쪽 행은 아래로 연다.
+ */
+const TIP_UP_ROWS = 4;
+
+/** 랭킹 한 줄(+ 펼쳤을 때 그 아래 확장 행). `tipUp` 은 SeparabilityTag 주석 참고. */
+function RankRow({ entry, kind, tipUp }: { entry: SkillRankEntry; kind: SkillRankKind; tipUp: boolean }) {
   const r = entry.repo;
   const href = safeHref(r.url);
   // 펼침 상태는 줄마다 독립이다(RankRow 인스턴스가 곧 한 줄이므로 지역 상태로 충분).
@@ -385,10 +612,19 @@ function RankRow({ entry, kind }: { entry: SkillRankEntry; kind: SkillRankKind }
           네트워크 접근 — 이 행에서 topic 보다 먼저 읽혀야 할 값이라 칸을 따로 둔다.
           ★ access 가 없으면 태그를 **아예 그리지 않는다.** 이 기능 배포 전 스냅샷을 보는
             사용자에게 "미확인" 자리표시자를 띄우면 없는 판정을 있는 것처럼 읽히게 된다.
+            분리 태그(separability)도 같은 원칙이다 — partial 일 때만 오고, 옛 스냅샷엔 없다.
         */}
         <td className="whitespace-nowrap">
           <div className="flex flex-col items-start gap-1">
             {r.access && <AccessTag access={r.access} />}
+            {r.access?.separability && (
+              <SeparabilityTag
+                sep={r.access.separability}
+                access={r.access}
+                refsListed={units.some((u) => u.signals.length === 0 && (u.refs?.length ?? 0) > 0)}
+                tipUp={tipUp}
+              />
+            )}
             {units.length > 0 && (
               <button
                 type="button"
@@ -645,8 +881,14 @@ export function SkillsBoard() {
                 </tr>
               </thead>
               <tbody>
-                {entries.map((e) => (
-                  <RankRow key={e.repo.id} entry={e} kind={kind} />
+                {entries.map((e, i) => (
+                  <RankRow
+                    key={e.repo.id}
+                    entry={e}
+                    kind={kind}
+                    // 위로 열 자리(행 TIP_UP_ROWS 개)가 위쪽에 있을 때만 — 목록이 짧으면 전부 아래로 연다.
+                    tipUp={i >= TIP_UP_ROWS && i >= entries.length - TIP_UP_ROWS}
+                  />
                 ))}
               </tbody>
             </table>
