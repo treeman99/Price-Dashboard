@@ -435,23 +435,61 @@ function clipEvidence(s: string): string {
 }
 
 /**
+ * frontmatter 의 `name:` 줄. 값은 따옴표·뒤따르는 `# 주석` 을 뺀다.
+ * 지문(SKILL_REF_FINGERPRINT)에 source 가 들어간다 — 별칭을 읽는 방식이 바뀌어도 캐시가 버려진다.
+ */
+const SKILL_NAME_FIELD_RE = /^name[ \t]*:[ \t]*(.*?)[ \t]*(?:[ \t]#.*)?$/m;
+
+/**
+ * SKILL.md frontmatter 의 `name:` 값. 없거나 비면 null.
+ *
+ * ★ 별칭이 필요한 이유: Claude Code 는 스킬을 **디렉터리명이 아니라 frontmatter `name:` 으로**
+ *   부른다(`/open-knowledge`, "the open-knowledge skill"). 실측(2026-10-31): inkeep/open-knowledge 의
+ *   `packages/server/assets/skills/project/SKILL.md` 는 `name: open-knowledge` 다. 디렉터리명만 보면
+ *   그 이름으로 부른 참조를 놓치고 — 로컬 스킬이 외부 스킬을 부르는데도 — '분리 가능'으로 단정한다.
+ *   못 찾은 것을 없는 것으로 적는 쪽이라 비대칭 원칙대로 **두 이름 다** 본다(디렉터리명으로 부르는
+ *   문서도 있으므로 대체가 아니라 추가다).
+ */
+export function frontMatterName(text: string): string | null {
+  const m = SKILL_NAME_FIELD_RE.exec(frontMatter(text));
+  if (!m) return null;
+  const v = m[1].replace(/^(["'])(.*)\1$/, "$2").trim();
+  return v || null;
+}
+
+/** 참조 대상 외부 스킬 1건. alias 는 frontmatter `name:` 이 디렉터리명과 **다를 때만** 있다. */
+export interface SkillRefTarget {
+  /** 디렉터리명(= SkillUnit.name). SkillRef.to 는 언제나 이 값이다(계약). */
+  name: string;
+  /** 저장소 기준 SKILL.md 경로. file 갈래는 이것(디렉터리)만 본다. */
+  path: string;
+  /** frontmatter `name:`. invoke 갈래에서만 디렉터리명과 함께 시도한다. */
+  alias?: string;
+}
+
+/**
  * 로컬 스킬 본문 1건이 가리키는 같은 저장소의 외부 스킬들. 순수 함수다.
  *
  * @param text      로컬 스킬의 SKILL.md 본문
- * @param externals 같은 저장소에서 **읽어 본** 외부(신호 ≥1) 스킬들의 이름·경로
+ * @param externals 같은 저장소에서 **읽어 본** 외부(신호 ≥1) 스킬들의 이름·경로(·frontmatter 별칭)
  * @param selfName  이 로컬 스킬의 이름 — 같은 이름은 건너뛴다(다른 디렉터리의 동명 스킬일 수 있다)
+ * @param selfAlias 이 로컬 스킬의 frontmatter `name:`. 외부 이름·별칭이 이것과 같아도 invoke 를 보지
+ *                  않는다 — 동명 복제본(같은 스킬을 두 디렉터리에 둔 저장소)에서 `/<자기 이름>` 이
+ *                  남을 부른 것으로 둔갑하지 않게.
  *
- * 외부 스킬 이름 1개당 1건만 돌려준다(file 이 invoke 보다 우선). 같은 이름의 외부 스킬이 여러
- * 디렉터리에 있으면(alibaba/open-code-review 는 `skills/` 와 `plugins/…/skills/` 에 같은 이름이 둘)
+ * 외부 스킬 1개당 1건만 돌려준다(file 이 invoke 보다 우선, to 는 디렉터리명). 같은 이름의 외부 스킬이
+ * 여러 디렉터리에 있으면(alibaba/open-code-review 는 `skills/` 와 `plugins/…/skills/` 에 같은 이름이 둘)
  * 각각의 디렉터리로 file 갈래를 다시 본다.
  */
 export function detectSkillRefs(
   text: string,
-  externals: Array<{ name: string; path: string }>,
-  selfName: string
+  externals: SkillRefTarget[],
+  selfName: string,
+  selfAlias?: string | null
 ): SkillRef[] {
   if (!text || externals.length === 0) return [];
   const body = maskUrls(text);
+  const self = new Set([selfName, selfAlias ?? selfName]);
   const found = new Map<string, SkillRef>();
   for (const ext of externals) {
     const name = ext.name;
@@ -460,19 +498,34 @@ export function detectSkillRefs(
     if (prev?.via === "file") continue; // 이미 가장 강한 근거가 있다
     const slash = ext.path.lastIndexOf("/");
     const dir = slash < 0 ? null : ext.path.slice(0, slash);
+    // invoke 로 시도할 이름: 디렉터리명 + frontmatter 별칭. 자기 이름·3자 미만은 둘 다 똑같이 뺀다.
+    // invoke 는 이름당 1건이면 충분하다(동명 두 번째 외부 스킬은 file 로 올라갈 기회만 본다).
+    const invokeNames = prev
+      ? []
+      : [...new Set([name, ext.alias ?? name])].filter(
+          (n) => n.length >= SKILL_REF_INVOKE_MIN_NAME && !self.has(n)
+        );
+    let hit: { via: SkillRefVia; m: RegExpExecArray } | null = null;
+    // 규칙표가 강한 순서라 첫 적중이 이 외부 스킬의 가장 강한 근거다. 같은 규칙 안에서는 디렉터리명을
+    // 먼저 본다 — 어느 이름으로 잡혔든 근거(evidence)는 실제로 매치된 문구 그대로다.
     for (const rule of SKILL_REF_RULES) {
-      // invoke 는 이름당 1건이면 충분하다(동명 두 번째 외부 스킬은 file 로 올라갈 기회만 본다).
-      if (rule.via === "invoke" && (prev || name.length < SKILL_REF_INVOKE_MIN_NAME)) continue;
-      const re = rule.build(name, dir);
-      const m = re?.exec(body);
-      if (!m) continue;
-      found.set(name, {
-        to: name,
-        via: rule.via,
-        evidence: clipEvidence(text.slice(m.index, m.index + m[0].length)),
-      });
-      break; // 규칙표가 강한 순서라 첫 적중이 이 외부 스킬의 가장 강한 근거다
+      // file 갈래는 디렉터리 경로라 별칭을 쓰지 않는다.
+      const names = rule.via === "file" ? [name] : invokeNames;
+      for (const n of names) {
+        const m = rule.build(n, dir)?.exec(body);
+        if (m) {
+          hit = { via: rule.via, m };
+          break;
+        }
+      }
+      if (hit) break;
     }
+    if (!hit) continue;
+    found.set(name, {
+      to: name,
+      via: hit.via,
+      evidence: clipEvidence(text.slice(hit.m.index, hit.m.index + hit.m[0].length)),
+    });
   }
   const refs = [...found.values()];
   return [...refs.filter((r) => r.via === "file"), ...refs.filter((r) => r.via === "invoke")];
@@ -482,14 +535,20 @@ export function detectSkillRefs(
  * 읽어 둔 본문으로 **로컬** 유닛에 refs 를 붙인다(비면 필드를 넣지 않는다). 순수 함수다.
  * 외부 유닛에는 붙이지 않는다 — 질문은 "외부를 지우면 **남는 것**이 도는가"이고, 외부끼리의
  * 참조(open-steps 의 os-whats-next → os-big-picture 가 바로 그 경우다)는 함께 지워지니 무관하다.
+ * 외부 스킬의 frontmatter `name:` 은 디렉터리명과 다를 때만 alias 로 싣는다(frontMatterName 주석).
  */
 export function linkSkillRefs(read: Array<{ unit: SkillUnit; text: string }>): SkillUnit[] {
-  const externals = read
+  const externals: SkillRefTarget[] = read
     .filter((r) => r.unit.signals.length > 0)
-    .map((r) => ({ name: r.unit.name, path: r.unit.path }));
+    .map((r) => {
+      const alias = frontMatterName(r.text);
+      return alias && alias !== r.unit.name
+        ? { name: r.unit.name, path: r.unit.path, alias }
+        : { name: r.unit.name, path: r.unit.path };
+    });
   return read.map(({ unit, text }) => {
     if (unit.signals.length > 0 || externals.length === 0) return unit;
-    const refs = detectSkillRefs(text, externals, unit.name);
+    const refs = detectSkillRefs(text, externals, unit.name, frontMatterName(text));
     return refs.length > 0 ? { ...unit, refs } : unit;
   });
 }
@@ -497,6 +556,7 @@ export function linkSkillRefs(read: Array<{ unit: SkillUnit; text: string }>): S
 /**
  * 참조 규칙 지문. 자리표시 이름으로 규칙을 한 번씩 만들어 그 source 를 이어 붙인다.
  * dir 에 `/` 를 넣어야 3번 규칙(`<dir>/…`)도 정규식을 내놓는다.
+ * 별칭(frontmatter `name:`)은 정규식을 바꾸지 않으므로 그 사용 여부·읽는 방식을 따로 적는다.
  */
 const SKILL_REF_FINGERPRINT = [
   ...SKILL_REF_RULES.map((r) => {
@@ -505,6 +565,7 @@ const SKILL_REF_FINGERPRINT = [
   }),
   ...REF_URL_MASKS.map((re) => `mask ${re.source} ${re.flags}`),
   `invokeMin=${SKILL_REF_INVOKE_MIN_NAME} evidenceMax=${SKILL_REF_EVIDENCE_MAX}`,
+  `invokeAlias=frontmatter-name ${SKILL_NAME_FIELD_RE.source} ${SKILL_NAME_FIELD_RE.flags}`,
 ].join("\n");
 
 /**
@@ -523,7 +584,7 @@ const SKILL_REF_FINGERPRINT = [
  *
  *   1: 최초 정의 (WebFetch·curl·api호스트·MCP(mcp__|mcpServers)·외부CLI)
  *   2: MCP 선언형·원격 URL 추가, curl 설치 관용구·예시 도메인 위양성 제거 (2026-09-02)
- *   3: 로컬→외부 스킬 참조(refs) 추가 (2026-10-31)
+ *   3: 로컬→외부 스킬 참조(refs) 추가, frontmatter name 별칭 포함 (2026-10-31)
  */
 export const SCAN_SIGNATURE_REVISION = 3;
 

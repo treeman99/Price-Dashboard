@@ -7,6 +7,7 @@ import {
   detectSignals,
   detectSkillRefs,
   frontMatter,
+  frontMatterName,
   linkSkillRefs,
   pickSkillPaths,
   sampleEvenly,
@@ -503,6 +504,68 @@ test("루트 SKILL.md 외부 스킬은 file 갈래가 없다(디렉터리가 따
 test("이름의 정규식 메타문자는 글자 그대로다", () => {
   assert.deepEqual(detectSkillRefs("run /c++-tools", [ext("c++-tools")], "x")[0]?.to, "c++-tools");
   assert.deepEqual(detectSkillRefs("run /cxx-tools", [ext("c.x-tools")], "x"), []);
+});
+
+// ── ★ frontmatter `name:` 별칭 (Claude Code 는 디렉터리명이 아니라 이 이름으로 부른다) ──
+
+/** 실측 모양: inkeep/open-knowledge 의 packages/server/assets/skills/project/SKILL.md 는 `name: open-knowledge` 다. */
+const OK_PROJECT = { name: "project", path: "packages/server/assets/skills/project/SKILL.md", alias: "open-knowledge" };
+
+test("★ 외부 스킬을 frontmatter name 으로 불러도 invoke 다 — to 는 디렉터리명 그대로", () => {
+  assert.deepEqual(detectSkillRefs("Run `/open-knowledge` first.", [OK_PROJECT], "discovery"), [
+    { to: "project", via: "invoke", evidence: "/open-knowledge" },
+  ]);
+  assert.deepEqual(detectSkillRefs("Use the open-knowledge skill to edit.", [OK_PROJECT], "discovery"), [
+    { to: "project", via: "invoke", evidence: "open-knowledge skill" },
+  ]);
+  // 디렉터리명으로 부르는 문서도 있으므로 대체가 아니라 추가다.
+  assert.deepEqual(detectSkillRefs("run /project now", [OK_PROJECT], "discovery"), [
+    { to: "project", via: "invoke", evidence: "/project" },
+  ]);
+  // 두 이름이 다 나와도 외부 스킬 1개당 1건이다(규칙표의 강한 형태가 이긴다).
+  const both = detectSkillRefs("`project` and Skill(open-knowledge)", [OK_PROJECT], "discovery");
+  assert.deepEqual(both, [{ to: "project", via: "invoke", evidence: "Skill(open-knowledge" }]);
+});
+
+test("별칭은 invoke 에만 쓴다 — file 갈래는 디렉터리 경로라 별칭으로 잡지 않는다", () => {
+  assert.deepEqual(detectSkillRefs("bash ../open-knowledge/scripts/x.sh", [OK_PROJECT], "x"), []);
+  assert.deepEqual(detectSkillRefs("bash ../project/scripts/x.sh", [OK_PROJECT], "x")[0]?.via, "file");
+});
+
+test("별칭에도 자기 이름·3자 미만 규칙을 똑같이 적용한다", () => {
+  // 로컬 자신의 디렉터리명·frontmatter name 과 같은 별칭은 건너뛴다(동명 복제본 대비).
+  assert.deepEqual(detectSkillRefs("/open-knowledge", [OK_PROJECT], "open-knowledge"), []);
+  assert.deepEqual(detectSkillRefs("/open-knowledge", [OK_PROJECT], "ok-local", "open-knowledge"), []);
+  // 별칭만 빠지고 디렉터리명으로는 여전히 본다.
+  assert.equal(detectSkillRefs("/project", [OK_PROJECT], "ok-local", "open-knowledge")[0]?.to, "project");
+  assert.deepEqual(detectSkillRefs("/ok and `ok`", [{ ...OK_PROJECT, alias: "ok" }], "x"), []);
+});
+
+test("linkSkillRefs 는 외부 본문의 frontmatter name 을 별칭으로 읽는다(따옴표 제거, 같으면 중복 없음)", () => {
+  const read = [
+    { unit: unit("project", { signals: ["MCP"] }), text: '---\nname: "open-knowledge"\n---\nmcp__ok__read' },
+    { unit: unit("pdf", { signals: ["WebFetch"] }), text: "---\nname: pdf\n---\nWebFetch" },
+    { unit: unit("discovery"), text: "Refresh via the open-knowledge skill, then /pdf and `pdf`." },
+  ];
+  const out = linkSkillRefs(read);
+  assert.deepEqual(out[2].refs, [
+    { to: "project", via: "invoke", evidence: "open-knowledge skill" },
+    { to: "pdf", via: "invoke", evidence: "/pdf" },
+  ]);
+  // 동명 복제본: 로컬 자신의 frontmatter name 이 외부 별칭과 같으면 '/자기 이름' 은 남을 부른 것이 아니다.
+  const dup = linkSkillRefs([
+    { unit: unit("notes-remote", { signals: ["WebFetch"] }), text: "---\nname: notes\n---\nWebFetch" },
+    { unit: unit("notes-local"), text: "---\nname: notes\n---\nRun /notes to start." },
+  ]);
+  assert.equal("refs" in dup[1], false);
+});
+
+test("frontMatterName — 따옴표·주석을 벗기고, 없거나 비면 null 이다", () => {
+  assert.equal(frontMatterName("---\nname: open-knowledge\n---\n본문"), "open-knowledge");
+  assert.equal(frontMatterName("---\nname: 'pdf-tools'  # 표시용\n---\n"), "pdf-tools");
+  assert.equal(frontMatterName("---\ndescription: x\n  name: nested\n---\n"), null, "들여쓴 하위 키는 아니다");
+  assert.equal(frontMatterName("name: no-frontmatter"), null, "frontmatter 밖의 줄은 보지 않는다");
+  assert.equal(frontMatterName('---\nname: ""\n---\n'), null);
 });
 
 test("근거는 80자 안으로 자른다", () => {
