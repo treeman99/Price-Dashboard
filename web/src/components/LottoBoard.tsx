@@ -215,10 +215,20 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
     })
   );
   const best = r.matches.length ? Math.max(...r.matches) : 0;
-  // 3개 이상 적중 회차는 상자 배경 대신 머리 줄(회차 번호·태그)을 탭색으로 강조한다.
+  // 3개 이상 적중(= 5등 이상 당첨) 회차는 머리 줄(회차 번호·태그)의 탭색에 더해 회차 띠 전체에 옅은 탭색
+  // 배경을 깐다. 머리 글씨색만 바꾸던 때는 10회차 사이에서 눈에 띄지 않는다는 피드백이 있었다(2026-10-31).
+  // --tab 은 HEX 라 Tailwind 3 의 `bg-tab/10` 투명도가 먹지 않아 color-mix 로 섞는다.
+  // 음수 여백(-mx-2)으로 배경만 바깥으로 넓혀 번호 공의 세로 줄이 다른 회차와 어긋나지 않게 한다.
+  // my-1: 당첨 회차가 연달아 오면(실데이터 1242·1241·1240) 배경이 한 덩어리로 붙어 회차 경계가 사라진다.
   const strong = best >= 3;
   return (
-    <article className="border-t py-2 first:border-t-0 first:pt-0.5">
+    <article
+      className={cn(
+        "border-t py-2 first:border-t-0 first:pt-0.5",
+        strong &&
+          "-mx-2 my-1 rounded-md border-t-transparent bg-[color-mix(in_srgb,var(--tab)_9%,transparent)] px-2 first:pt-2"
+      )}
+    >
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <span className={cn("num font-mono text-[15px] font-semibold", strong && "text-tab")}>
