@@ -125,7 +125,7 @@ export function EditHoldingDialog({
       }}
     >
       <DialogTrigger asChild>
-        <IconAction label="보유 내용 수정">
+        <IconAction label="보유 내용 수정" tip="above-end">
           <Pencil />
         </IconAction>
       </DialogTrigger>

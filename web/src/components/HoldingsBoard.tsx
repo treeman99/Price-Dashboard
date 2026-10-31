@@ -121,7 +121,7 @@ function HoldingRow({
       <td>
         <div className="flex justify-end opacity-40 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
           <EditHoldingDialog h={h} onSaved={onChanged} />
-          <IconAction label="보유 종목에서 삭제" danger onClick={remove} disabled={deleting}>
+          <IconAction label="보유 종목에서 삭제" danger tip="above-end" onClick={remove} disabled={deleting}>
             {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
           </IconAction>
         </div>

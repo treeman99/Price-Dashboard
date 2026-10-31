@@ -260,13 +260,29 @@ export const TextLink = React.forwardRef<
 TextLink.displayName = "TextLink";
 
 /**
+ * 툴팁을 버튼 **위쪽 · 오른쪽 끝 정렬**로 띄운다. 가로 스크롤 상자(overflow-x-auto) 안 표의 맨 오른쪽 열 전용.
+ *
+ * 툴팁은 숨어 있을 때도(opacity 0) 자리를 차지한다. 기본 배치(아래·가운데)로 두면 마지막 열에서 오른쪽으로,
+ * 마지막 행에서 아래로 상자 밖에 삐져나오고, overflow-x-auto 는 세로축까지 스크롤 상자로 만들어서
+ * 표가 다 보이는 넓은 화면에서도 안쪽 스크롤바가 생겼다(보유 주식 표 실측: 오른쪽 29px · 아래 3px).
+ * 위로 열면 위에 늘 열 머리가 있고, 오른쪽 끝에 맞추면 버튼 폭 안에서 끝나 상자를 벗어나지 않는다.
+ */
+const TIP_ABOVE_END = "bottom-full left-auto right-0 top-auto mb-1.5 mt-0 translate-x-0 -translate-y-0.5";
+
+/**
  * 아이콘만 있는 행 동작(위로·아래로·수정·삭제 …). 즉시 뜨는 라벨 툴팁이 붙는다.
  * `danger` 는 hover 시 빨강. `active` 는 켜진 상태(고정 핀 등)를 잉크색으로.
+ * `tip="above-end"` 는 스크롤 상자 안 표의 맨 오른쪽 열에서 쓴다(TIP_ABOVE_END 주석).
  */
 export const IconAction = React.forwardRef<
   HTMLButtonElement,
-  React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; danger?: boolean; active?: boolean }
->(({ label, danger, active, className, children, type = "button", ...props }, ref) => (
+  React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    label: string;
+    danger?: boolean;
+    active?: boolean;
+    tip?: "below" | "above-end";
+  }
+>(({ label, danger, active, tip = "below", className, children, type = "button", ...props }, ref) => (
   <button
     ref={ref}
     type={type}
@@ -283,7 +299,7 @@ export const IconAction = React.forwardRef<
     {...props}
   >
     {children}
-    <Tip>{label}</Tip>
+    <Tip className={tip === "above-end" ? TIP_ABOVE_END : undefined}>{label}</Tip>
   </button>
 ));
 IconAction.displayName = "IconAction";
