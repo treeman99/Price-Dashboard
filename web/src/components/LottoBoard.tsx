@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, Loader2, RefreshCw } from "lucide-react";
 import type { LottoRecentRound, LottoSnapshot } from "@shared/lotto";
-import { upcomingToText, winningNumbers } from "@shared/lotto";
+import { setsToText, winningNumbers } from "@shared/lotto";
 import { api } from "@/lib/api";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { useTabConfig } from "@/lib/tabConfigStore";
@@ -131,18 +131,69 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-/** 다음 회차 예상 번호 — 이 화면의 주인공. */
-function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
-  const u = snap.upcoming;
+/**
+ * 세트 번호 복사 버튼 — 최신 회차(예상 번호)와 지난 회차 카드가 같은 것을 쓴다.
+ *
+ * 복사 형식은 setsToText(세트당 한 줄, 맥락 없음) 하나뿐이다. 버튼마다 상태를 따로 갖게 컴포넌트로
+ * 뺐다 — 지난 회차 10개가 상태 하나를 나눠 쓰면 한 회차를 눌렀을 때 다른 회차 라벨까지 '복사됨'이 된다.
+ */
+function CopySetsButton({
+  sets,
+  title = "번호만 줄바꿈으로 복사합니다 (회차·세트 번호는 넣지 않음)",
+  stableWidth = false,
+}: {
+  sets: number[][];
+  title?: string;
+  /**
+   * 라벨이 '복사됨'으로 짧아져도 버튼 폭을 유지한다. 지난 회차 머리 줄은 버튼 왼쪽에 추첨번호가 붙어 있어서,
+   * 폭이 줄면 그 회차의 추첨번호만 2초간 오른쪽으로 밀려 다른 회차와 세로줄이 어긋난다(실측 확인).
+   * 최신 회차 버튼은 기존 모습 그대로 두려고 기본값은 끈다.
+   */
+  stableWidth?: boolean;
+}) {
   /** 복사 결과 안내. `at` 으로 매번 새 객체를 만들어 연속 클릭에도 타이머가 초기화된다. */
   const [copied, setCopied] = useState<{ ok: boolean; at: number } | null>(null);
 
-  // 안내는 잠깐만 띄운다. 훅은 아래 early return 보다 위에 있어야 한다(훅 순서 규칙).
+  // 안내는 잠깐만 띄운다.
   useEffect(() => {
     if (!copied) return;
     const t = setTimeout(() => setCopied(null), 2000);
     return () => clearTimeout(t);
   }, [copied]);
+
+  const label = copied ? (copied.ok ? "복사됨" : "복사 실패") : "번호 복사";
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={sets.length === 0}
+      title={title}
+      onClick={() => {
+        void copyToClipboard(setsToText(sets)).then((ok) => setCopied({ ok, at: Date.now() }));
+      }}
+    >
+      {copied?.ok ? <Check className="h-4 w-4 text-tab" /> : <Copy className="h-4 w-4" />}
+      {stableWidth ? (
+        // 세 라벨을 한 칸에 겹쳐 가장 긴 폭을 자리로 잡고, 지금 라벨만 보이게 한다.
+        <span className="grid text-left">
+          {["번호 복사", "복사됨", "복사 실패"].map((t) => (
+            <span key={t} aria-hidden className="invisible col-start-1 row-start-1">
+              {t}
+            </span>
+          ))}
+          <span className="col-start-1 row-start-1">{label}</span>
+        </span>
+      ) : (
+        label
+      )}
+    </Button>
+  );
+}
+
+/** 다음 회차 예상 번호 — 이 화면의 주인공. */
+function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
+  const u = snap.upcoming;
 
   if (!u) {
     return (
@@ -167,22 +218,7 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
             v{u.version} · {fmtWhen(u.createdAt)} 확정
           </span>
         }
-        actions={
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={u.sets.length === 0}
-            title="번호만 줄바꿈으로 복사합니다 (회차·세트 번호는 넣지 않음)"
-            onClick={() => {
-              void copyToClipboard(upcomingToText(u)).then((ok) =>
-                setCopied({ ok, at: Date.now() })
-              );
-            }}
-          >
-            {copied?.ok ? <Check className="h-4 w-4 text-tab" /> : <Copy className="h-4 w-4" />}
-            {copied ? (copied.ok ? "복사됨" : "복사 실패") : "번호 복사"}
-          </Button>
-        }
+        actions={<CopySetsButton sets={u.sets} />}
       />
       <SetGrid className="gap-y-0.5">
         {u.sets.map((set, i) => (
@@ -241,13 +277,23 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
             <StatusTag className="border-tab text-tab">{best}개 적중</StatusTag>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="mr-1 text-[12px] text-muted-foreground">추첨</span>
-          {r.drawNumbers.map((n) => (
-            <NumberBadge key={n} n={n} tone="draw" />
-          ))}
-          <span className="mx-0.5 text-[13px] text-muted-foreground">+</span>
-          <NumberBadge n={r.drawBonus} tone="bonus" />
+        {/* 복사 버튼은 추첨번호 뒤 오른쪽 끝에 둔다. 회차마다 추첨번호 묶음의 폭이 같으므로(공 7개 고정)
+            10회차의 버튼이 한 세로줄에 선다. 좁은 화면에서는 이 묶음 안에서 다음 줄로 내려간다. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="mr-1 text-[12px] text-muted-foreground">추첨</span>
+            {r.drawNumbers.map((n) => (
+              <NumberBadge key={n} n={n} tone="draw" />
+            ))}
+            <span className="mx-0.5 text-[13px] text-muted-foreground">+</span>
+            <NumberBadge n={r.drawBonus} tone="bonus" />
+          </div>
+          {/* 복사 내용은 그 회차에 **제출한 세트만**이다 — 추첨번호·적중 수는 화면에서 보면 되고 붙여넣기엔 잡음이다. */}
+          <CopySetsButton
+            stableWidth
+            sets={r.sets}
+            title={`${r.round}회차에 제출한 번호만 줄바꿈으로 복사합니다 (추첨번호·적중 수·회차·세트 번호는 넣지 않음)`}
+          />
         </div>
       </div>
       <SetGrid className="mt-1.5 gap-y-1">

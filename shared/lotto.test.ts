@@ -8,6 +8,7 @@ import {
   matchProbabilities,
   roundScore,
   setScore,
+  setsToText,
   upcomingToText,
   winningNumbers,
 } from "./lotto.ts";
@@ -90,4 +91,32 @@ test("복사용 평문: 머리말·세트 번호·세대 어떤 맥락도 섞이
 test("복사용 평문: 세트가 없으면 빈 문자열", () => {
   const text = upcomingToText({ round: 1, sets: [], version: 1, createdAt: "" });
   assert.equal(text, "");
+});
+
+test("지난 회차 복사(setsToText): 세트당 한 줄, 번호는 ', ' 구분, 맥락 없음", () => {
+  const sets = [
+    [3, 11, 19, 24, 38, 44],
+    [1, 7, 13, 22, 30, 45],
+    [6, 9, 17, 28, 33, 40],
+  ];
+  const text = setsToText(sets);
+  assert.equal(text, "3, 11, 19, 24, 38, 44\n1, 7, 13, 22, 30, 45\n6, 9, 17, 28, 33, 40");
+  // 줄 수 = 세트 수. 추첨번호·보너스·적중 수 같은 줄이 끼어들면 여기서 잡힌다.
+  assert.equal(text.split("\n").length, sets.length);
+  for (const line of text.split("\n")) {
+    assert.ok(/^[0-9]+(, [0-9]+)*$/.test(line), `숫자 외 문자 잔존: ${line}`);
+  }
+  assert.equal(setsToText([]), "");
+});
+
+test("지난 회차 복사와 최신 회차 복사는 같은 세트면 바이트 단위로 같다", () => {
+  // 두 버튼이 다른 형식을 내면 같은 곳에 붙여넣을 때 한쪽이 깨진다 — 형식 정본은 하나여야 한다.
+  const sets = [
+    [5, 8, 10, 25, 35, 41],
+    [2, 9, 14, 15, 27, 41],
+  ];
+  assert.equal(
+    setsToText(sets),
+    upcomingToText({ round: 1236, sets, version: 170, createdAt: "2026-08-02T01:26:00.645Z" })
+  );
 });

@@ -303,9 +303,22 @@ export interface LottoUpcoming {
  * 여기에 맥락을 도로 넣으면 붙여넣기가 다시 망가진다.
  *
  * UI 가 아니라 여기 두는 이유는 순수 함수라 테스트 대상이기 때문이다(web/ 은 러너 밖).
+ *
+ * 형식은 {@link setsToText} 가 정본이다 — 지난 회차 복사와 글자 하나까지 같아야 하므로 위임만 한다.
  */
 export function upcomingToText(u: LottoUpcoming): string {
-  return u.sets.map((set) => set.join(", ")).join("\n");
+  return setsToText(u.sets);
+}
+
+/**
+ * 세트 목록 → 복사용 평문. 형식은 {@link upcomingToText} 와 같다(세트당 한 줄, `a, b, c, d, e, f`).
+ *
+ * 지난 회차 비교의 회차별 '번호 복사'가 쓴다(2026-11-01). 그 회차의 **제출 세트만** 넣고 추첨번호·보너스·
+ * 적중 수·회차 표기는 넣지 않는다 — 붙여넣는 쪽에서 잡음이 된다는 이유가 최신 회차 복사와 똑같다.
+ * 형식을 두 곳에 따로 쓰면 언젠가 어긋나므로 upcomingToText 도 이 함수에 위임한다.
+ */
+export function setsToText(sets: number[][]): string {
+  return sets.map((set) => set.join(", ")).join("\n");
 }
 
 /**
