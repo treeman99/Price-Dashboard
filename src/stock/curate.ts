@@ -3,6 +3,7 @@ import { runStockAgent, extractJson as extractAgentJson } from "./agent.ts";
 import { localDate } from "../util/date.ts";
 import { horizonLabel, formatPnlPct } from "../../shared/holdings.ts";
 import { formatPrice } from "../../shared/stock.ts";
+import { IMPORTANT_8K_ITEMS, ITEMS_8K_KO, type SecDigest, type SecQuarter } from "./sec.ts";
 import type {
   StockMarket,
   StockSnapshot,
@@ -117,6 +118,11 @@ export interface StockPromptInput {
   exchangeRate: { value: number; changePct: number | null } | null;
   /** 이 시장의 보유 종목 + 24시간 펄스 요약. 없으면 포지션 섹션을 통째로 생략한다. */
   positions?: PositionPromptRow[];
+  /**
+   * SEC EDGAR 최근 8-K 공시 + 최근 제출 분기 실적(sec.ts). **미국장에서만** 쓰고, null/생략이면
+   * 블록을 통째로 뺀다 — SEC 가 죽거나 User-Agent 가 없으면 기존 프롬프트와 글자 하나 다르지 않다.
+   */
+  sec?: SecDigest | null;
 }
 
 function fmtNum(v: number | null | undefined): string {
@@ -193,6 +199,104 @@ ${body}
 - pulseSummary: 지난 24시간 취합 내용을 1~2문장으로 압축한다. 특이사항이 없으면 null.
 - ⛔ **매수·매도·비중조절·익절·손절 같은 행동 지시는 여기서도 금지다.** 목표가·손절가는 사용자가
   이미 입력해 둔 값이므로 "현재가가 손절가 대비 -4.2%" 처럼 **거리를 사실로 서술**하는 것까지만 하라.`;
+}
+
+/** USD 금액 → "$109.42B" / "-$1.20M". 실적 표 전용(시세 표는 formatPrice 를 쓴다). */
+function fmtUsd(v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return "-";
+  const sign = v < 0 ? "-" : "";
+  const a = Math.abs(v);
+  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
+  return `${sign}$${a.toLocaleString("en-US")}`;
+}
+
+/**
+ * 실적 증감률. 시세 표의 fmtPct(소수 2자리)를 쓰지 않는 이유: 원자료(sec.ts)가 소수 1자리로
+ * 반올림돼 있어 "+16.40%" 처럼 없는 정밀도를 꾸며 보이게 된다.
+ */
+function fmtPctOrDash(v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return "-";
+  return `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
+
+function fmtMargin(v: number | null): string {
+  return v == null ? "-" : `${v.toFixed(1)}%`;
+}
+
+function quarterLine(symbol: string, q: SecQuarter): string {
+  const label = `${q.fiscal || "분기"} (${q.periodEnd} 종료)${q.derived ? " ※파생" : ""}`;
+  const eps = q.epsDiluted == null ? "-" : `$${q.epsDiluted.toFixed(2)}`;
+  return (
+    `| ${symbol} | ${label} | ${fmtUsd(q.revenue)} | ${fmtPctOrDash(q.revenueYoy)} | ${fmtUsd(q.netIncome)} | ` +
+    `${fmtPctOrDash(q.netIncomeYoy)} | ${eps} | ${fmtPctOrDash(q.epsYoy)} | ${fmtMargin(q.grossMargin)} | ` +
+    `${fmtMargin(q.operatingMargin)} | ${q.form ?? "-"} ${q.filed ?? ""} |`
+  );
+}
+
+/**
+ * SEC EDGAR 블록 — day-trader-skill 의 trader-news(8-K 감시)·trader-analyst(제출 실적) 규칙을
+ * 브리핑 원칙(숫자는 서버가, 서술은 모델이 / 매매 지시 금지)에 맞춰 옮긴 것이다(sec.ts 상단 주석).
+ *
+ * ★ 표시는 원본의 `!`(중요 8-K 항목)다. 원본 규칙 중 '공시가 헤드라인을 이긴다'와 '헤드라인은 단서일 뿐
+ * 열어 보고 말하라'를 그대로 가져왔다 — 이 브리핑에서 모델이 가장 자주 틀리는 지점이 기사 제목만 보고
+ * 공시 내용을 지어내는 것이기 때문이다.
+ */
+export function secSection(d: SecDigest): string {
+  const filingRows = d.companies.flatMap((c) =>
+    c.filings.map((f) => {
+      const items = f.items
+        .filter((it) => it !== "9.01")
+        .map((it) => `${importantMark(it)}${ITEMS_8K_KO[it] ?? "항목"}(${it})`)
+        .join(", ");
+      return `| ${c.symbol} | ${f.filingDate} | ${f.form} | ${items || "첨부서류만(9.01)"} | ${f.url} |`;
+    })
+  );
+  const filings = filingRows.length
+    ? `| 종목 | 제출일(뉴욕) | 양식 | 항목 | 원문 링크 |\n| --- | --- | --- | --- | --- |\n${filingRows.join("\n")}`
+    : `(등록 종목 중 ${d.since} 이후 제출된 8-K 공시 없음)`;
+
+  const withQuarter = d.companies.filter((c) => c.quarter);
+  const quarters = withQuarter.length
+    ? "| 종목 | 분기 | 매출 | 매출 YoY | 순이익 | 순이익 YoY | 희석 EPS | EPS YoY | 매출총이익률 | 영업이익률 | 출처 |\n" +
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n" +
+      withQuarter.map((c) => quarterLine(c.symbol, c.quarter!)).join("\n")
+    : "(조회된 분기 실적 없음)";
+
+  // 실적 발표(8-K 2.02)가 표의 분기보다 뒤에 나온 종목. 이 경고가 없으면 모델이 '직전 분기' 숫자를
+  // '방금 발표된 실적'으로 인용한다 — 10-Q 는 발표 후 며칠~몇 주 뒤에야 올라온다.
+  const lagNotes = d.companies
+    .filter((c) => c.newerEarningsRelease)
+    .map(
+      (c) =>
+        `- ※ ${c.symbol}: ${c.newerEarningsRelease!.filingDate} 실적 발표(8-K 2.02)가 위 표의 분기보다 **뒤에** 나왔다. ` +
+        `표의 숫자는 그 이전 분기다. 새 분기 숫자는 이 공시(${c.newerEarningsRelease!.url})나 그것을 다룬 기사에서 ` +
+        `**실제로 확인한 값만** 쓰고, 확인하지 못했으면 숫자 없이 '실적 발표가 있었다'는 사실만 적어라.`
+    );
+
+  return `[확정 공시·실적 — SEC EDGAR] (서버가 미국 증권거래위원회 EDGAR 에서 조회한 원자료. 실적 표의 숫자는
+[확정 시세]와 같은 지위다 — 그대로 인용할 수 있고, 변형·추정·재계산은 금지다)
+
+최근 8-K 공시 (${d.since} 이후 제출, ★ = 주가에 직접 작용하는 중요 항목):
+${filings}
+
+최근 제출 분기 실적 (10-Q/10-K 의 XBRL 수치, 증감률은 전년 같은 분기 대비, ※파생 = 10-K 연간에서 3개 분기를 뺀 4분기라 EPS 는 근사치):
+${quarters}
+${lagNotes.length ? `${lagNotes.join("\n")}\n` : ""}
+SEC 자료 활용 지침:
+- **공시가 기사보다 우선한다.** 같은 사안을 기사와 공시가 다르게 말하면 회사가 SEC 에 낸 공시를 따른다.
+- ★ 공시가 있는 등록 종목은 analyses 의 summary 또는 risks 에 그 사실을 **반드시** 반영하고,
+  news[] 에도 1건 넣는다 — source "SEC EDGAR", link 는 위 표의 원문 링크 **그대로**, date 는 제출일,
+  bucket "산업·기업".
+- 공시의 구체 내용(누가·얼마·어떤 조건)은 원문 링크나 그 공시를 다룬 기사에서 **실제로 확인한 것만** 쓴다.
+  확인하지 못했으면 "8-K 항목 분류만 확인됨"이라고 쓰고 내용을 지어내지 마라.
+- 실적을 인용할 때는 분기와 출처를 함께 밝혀라(예: "Q3 2026 10-Q 기준 매출 전년 대비 +16.4%").
+- 이 자료로 앞으로의 주가를 예측하거나 매매를 권하지 마라 — 절대 규칙 1 이 여기에도 그대로 적용된다.`;
+}
+
+/** 중요 항목 표시(★). 함수로 둔 이유: 항목 집합은 sec.ts 가 정본이라 여기서 다시 적지 않는다. */
+function importantMark(item: string): string {
+  return IMPORTANT_8K_ITEMS.has(item) ? "★" : "";
 }
 
 /** 한국장(개장 전 프리뷰) 조사 지침. */
@@ -402,7 +506,10 @@ ${quoteTable(input.quotes)}
 [확정 시세 — 지수]
 ${indexTable(input.indices)}
 ${fx}
-${input.positions?.length ? `\n${positionSection(input.positions)}\n` : ""}
+${input.positions?.length ? `\n${positionSection(input.positions)}\n` : ""}${
+    // 미국장 전용. 한국장 입력에 sec 가 실려 와도 넣지 않는다 — SEC 는 미국 상장사 자료다.
+    input.market === "us" && input.sec ? `\n${secSection(input.sec)}\n` : ""
+  }
 
 작성 지침:
 - indices[]: 위 지수 각각에 대해 comment(관측된 사실 요약) / outlook(전망 서술) / rationale(전망 사유)를 쓴다.

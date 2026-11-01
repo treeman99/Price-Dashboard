@@ -50,6 +50,12 @@ export interface AppConfig {
   /** 종목 시세 조회 간 간격(ms). 네이버에 대한 매너 — 연타 금지. */
   stockFetchDelayMs: number;
   /**
+   * SEC EDGAR 요청 User-Agent("이름 이메일"). SEC 는 연락처 없는 요청을 403 으로 거부한다.
+   * 비어 있으면 미국장 브리핑의 SEC 공시·실적 보강(src/stock/sec.ts)만 꺼지고 브리핑은 그대로 나간다.
+   * 개인 연락처라 코드·커밋에 넣지 않고 .env 에만 둔다.
+   */
+  secUserAgent: string | null;
+  /**
    * 시간당 펄스(실시간 취합) 실행 시각. 기본은 장중·장전후 집중
    * (한국장 08~16시 + 미국장 22~06시). 06~08시·16~22시는 비운다.
    */
@@ -211,6 +217,7 @@ export const config: AppConfig = {
     "STOCK_US_COLLECT_TIMES"
   ),
   stockFetchDelayMs: Math.max(0, int(process.env.STOCK_FETCH_DELAY_MS, 300)),
+  secUserAgent: process.env.SEC_USER_AGENT?.trim() || null,
   stockPulseTimes: parseCollectTimes(
     process.env.STOCK_PULSE_TIMES?.trim() ||
       // 한국장(08~16) + 미국장(22~06). 06~08·16~22 는 새 재료가 거의 없는 구간이라 비운다.

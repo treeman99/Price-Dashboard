@@ -539,3 +539,84 @@ test("스냅샷 생성 3경로 모두 role/slot 을 실어야 한다", () => {
   // 메타를 안 넘기면 필드가 없다 → 읽는 쪽이 effectiveRole 로 'both' 로 접는다.
   assert.equal(emptySnapshot("kr", "2026-07-20", "실패").role, undefined);
 });
+
+// ── SEC EDGAR 블록 (day-trader-skill 공시·실적 보강) ──
+
+const SEC_DIGEST: NonNullable<StockPromptInput["sec"]> = {
+  since: "2026-10-29",
+  companies: [
+    {
+      symbol: "AAPL",
+      cik: 320193,
+      entity: "Apple Inc.",
+      filings: [
+        {
+          form: "8-K",
+          filingDate: "2026-10-30",
+          acceptedAt: "2026-10-30T20:30:00.000Z",
+          items: ["2.02", "9.01"],
+          important: true,
+          url: "https://www.sec.gov/Archives/edgar/data/320193/000032019326000030/aapl-20261030.htm",
+        },
+      ],
+      quarter: {
+        periodEnd: "2026-06-27",
+        fiscal: "Q3 2026",
+        derived: false,
+        form: "10-Q",
+        filed: "2026-07-31",
+        revenue: 109417000000,
+        revenueYoy: 16.4,
+        netIncome: 29789000000,
+        netIncomeYoy: 27.1,
+        epsDiluted: 2.02,
+        epsYoy: 28.7,
+        grossMargin: 50.1,
+        operatingMargin: 32.6,
+        netMargin: 27.2,
+      },
+      newerEarningsRelease: {
+        filingDate: "2026-10-30",
+        url: "https://www.sec.gov/Archives/edgar/data/320193/000032019326000030/aapl-20261030.htm",
+      },
+    },
+  ],
+  failures: [],
+};
+
+test("buildPrompt(us) + SEC — 공시 표·실적 표·지연 경고·활용 지침을 싣는다", () => {
+  const p = buildPrompt(usInput({ sec: SEC_DIGEST }));
+  assert.match(p, /\[확정 공시·실적 — SEC EDGAR\]/);
+  // 중요 항목 ★, 9.01(첨부서류)은 항목 열에서 뺀다
+  assert.match(p, /\| AAPL \| 2026-10-30 \| 8-K \| ★실적 발표\(2\.02\) \| https:\/\/www\.sec\.gov\/Archives\//);
+  assert.doesNotMatch(p, /재무제표·첨부서류\(9\.01\)/);
+  // 실적 숫자는 서버가 포맷한 값 그대로
+  // 증감률은 원자료 정밀도(소수 1자리) 그대로 — "+16.40%" 처럼 없는 자릿수를 꾸미지 않는다
+  assert.match(p, /\| AAPL \| Q3 2026 \(2026-06-27 종료\) \| \$109\.42B \| \+16\.4% \| \$29\.79B \|/);
+  assert.match(p, /\| \$2\.02 \| \+28\.7% \| 50\.1% \| 32\.6% \| 10-Q 2026-07-31 \|/);
+  // 표의 분기보다 뒤에 나온 실적 발표 경고 — 직전 분기 숫자를 '방금 발표'로 인용하는 오류를 막는다
+  assert.match(p, /※ AAPL: 2026-10-30 실적 발표\(8-K 2\.02\)가 위 표의 분기보다 \*\*뒤에\*\*/);
+  // 원본 규칙: 공시 > 기사, 확인한 것만, 예측·매매 권유 금지
+  assert.match(p, /공시가 기사보다 우선한다/);
+  assert.match(p, /8-K 항목 분류만 확인됨/);
+  assert.match(p, /source "SEC EDGAR"/);
+  // 블록은 작성 지침보다 앞에 온다(모델이 자료를 먼저 보고 지침을 읽는다)
+  assert.ok(p.indexOf("[확정 공시·실적") < p.indexOf("작성 지침:"));
+});
+
+test("buildPrompt — SEC 블록은 미국장 전용이고, 없으면 기존 프롬프트와 동일하다", () => {
+  // 한국장에 실려 와도 넣지 않는다
+  assert.doesNotMatch(buildPrompt(krInput({ sec: SEC_DIGEST })), /SEC EDGAR/);
+  // sec 가 null(미설정·장애)이면 필드를 안 넘긴 것과 글자 하나 다르지 않다
+  assert.equal(buildPrompt(usInput({ sec: null })), buildPrompt(usInput()));
+  assert.doesNotMatch(buildPrompt(usInput()), /SEC EDGAR/);
+});
+
+test("buildPrompt(us) + SEC — 공시·실적이 비어도 블록은 '없음'을 명시한다", () => {
+  const p = buildPrompt(
+    usInput({ sec: { since: "2026-10-29", companies: [{ ...SEC_DIGEST.companies[0], filings: [], quarter: null, newerEarningsRelease: null }], failures: [] } })
+  );
+  assert.match(p, /\(등록 종목 중 2026-10-29 이후 제출된 8-K 공시 없음\)/);
+  assert.match(p, /\(조회된 분기 실적 없음\)/);
+  assert.doesNotMatch(p, /※ AAPL/);
+});

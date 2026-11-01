@@ -38,6 +38,7 @@ import {
 } from "./curate.ts";
 import { sendStockEmail, sendStockIMessage, stockChannelOffReason } from "../notify/stock-email.ts";
 import { stockSlotRoleDetail } from "./slot-role.ts";
+import { gatherSec } from "./sec.ts";
 import { getSchedule } from "../scheduler/schedule-store.ts";
 import type {
   StockMarket,
@@ -740,6 +741,11 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
       }
     }
 
+    // ── 2-c. SEC 공시·실적 보강 (미국장만) ──
+    // 실패는 전부 null 로 접힌다(gatherSec 는 throw 하지 않는다) — 보강 자료가 없다고 브리핑을
+    // 막지 않는다. 휴장 판정 **뒤**에 두는 이유: 휴장이면 LLM 을 안 부르므로 SEC 를 두드릴 이유도 없다.
+    const sec = market === "us" ? await gatherSec(g.quotes.map((q) => q.symbol)) : null;
+
     // ── 3. LLM 서술 (숫자는 전부 g 에서 나온다) ──
     const curated = await curateStock({
       market,
@@ -755,6 +761,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
       histories: g.histories,
       indexHistories: g.indexHistories,
       positions: buildPositionRows(market, g),
+      sec,
     });
 
     // ── 4. 검증: watchlist 시세 사후 조회 ──
