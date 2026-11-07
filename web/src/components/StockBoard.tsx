@@ -534,6 +534,27 @@ export function StockBoard() {
             </section>
           )}
 
+          {/* 뉴스 — 포지션 점검 다음, 지수·종목 차트보다 먼저 둔다(오늘 무슨 일이 있었는지 읽고 나서
+              숫자·차트를 본다). 포지션 점검이 없는 날엔 이 블록이 맨 위 첫 섹션이 된다.
+              분류(bucket)별 블록을 신문 다단에 흘려 넣는다(가이드 §4-B). */}
+          {newsBuckets.length > 0 && (
+            <div className="col-rule columns-1 gap-10 lg:columns-2 2xl:columns-3 min-[2200px]:columns-4">
+              {newsBuckets.map((g) => (
+                // break-inside-avoid: 분류 블록이 두 단에 걸쳐 쪼개지지 않게 한다.
+                // last:mb-0: 1단(lg 미만)에서는 마지막 블록의 mb-8 이 높이에 더해져 바로 아래
+                // '지수' 섹션과의 간격이 72px 가 된다. 다른 섹션 간격(40px)과 맞춘다.
+                <section key={g.bucket} className="mb-8 break-inside-avoid last:mb-0">
+                  <SectionHeader className="mt-0" title={g.bucket} count={g.items.length} accent={ACCENT} />
+                  <ul className="divide-y">
+                    {g.items.map((n, i) => (
+                      <NewsRow key={`${n.title}-${i}`} item={n} />
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          )}
+
           {/* 지수 — 휴장일에도 최종 거래일 종가로 계속 보인다(서술만 비어 있다). */}
           {!!snap?.indices.length && (
             <section>
@@ -625,23 +646,6 @@ export function StockBoard() {
                 ))}
               </div>
             </section>
-          )}
-
-          {/* 뉴스 — 분류(bucket)별 블록을 신문 다단에 흘려 넣는다(가이드 §4-B). */}
-          {newsBuckets.length > 0 && (
-            <div className="col-rule columns-1 gap-10 lg:columns-2 2xl:columns-3 min-[2200px]:columns-4">
-              {newsBuckets.map((g) => (
-                // break-inside-avoid: 분류 블록이 두 단에 걸쳐 쪼개지지 않게 한다.
-                <section key={g.bucket} className="mb-8 break-inside-avoid">
-                  <SectionHeader className="mt-0" title={g.bucket} count={g.items.length} accent={ACCENT} />
-                  <ul className="divide-y">
-                    {g.items.map((n, i) => (
-                      <NewsRow key={`${n.title}-${i}`} item={n} />
-                    ))}
-                  </ul>
-                </section>
-              ))}
-            </div>
           )}
 
           {(snap?.notes || snap?.disclaimer) && (
