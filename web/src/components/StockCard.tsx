@@ -219,8 +219,10 @@ export function StockCard({
   }
 
   return (
-    // 가로 띠(가이드 §4-D): 왼쪽 이름·시세, 가운데 차트, 오른쪽 서술. lg 미만에서는 세로로 쌓는다.
-    <article className="grid gap-x-8 gap-y-4 py-5 lg:grid-cols-[260px_minmax(0,1fr)_360px] xl:grid-cols-[280px_minmax(0,1fr)_400px] 2xl:grid-cols-[300px_minmax(0,1fr)_420px]">
+    // 가로 띠(가이드 §4-D): 왼쪽 이름·시세, 가운데 좁은 차트, 오른쪽 서술이 남는 폭의 대부분을 차지한다.
+    // 차트:글 = 1:2(lg·xl), 3:5(2xl). 예전(글 고정 360~420px, 차트가 나머지 전부)의 절반 정도 차트 폭이다.
+    // lg 에서는 차트가 240px 밑으로 줄지 않게 막는다(축 라벨 간격). lg 미만에서는 세로로 쌓는다.
+    <article className="grid gap-x-8 gap-y-4 py-5 lg:grid-cols-[260px_minmax(240px,1fr)_minmax(0,2fr)] xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,2fr)] 2xl:grid-cols-[300px_minmax(0,3fr)_minmax(0,5fr)]">
       <div className="min-w-0">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
