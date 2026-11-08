@@ -541,9 +541,12 @@ export function StockBoard() {
             <div className="col-rule columns-1 gap-10 lg:columns-2 2xl:columns-3 min-[2200px]:columns-4">
               {newsBuckets.map((g) => (
                 // break-inside-avoid: 분류 블록이 두 단에 걸쳐 쪼개지지 않게 한다.
-                // last:mb-0: 1단(lg 미만)에서는 마지막 블록의 mb-8 이 높이에 더해져 바로 아래
+                // 블록 간격은 margin 이 아니라 padding(pb-8)으로 준다. WebKit(Safari·iPad)은 단 경계에
+                // 걸린 margin 을 잘라내지 않아, 앞 블록의 mb-8 이 다음 단 맨 위로 넘어가 그 단만 32px
+                // 내려가 시작했다. padding 은 블록 박스 안이라 블록과 함께 앞 단에 남는다.
+                // last:pb-0: 1단(lg 미만)에서는 마지막 블록의 간격이 높이에 더해져 바로 아래
                 // '지수' 섹션과의 간격이 72px 가 된다. 다른 섹션 간격(40px)과 맞춘다.
-                <section key={g.bucket} className="mb-8 break-inside-avoid last:mb-0">
+                <section key={g.bucket} className="break-inside-avoid pb-8 last:pb-0">
                   <SectionHeader className="mt-0" title={g.bucket} count={g.items.length} accent={ACCENT} />
                   <ul className="divide-y">
                     {g.items.map((n, i) => (
