@@ -4,6 +4,7 @@ import { localDate } from "../util/date.ts";
 import { horizonLabel, formatPnlPct } from "../../shared/holdings.ts";
 import { formatPrice } from "../../shared/stock.ts";
 import { IMPORTANT_8K_ITEMS, ITEMS_8K_KO, type SecDigest, type SecQuarter } from "./sec.ts";
+import { gateSnapshotLanguage } from "./language-gate.ts";
 import type {
   StockMarket,
   StockSnapshot,
@@ -985,6 +986,8 @@ export async function curateStock(input: CurateStockInput): Promise<StockSnapsho
       input.indexHistories ?? new Map(),
       meta
     );
+    // 스냅샷 완성 후에 검사한다 — toSnapshot 의 pulseSummary 폴백까지 덮어야 한다.
+    await gateSnapshotLanguage(snapshot, marketName);
     log.info(
       `증시 큐레이션(LLM) 완료 [${marketName}] — 지수 ${snapshot.indices.length} / 뉴스 ${snapshot.news.length} / ` +
         `분석 ${snapshot.analyses.length} / 관심 ${snapshot.watchlist.length}`

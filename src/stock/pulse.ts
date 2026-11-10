@@ -4,6 +4,7 @@ import { localDate } from "../util/date.ts";
 import { runStockAgent, extractJson } from "./agent.ts";
 import { buildPulsePrompt, normalizePulse } from "./pulse-prompt.ts";
 import { decide, isQuietHour, prioritize, type GateCounts } from "./pulse-gate.ts";
+import { gatePulseLanguage } from "./language-gate.ts";
 import { fetchSavetickerNews } from "./saveticker.ts";
 import { summarizeHoldings } from "./holdings.ts";
 import {
@@ -173,6 +174,9 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
           parsed.strippedActions.slice(0, 5).join(", ")
       );
     }
+
+    // 외국 문자 검사. 게이트·원장·발송이 전부 이 뒤라서 나가는 문구는 모두 여기를 지난다.
+    await gatePulseLanguage(parsed, opts.slot);
 
     // ── 5. 게이트 → 발송 ──
     const counts: GateCounts = countPulseSentToday(date);

@@ -22,6 +22,7 @@ process.env.STOCK_FETCH_DELAY_MS = "0";
 
 const { config } = await import("../config.ts");
 const { localDate } = await import("../util/date.ts");
+const { fingerprint } = await import("../../shared/pulse.ts");
 const { saveTabSettings } = await import("../settings/tab-settings.ts");
 const { __setIMessageTransportForTest } = await import("../notify/imessage.ts");
 const { __setAgentQueryDepsForTest } = await import("../util/agent-query.ts");
@@ -73,9 +74,11 @@ const AGENT_JSON = JSON.stringify({
   ],
   notes: null,
 });
-const record = async () => {
+/** 테스트가 바꿔 끼우는 응답. null 이면 AGENT_JSON. */
+let agentReply: ((label: string) => string) | null = null;
+const record = async (_prompt: string, _options: unknown, _timeoutMs: number, label: string) => {
   agentCalls++;
-  return AGENT_JSON;
+  return agentReply ? agentReply(label) : AGENT_JSON;
 };
 const restoreAgent = __setAgentQueryDepsForTest({
   runClaude: record,
@@ -109,6 +112,7 @@ function globalOn(): void {
 beforeEach(() => {
   texts.length = 0;
   agentCalls = 0;
+  agentReply = null;
   globalOn();
   // 조용 시간 창 없음(시작=끝) + 탭 알림 켬 — 각 테스트가 필요한 것만 바꾼다.
   saveTabSettings({
@@ -251,4 +255,59 @@ test("muted 는 상한(countPulseSentToday)·중복(recentPulseAlerts) 집계에
   const recentFps = repo.recentPulseAlerts(24).map((r) => r.fingerprint);
   assert.ok(recentFps.includes("s1"));
   assert.ok(!recentFps.includes("m1"));
+});
+
+// ── 언어 검증 ──
+
+/** 헤드라인이 오염된 판정 1건. 앞선 테스트의 중복 억제에 걸리지 않게 이슈를 따로 둔다. */
+const dirtyPulseJson = (issueKey: string) =>
+  JSON.stringify({
+    impacts: [
+      {
+        symbol: "AAPL",
+        market: "us",
+        name: "애플",
+        issueKey,
+        direction: "negative",
+        severity: "urgent",
+        trigger: "company",
+        headline: `애플 供应链 ${issueKey}`,
+        rationale: "주요 협력사 가동 중단 보도",
+        risks: "보도가 정정될 수 있음",
+        sources: [{ title: "기사", origin: "매체", url: "https://example.com/a", publishedAt: null }],
+      },
+    ],
+    notes: null,
+  });
+
+test("언어 검증: 교정된 headline 이 원장·문자로 나가고 지문은 LLM issueKey 그대로다", async () => {
+  const issueKey = "language-gate-corrected";
+  agentReply = (label) =>
+    label.includes("language-fix")
+      ? JSON.stringify({ f1: `애플 공급망 ${issueKey}` })
+      : dirtyPulseJson(issueKey);
+
+  const r = await runPulse({ slot: "t-lang-fix", trigger: "test", force: true });
+
+  assert.equal(r.ok, true);
+  assert.equal(agentCalls, 2);
+  const row = rowsOf("t-lang-fix")[0];
+  assert.equal(row.impact.headline, `애플 공급망 ${issueKey}`);
+  assert.equal(row.fingerprint, fingerprint("AAPL", issueKey));
+  assert.ok(!texts.some((t) => t.includes("供应链")));
+});
+
+test("언어 검증: 교정이 실패해 headline 이 오염으로 남으면 원장·문자에 나가지 않는다", async () => {
+  const issueKey = "language-gate-dropped";
+  agentReply = (label) => {
+    if (label.includes("language-fix")) throw new Error("교정 실패");
+    return dirtyPulseJson(issueKey);
+  };
+
+  const r = await runPulse({ slot: "t-lang-drop", trigger: "test", force: true });
+
+  assert.equal(r.ok, true);
+  assert.equal(r.impacts, 0);
+  assert.equal(rowsOf("t-lang-drop").length, 0);
+  assert.equal(texts.length, 0);
 });

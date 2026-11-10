@@ -24,8 +24,9 @@ import { getAgentModel } from "../util/model-store.ts";
  * 실행 모드.
  * - `briefing` — 일일 리포트(한국장 08:00 / 미국장 18:00). 조사량이 많고 오래 걸린다.
  * - `pulse`    — 시간당 실시간 취합. **짧아야 한다** (아래 타임아웃 주석 참고).
+ * - `language-fix` — 서술에 섞인 외국 문자 교정(language-gate.ts). 무도구 1턴.
  */
-export type StockAgentMode = "briefing" | "pulse";
+export type StockAgentMode = "briefing" | "pulse" | "language-fix";
 
 /**
  * 전 모드 공통 정체성. 모드별 프롬프트가 무엇을 요구하든 **이 규칙이 우선**이다.
@@ -44,6 +45,7 @@ const STOCK_AGENT_IDENTITY =
   "주가·등락률·지수 값은 프롬프트에 주어진 [확정 시세] 표의 숫자만 인용하고, " +
   "추정·계산·기억으로 숫자를 만들지 않는다. " +
   "출처 URL 을 지어내지 않는다 — 실제로 열어본 페이지의 URL 만 적는다. " +
+  "한자·일본어 등 외국 문자를 쓰지 말고 모두 한국어로 옮기되, 美·中 같은 관용 약어만 허용한다. " +
   "마지막에 지정된 JSON 한 개만 출력한다.";
 
 /** 모드별로 덧붙는 정체성. */
@@ -55,6 +57,9 @@ const MODE_IDENTITY: Record<StockAgentMode, string> = {
     "지금은 실시간 펄스 모드다. **지난 한 시간 안팎에 새로 나온 것**만 다룬다. " +
     "이미 알려진 배경 설명이나 하루 종일 반복된 이야기는 가치가 없다 — 새 사실이 없으면 " +
     "빈 배열을 내는 것이 정답이다. 억지로 채우지 마라.",
+  "language-fix":
+    "지금은 언어 교정 모드다. 도구 없이 주어진 텍스트의 외국 문자만 한국어로 고친다. " +
+    "새로운 사실이나 숫자를 더하지 않는다.",
 };
 
 /**
@@ -65,6 +70,17 @@ const MODE_IDENTITY: Record<StockAgentMode, string> = {
  * 외부 페이지의 프롬프트 인젝션이 파일을 건드릴 수 있다.
  */
 const STOCK_AGENT_TOOLS = ["WebSearch", "WebFetch"];
+
+/** 언어 교정은 손에 든 텍스트만 고치므로 웹을 돌 이유가 없다. 도구를 열면 인젝션 경로만 는다. */
+function toolsFor(mode: StockAgentMode): string[] {
+  return mode === "language-fix" ? [] : STOCK_AGENT_TOOLS;
+}
+
+/**
+ * 언어 교정 타임아웃. 몇 문장을 고치는 무도구 1턴이라 짧아도 되고, 실패해도 문장 제거로
+ * 대체되므로 오래 기다릴 이유가 없다. 브리핑·펄스가 끝난 뒤에 도는 후처리라 길면 발송이 밀린다.
+ */
+const LANGUAGE_FIX_TIMEOUT_MS = 120_000;
 
 /**
  * 모드별 타임아웃.
@@ -83,6 +99,7 @@ const STOCK_AGENT_TOOLS = ["WebSearch", "WebFetch"];
  *    (60분)의 1/6 이라 지연이 누적되지 않는다(실측 n=87: 중앙 66초 · 최대 358초).
  */
 function timeoutFor(mode: StockAgentMode): number {
+  if (mode === "language-fix") return LANGUAGE_FIX_TIMEOUT_MS;
   // 대시보드 운영 설정 우선(분 단위, 호출 시점에 읽음 — 다음 실행부터 적용).
   return tabTimeoutMs(mode === "pulse" ? "stockPulseMin" : "stockBriefMin");
 }
@@ -99,6 +116,7 @@ function timeoutFor(mode: StockAgentMode): number {
  * 주제당 6~8턴은 정상 소요다. 30은 정상 동작을 잘라내는 값이었다.
  */
 function maxTurnsFor(mode: StockAgentMode): number {
+  if (mode === "language-fix") return 1;
   return mode === "pulse" ? 50 : 60;
 }
 
@@ -115,11 +133,12 @@ export interface RunStockAgentOptions {
  */
 export async function runStockAgent(opts: RunStockAgentOptions): Promise<string> {
   const { mode, prompt, label } = opts;
+  const tools = toolsFor(mode);
   return runAgentQueryText(
     prompt,
     {
-      tools: STOCK_AGENT_TOOLS,
-      allowedTools: STOCK_AGENT_TOOLS,
+      tools,
+      ...(tools.length ? { allowedTools: tools } : {}),
       permissionMode: "bypassPermissions",
       settingSources: [],
       model: getAgentModel(), // 공용 모델 — 분리 대상이 아니다(파일 상단 주석 참고)
