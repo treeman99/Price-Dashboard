@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, Loader2, RefreshCw } from "lucide-react";
 import type { LottoRecentRound, LottoSnapshot } from "@shared/lotto";
-import { setsToText, winningNumbers } from "@shared/lotto";
+import { setsToText } from "@shared/lotto";
 import { api } from "@/lib/api";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { useTabConfig } from "@/lib/tabConfigStore";
@@ -44,15 +44,23 @@ function fmtWhen(iso: string): string {
  * 번호 공 하나. tone 으로 적중/미적중/추첨번호를 구분한다.
  * 예상(pick)=탭색 테두리, 적중(hit)=탭색 채움, 미적중(miss)=옅은 회색, 추첨(draw)=잉크 테두리,
  * 보너스(bonus)=경고 톤. 색이 비슷해지면 적중 여부를 한눈에 못 가리므로 다섯 가지를 섞지 않는다.
+ *
+ * 지난 회차 세트 안에서도 보너스와 같은 번호는 hit 가 아니라 bonus 톤으로 칠한다(추첨번호 줄의 보너스 공과
+ * 같은 색이라 "보너스와 일치"로 이어 읽힌다). 보너스는 본번호 5개를 맞혔을 때만 2등으로 의미가 있어서,
+ * 본번호 적중과 같은 탭색 채움이면 "하나 더 맞혔다"로 오해된다(사용자 피드백, 2026-11-15).
+ * 세트 오른쪽 `N개` 는 실험 채점 규칙(LOTTO_BONUS_COUNTS)대로 보너스 일치를 계속 센다 — 색만 나눈다.
  */
 function NumberBadge({
   n,
   tone,
   size = "md",
+  label,
 }: {
   n: number;
   tone: "pick" | "hit" | "miss" | "draw" | "bonus";
   size?: "md" | "lg";
+  /** 색만으로는 뜻을 알 수 없는 공(예: 세트 안의 보너스 일치)에 붙이는 설명. 툴팁과 스크린리더 문구로 쓴다. */
+  label?: string;
 }) {
   const style: Record<typeof tone, string> = {
     pick: "border-tab font-medium text-tab",
@@ -70,8 +78,10 @@ function NumberBadge({
         size === "lg" ? "h-7 w-7 text-[13px]" : "h-[26px] w-[26px] text-[12px]",
         style[tone]
       )}
+      title={label}
     >
       {n}
+      {label && <span className="sr-only"> ({label})</span>}
     </span>
   );
 }
@@ -242,14 +252,9 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
 
 /** 지난 회차 1건 — 추첨번호와 제출 10세트를 나란히 놓고 적중 번호를 칠한다. */
 function ResultCard({ r }: { r: LottoRecentRound }) {
-  const winSet = new Set(
-    winningNumbers({
-      round: r.round,
-      drawDate: r.drawDate,
-      numbers: r.drawNumbers,
-      bonus: r.drawBonus,
-    })
-  );
+  // 본번호 적중(hit)과 보너스 일치(bonus)를 다른 색으로 나눈다 — 이유는 NumberBadge 주석 참고.
+  // 적중 개수(`N개`·`N개 적중`·회차 강조)는 여기서 다시 세지 않고 서버가 준 r.matches 를 그대로 쓴다.
+  const mainSet = new Set(r.drawNumbers);
   const best = r.matches.length ? Math.max(...r.matches) : 0;
   // 3개 이상 적중(= 5등 이상 당첨) 회차는 머리 줄(회차 번호·태그)의 탭색에 더해 회차 띠 전체에 옅은 탭색
   // 배경을 깐다. 머리 글씨색만 바꾸던 때는 10회차 사이에서 눈에 띄지 않는다는 피드백이 있었다(2026-10-31).
@@ -302,9 +307,15 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
           return (
             <div key={i} className="flex items-center gap-1">
               <SetIndex i={i} />
-              {set.map((n) => (
-                <NumberBadge key={n} n={n} tone={winSet.has(n) ? "hit" : "miss"} />
-              ))}
+              {set.map((n) =>
+                mainSet.has(n) ? (
+                  <NumberBadge key={n} n={n} tone="hit" />
+                ) : n === r.drawBonus ? (
+                  <NumberBadge key={n} n={n} tone="bonus" label="보너스 번호 일치" />
+                ) : (
+                  <NumberBadge key={n} n={n} tone="miss" />
+                )
+              )}
               <span
                 className={cn(
                   "num ml-1.5 text-[12px]",
