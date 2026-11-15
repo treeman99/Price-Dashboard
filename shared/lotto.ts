@@ -64,6 +64,34 @@ export function roundScore(matchesPerSet: readonly number[]): number {
   return matchesPerSet.reduce((s, m) => s + setScore(m), 0);
 }
 
+/** 화면 표기용 적중 — 본번호 일치 수와 보너스 일치 여부를 따로 갖는다. */
+export interface LottoDisplayHits {
+  /** 본번호 6개 중 맞힌 개수(0..6). 보너스는 세지 않는다. */
+  main: number;
+  /** 세트에 보너스 번호가 들어 있는지. 실제 로또에서는 main 이 5일 때만(2등) 의미가 있다. */
+  bonus: boolean;
+}
+
+/**
+ * 지난 회차 화면에 보여 줄 적중 — **실제 로또 기준**(본번호 수 + 보너스 따로).
+ *
+ * 위 채점(countMatches·LOTTO_BONUS_COUNTS)과 일부러 갈라 둔다. 실험 점수는 보너스를 7번째
+ * 당첨번호로 세지만, 화면의 "N개"·"N개 적중" 태그·회차 강조까지 그 수를 쓰면 실제로는 낙첨인
+ * "본번호 2개 + 보너스" 세트가 "3개 적중"(5등)처럼 보인다(2026-11-15 사용자 결정: 점수는 그대로,
+ * 화면 표기만 본번호 기준으로). 이 함수는 점수에 쓰지 않는다.
+ */
+export function displayHits(
+  set: readonly number[],
+  drawNumbers: readonly number[],
+  drawBonus: number
+): LottoDisplayHits {
+  const main = new Set(drawNumbers);
+  return {
+    main: set.reduce((n, v) => n + (main.has(v) ? 1 : 0), 0),
+    bonus: set.includes(drawBonus),
+  };
+}
+
 // ── 무작위 기준선 ──
 //
 // 하드코딩하지 않고 매번 계산하는 이유는 위의 LOTTO_BONUS_COUNTS 같은 규칙 변경이 기준선에

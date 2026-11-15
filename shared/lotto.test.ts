@@ -5,6 +5,7 @@ import {
   LOTTO_BASELINE_PER_SET,
   LOTTO_SET_COUNT,
   countMatches,
+  displayHits,
   matchProbabilities,
   roundScore,
   setScore,
@@ -23,6 +24,19 @@ test("적중 수 계산은 보너스를 포함한다", () => {
   // 16(보너스)과 23(본번호) 두 개 적중
   assert.equal(countMatches([1, 2, 3, 4, 16, 23], winningNumbers(draw)), 2);
   assert.equal(countMatches([1, 2, 3, 4, 5, 6], winningNumbers(draw)), 0);
+});
+
+test("화면 표기(displayHits): 본번호 수와 보너스를 따로 센다 — 경계 0개·2개+보너스·3개·5개+보너스·6개", () => {
+  const { numbers, bonus } = draw; // 본번호 10,23,29,33,37,40 + 보너스 16
+  assert.deepEqual(displayHits([1, 2, 3, 4, 5, 6], numbers, bonus), { main: 0, bonus: false });
+  // 실험 점수로는 3개지만 실제 로또로는 낙첨 — 화면은 "2개+보너스"
+  assert.deepEqual(displayHits([1, 2, 3, 10, 16, 23], numbers, bonus), { main: 2, bonus: true });
+  assert.equal(countMatches([1, 2, 3, 10, 16, 23], winningNumbers(draw)), 3);
+  assert.deepEqual(displayHits([1, 2, 3, 10, 23, 29], numbers, bonus), { main: 3, bonus: false });
+  // 2등
+  assert.deepEqual(displayHits([10, 16, 23, 29, 33, 37], numbers, bonus), { main: 5, bonus: true });
+  // 1등 — 6개가 모두 본번호라 보너스가 들어갈 자리가 없다
+  assert.deepEqual(displayHits([10, 23, 29, 33, 37, 40], numbers, bonus), { main: 6, bonus: false });
 });
 
 test("세트 점수: 적중 수만큼 +, 0개면 -6", () => {

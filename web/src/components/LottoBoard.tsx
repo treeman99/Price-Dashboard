@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, Loader2, RefreshCw } from "lucide-react";
 import type { LottoRecentRound, LottoSnapshot } from "@shared/lotto";
-import { setsToText } from "@shared/lotto";
+import { displayHits, setsToText } from "@shared/lotto";
 import { api } from "@/lib/api";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { useTabConfig } from "@/lib/tabConfigStore";
@@ -48,7 +48,8 @@ function fmtWhen(iso: string): string {
  * 지난 회차 세트 안에서도 보너스와 같은 번호는 hit 가 아니라 bonus 톤으로 칠한다(추첨번호 줄의 보너스 공과
  * 같은 색이라 "보너스와 일치"로 이어 읽힌다). 보너스는 본번호 5개를 맞혔을 때만 2등으로 의미가 있어서,
  * 본번호 적중과 같은 탭색 채움이면 "하나 더 맞혔다"로 오해된다(사용자 피드백, 2026-11-15).
- * 세트 오른쪽 `N개` 는 실험 채점 규칙(LOTTO_BONUS_COUNTS)대로 보너스 일치를 계속 센다 — 색만 나눈다.
+ * 같은 이유로 세트 오른쪽 숫자·회차 태그·회차 강조도 실제 로또 기준(본번호 수, 보너스는 "+보너스"로 따로)이다 —
+ * ResultCard 참고. 실험 점수(서버의 r.matches·LOTTO_BONUS_COUNTS)는 보너스를 계속 세며 화면 표기와 별개다.
  */
 function NumberBadge({
   n,
@@ -253,15 +254,20 @@ function UpcomingCard({ snap }: { snap: LottoSnapshot }) {
 /** 지난 회차 1건 — 추첨번호와 제출 10세트를 나란히 놓고 적중 번호를 칠한다. */
 function ResultCard({ r }: { r: LottoRecentRound }) {
   // 본번호 적중(hit)과 보너스 일치(bonus)를 다른 색으로 나눈다 — 이유는 NumberBadge 주석 참고.
-  // 적중 개수(`N개`·`N개 적중`·회차 강조)는 여기서 다시 세지 않고 서버가 준 r.matches 를 그대로 쓴다.
   const mainSet = new Set(r.drawNumbers);
-  const best = r.matches.length ? Math.max(...r.matches) : 0;
-  // 3개 이상 적중(= 5등 이상 당첨) 회차는 머리 줄(회차 번호·태그)의 탭색에 더해 회차 띠 전체에 옅은 탭색
+  // 화면의 숫자·태그·강조는 **실제 로또 기준**이다: 본번호 일치 수 + 보너스는 따로("2개+보너스").
+  // 서버가 준 r.matches 는 보너스를 7번째 당첨번호로 센 실험 점수라, 그대로 쓰면 낙첨인 "본번호 2개 + 보너스"
+  // 세트가 "3개"·회차 "3개 적중"으로 보였다. 점수는 그대로 두고 표기만 바꾼다(2026-11-15 사용자 결정).
+  const hits = r.sets.map((set) => displayHits(set, r.drawNumbers, r.drawBonus));
+  const bestMain = hits.reduce((m, h) => Math.max(m, h.main), 0);
+  // 보너스는 본번호 5개일 때만(2등) 등수를 바꾼다 — 태그에 보너스를 적는 것도 그때뿐이다.
+  const secondPrize = bestMain === 5 && hits.some((h) => h.main === 5 && h.bonus);
+  // 본번호 3개 이상(= 실제 5등 이상 당첨) 회차는 머리 줄(회차 번호·태그)의 탭색에 더해 회차 띠 전체에 옅은 탭색
   // 배경을 깐다. 머리 글씨색만 바꾸던 때는 10회차 사이에서 눈에 띄지 않는다는 피드백이 있었다(2026-10-31).
   // --tab 은 HEX 라 Tailwind 3 의 `bg-tab/10` 투명도가 먹지 않아 color-mix 로 섞는다.
   // 음수 여백(-mx-2)으로 배경만 바깥으로 넓혀 번호 공의 세로 줄이 다른 회차와 어긋나지 않게 한다.
-  // my-1: 당첨 회차가 연달아 오면(실데이터 1242·1241·1240) 배경이 한 덩어리로 붙어 회차 경계가 사라진다.
-  const strong = best >= 3;
+  // my-1: 당첨 회차가 연달아 오면(2026-10-31 실데이터 1242·1241·1240) 배경이 한 덩어리로 붙어 회차 경계가 사라진다.
+  const strong = bestMain >= 3;
   return (
     <article
       className={cn(
@@ -279,7 +285,9 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
             {r.drawDate} · v{r.version}
           </span>
           {strong && (
-            <StatusTag className="border-tab text-tab">{best}개 적중</StatusTag>
+            <StatusTag className="border-tab text-tab">
+              {secondPrize ? "5개+보너스" : `${bestMain}개`} 적중
+            </StatusTag>
           )}
         </div>
         {/* 복사 버튼은 추첨번호 뒤 오른쪽 끝에 둔다. 회차마다 추첨번호 묶음의 폭이 같으므로(공 7개 고정)
@@ -303,7 +311,7 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
       </div>
       <SetGrid className="mt-1.5 gap-y-1">
         {r.sets.map((set, i) => {
-          const m = r.matches[i] ?? 0;
+          const h = hits[i];
           return (
             <div key={i} className="flex items-center gap-1">
               <SetIndex i={i} />
@@ -316,13 +324,19 @@ function ResultCard({ r }: { r: LottoRecentRound }) {
                   <NumberBadge key={n} n={n} tone="miss" />
                 )
               )}
+              {/* 강조는 본번호 3개 이상(실제 당첨)일 때만. "+보너스" 는 2등(5개+보너스)일 때만 함께 강조하고,
+                  그 밖에는 등수와 무관하니 muted 로 둔다. 보너스 공과 같은 호박색 글씨는 쓰지 않는다 — 12px 기준
+                  대비가 바탕 4.57:1·회차 강조 배경 4.01:1 이라 강조 배경에서 4.5:1 에 못 미친다(실측). */}
               <span
                 className={cn(
-                  "num ml-1.5 text-[12px]",
-                  m >= 3 ? "font-semibold text-tab" : "text-muted-foreground"
+                  "num ml-1.5 whitespace-nowrap text-[12px]",
+                  h.main >= 3 ? "font-semibold text-tab" : "text-muted-foreground"
                 )}
               >
-                {m}개
+                {h.main}개
+                {h.bonus && (
+                  <span className={cn(h.main !== 5 && "font-normal text-muted-foreground")}>+보너스</span>
+                )}
               </span>
             </div>
           );
