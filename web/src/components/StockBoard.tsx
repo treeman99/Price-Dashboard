@@ -421,7 +421,6 @@ export function StockBoard() {
           options={MARKETS.map((m) => ({ value: m, label: marketLabel(m) }))}
         />
         <ScheduleControl tab="stock" job={market === "kr" ? "stockKr" : "stockUs"} />
-        <MetaDot />
         {snap && (
           <>
             <MetaDot />

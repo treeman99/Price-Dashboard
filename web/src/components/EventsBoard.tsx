@@ -380,7 +380,6 @@ export function EventsBoard() {
         }
       >
         <ScheduleControl tab="events" />
-        <MetaDot />
         {updated && (
           <>
             <MetaDot />

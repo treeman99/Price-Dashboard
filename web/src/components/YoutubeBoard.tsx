@@ -924,7 +924,6 @@ export function YoutubeBoard() {
         <Meta>
           <span title="AI·LLM/신제품 리뷰 전문 조사">최근 {freshDays}일 이내 영상</span>
         </Meta>
-        <MetaDot />
         {updated && (
           <>
             <MetaDot />

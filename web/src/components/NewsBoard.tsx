@@ -357,7 +357,6 @@ export function NewsBoard() {
         <ScheduleControl tab="news" />
         <MetaDot />
         <Meta>최근 24시간 뉴스</Meta>
-        <MetaDot />
         {updated && (
           <>
             <MetaDot />
