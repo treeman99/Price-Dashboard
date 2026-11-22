@@ -118,8 +118,8 @@ async function collectRaw(ctx: Parameters<PipelineDeps["collectRaw"]>[0]): Promi
 export const defaultDeps: PipelineDeps = {
   now: () => new Date(),
   categories: () => ({
-    news: loadNewsCategories().map((c) => ({ key: c.key, label: `${c.emoji} ${c.label}` })),
-    youtube: loadYoutubeCategories().map((c) => ({ key: c.key, label: `${c.emoji} ${c.label}` })),
+    news: loadNewsCategories().map((c) => ({ key: c.key, label: `${c.emoji} ${c.label}`, name: c.label, emoji: c.emoji, color: c.color })),
+    youtube: loadYoutubeCategories().map((c) => ({ key: c.key, label: `${c.emoji} ${c.label}`, name: c.label, emoji: c.emoji, color: c.color })),
     freshDays: getTabSettings().youtube.freshDays,
   }),
   collectRaw,

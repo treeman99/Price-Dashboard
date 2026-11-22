@@ -346,8 +346,10 @@ export interface NewsItem {
   /** 한국어 요약 (5줄 이내) */
   summary: string;
   link: string | null;
-  /** 중복 통합 시 관련 출처 (최대 2개) */
+  /** 중복 통합 시 관련 출처 (단일 모델 최대 2개, 세 모델 통합 시 보조 출처 포함 최대 4개) */
   related: NewsRelated[];
+  /** 세 모델 통합 보고서에서 이 기사를 찾은 모델 표시명(예: ["Opus 5.5","Gemini 4 Neon"]). 단일 모델 수집이면 없음. */
+  foundBy?: string[];
 }
 
 export interface NewsCategory {
@@ -398,6 +400,8 @@ export interface YoutubeVideo {
   views?: string | null;
   /** 영상 길이 표시 (예: "12:34"). 모르면 null. */
   duration?: string | null;
+  /** 세 모델 통합 보고서에서 이 영상을 찾은 모델 표시명. 단일 모델 수집이면 없음. */
+  foundBy?: string[];
   /**
    * 사용자가 이 카드를 수동으로 이 카테고리로 옮겼는지.
    * true면 읽기 시점 지역필터(applyRegionFilter)를 건너뛰어 사용자의 배치를 존중한다.

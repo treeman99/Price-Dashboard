@@ -3,6 +3,7 @@
  *
  *   node daily-report.mjs [--source-data <price/data>] [--output <daily-news>] [--preview]
  *                         [--models claude,gpt,gemini] [--gemini-model <id>] [--retry-delay <초>]
+ *                         [--trigger <price:schedule|price:catchup|price:manual|cli>]
  *
  * 하는 일(한 번에 끝난다): 잠금 → 실행별 고유 디렉터리 → price 상태 파일 사본(원본은 읽기만) →
  * 공용 원자료 수집 → 세 모델 독립 취합(동시) → 통합 → 보고서·중간 결과·체크포인트 저장.
@@ -39,6 +40,7 @@ interface CliArgs {
   models: string[];
   geminiModel: string | null;
   retryDelaySec: number;
+  trigger: string;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -49,6 +51,7 @@ export function parseArgs(argv: string[]): CliArgs {
     models: ["claude", "gpt", "gemini"],
     geminiModel: process.env.DAILY_REPORT_GEMINI_MODEL?.trim() || null,
     retryDelaySec: 45,
+    trigger: "cli",
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -63,9 +66,10 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (k === "--models") a.models = v().split(",").map((s) => s.trim()).filter(Boolean);
     else if (k === "--gemini-model") a.geminiModel = v();
     else if (k === "--retry-delay") a.retryDelaySec = Math.max(0, Number(v()) || 0);
+    else if (k === "--trigger") a.trigger = v().replace(/[^A-Za-z0-9:._-]/g, "").slice(0, 40) || "cli";
     else if (k === "--help" || k === "-h") {
       process.stdout.write(
-        "사용법: daily-report [--source-data DIR] [--output DIR] [--preview] [--models claude,gpt,gemini] [--gemini-model ID] [--retry-delay 초]\n"
+        "사용법: daily-report [--source-data DIR] [--output DIR] [--preview] [--models claude,gpt,gemini] [--gemini-model ID] [--retry-delay 초] [--trigger 이름]\n"
       );
       process.exit(0);
     } else throw new Error(`알 수 없는 옵션: ${k}`);
@@ -194,6 +198,7 @@ async function main(): Promise<number> {
       models,
       retryDelayMs: args.retryDelaySec * 1000,
       sourceHashes: { before, after: () => hashState(args.sourceData) },
+      trigger: args.trigger,
     });
     const after = hashState(args.sourceData);
     const unchanged = JSON.stringify(before) === JSON.stringify(after);
@@ -203,6 +208,9 @@ async function main(): Promise<number> {
         ok: result.ok,
         runId: result.runId,
         report: result.reportPath,
+        reportJson: result.reportJsonPath,
+        tabs: result.tabs,
+        trigger: args.trigger,
         preview: result.preview,
         successCount: result.successCount,
         models: result.models.map((m) => ({ key: m.spec.key, model: m.spec.model, actual: m.actualModels, outcome: m.outcome, reason: m.reason.slice(0, 300) })),

@@ -343,8 +343,8 @@ test("세 모델 모두 성공: 같은 사건은 하나로(세 모델 표기), �
   assert.equal(r.counts.afterMerge, 3);
   const md = fs.readFileSync(r.reportPath, "utf8");
   assert.match(md, /3개 모델 모두 독립 취합 성공/);
-  assert.match(md, /찾은 모델: Opus 5\.5, Gemini 4 Argon, GPT-6\.1 Sol/);
-  assert.match(md, /양자 신기록\(단독\)[\s\S]*찾은 모델: Gemini 4 Argon/);
+  assert.match(md, /찾은 모델: Opus 5\.5, Gemini 4 Neon, GPT-6\.1 Sol/);
+  assert.match(md, /양자 신기록\(단독\)[\s\S]*찾은 모델: Gemini 4 Neon/);
   assert.match(md, /근거 차이: 모델별 날짜 표기가 다름/);
   assert.match(md, /편집 모델: Claude Opus 5\.5 \(`claude-opus-5-5`\)/);
   assert.match(md, /추천 채널 신규 업로드/);
@@ -358,6 +358,38 @@ test("세 모델 모두 성공: 같은 사건은 하나로(세 모델 표기), �
     assert.ok(fs.existsSync(path.join(r.runDir, "models", m, "news.json")), `${m} 중간 결과 보관`);
     assert.ok(fs.existsSync(path.join(r.runDir, "models", m, "status.json")));
   }
+
+  // price 탭 스냅샷: 통합 결과 전체를 탭 형식으로(대표 원본 항목 + 보조 출처 + 찾은 모델)
+  assert.ok(r.tabs, "성공 모델이 있으면 탭 스냅샷을 남긴다");
+  const tabNews = JSON.parse(fs.readFileSync(r.tabs!.news, "utf8")) as NewsSnapshot;
+  assert.equal(tabNews.source, "llm");
+  assert.equal(tabNews.notes, null, "세 모델 모두 성공이면 안내문 없음");
+  assert.equal(tabNews.categories[0].key, "ai");
+  assert.equal(tabNews.categories[0].emoji, "🤖", "모델 스냅샷의 카테고리 표시값을 쓴다");
+  const items = tabNews.categories[0].items;
+  assert.equal(items.length, 2);
+  assert.equal(items[0].title, "앤트로픽 새 모델", "여러 모델이 찾은 사건이 먼저, 대표는 Opus 원본");
+  assert.deepEqual(items[0].foundBy, ["Opus 5.5", "Gemini 4 Neon", "GPT-6.1 Sol"]);
+  assert.ok(items[0].related.some((x) => x.link === "https://techsite.com/claude"), "보조 출처를 관련 출처로");
+  assert.equal(items[1].title, "양자 신기록(단독)");
+  const tabYt = JSON.parse(fs.readFileSync(r.tabs!.youtube, "utf8")) as YoutubeSnapshot;
+  assert.equal(tabYt.freshDays, 2);
+  assert.equal(tabYt.categories[0].items.length, 1);
+  assert.equal(tabYt.categories[0].items[0].videoId, "abcdefghijk");
+  assert.equal(tabYt.categories[0].items[0].foundBy?.length, 3);
+
+  // 구조화 보고서(report.json): 화면·메일용
+  const rj = JSON.parse(fs.readFileSync(r.reportJsonPath, "utf8"));
+  assert.equal(rj.version, 1);
+  assert.equal(rj.trigger, "cli");
+  assert.equal(rj.ok, true);
+  assert.equal(rj.successCount, 3);
+  assert.deepEqual(rj.highlights, ["앤트로픽이 새 모델을 공개했다.", "양자 오류정정 신기록이 나왔다."]);
+  assert.equal(rj.models.find((m: { key: string }) => m.key === "gemini").model, "gemini-4-neon-xhigh");
+  assert.equal(rj.news[0].items.length, 2);
+  assert.equal(rj.youtube[0].items.length, 1);
+  assert.equal(rj.seedsOnly.length, 1);
+  assert.equal(rj.editor.model, "claude-opus-5-5");
 });
 
 test("한 모델 한도: 짧은 1회 재시도 후 '한도로 건너뜀', 나머지로 보고서·체크포인트 진행, 사유 원문 표시", async () => {
@@ -370,6 +402,8 @@ test("한 모델 한도: 짧은 1회 재시도 후 '한도로 건너뜀', 나머
   assert.equal(r.successCount, 2);
   const gpt = r.models.find((m) => m.spec.key === "gpt")!;
   assert.equal(gpt.outcome, "skipped-limit");
+  const tabNotes = (JSON.parse(fs.readFileSync(r.tabs!.news, "utf8")) as NewsSnapshot).notes;
+  assert.match(tabNotes ?? "", /3개 중 2개 성공\(건너뜀: GPT-6\.1 Sol\)/);
   const md = fs.readFileSync(r.reportPath, "utf8");
   assert.match(md, /부분 결과/);
   assert.match(md, /\| GPT-6\.1 Sol \| `gpt-6\.1-sol` → - \| 한도로 건너뜀 \| .*hit your usage limit/);
@@ -385,7 +419,7 @@ test("한도 외 오류: 재시도 없이 '오류로 건너뜀(조치 필요)'�
   assert.equal(r.models.find((m) => m.spec.key === "gemini")!.outcome, "skipped-error");
   const md = fs.readFileSync(r.reportPath, "utf8");
   assert.match(md, /오류로 건너뜀\(조치 필요\)/);
-  assert.match(md, /\*\*조치 필요\*\*: Gemini 4 Argon — .*no longer supported/);
+  assert.match(md, /\*\*조치 필요\*\*: Gemini 4 Neon — .*no longer supported/);
   assert.equal(r.ok, true);
 });
 
@@ -405,6 +439,12 @@ test("세 모델 모두 건너뜀: 실패 보고서만 내고 체크포인트·s
   assert.equal(r.ok, false);
   assert.equal(r.successCount, 0);
   assert.equal(r.checkpointAdvanced, false);
+  assert.equal(r.tabs, null, "성공 모델이 없으면 탭 스냅샷을 만들지 않는다(price 는 기존 탭 유지)");
+  assert.equal(fs.existsSync(path.join(r.runDir, "tabs")), false);
+  const failJson = JSON.parse(fs.readFileSync(r.reportJsonPath, "utf8"));
+  assert.equal(failJson.ok, false);
+  assert.deepEqual(failJson.news, []);
+  assert.deepEqual(failJson.highlights, []);
   assert.equal(fs.readFileSync(checkpointPath(out), "utf8"), before, "기준 시점·seen 그대로");
   const md = fs.readFileSync(r.reportPath, "utf8");
   assert.match(md, /통합 실패/);

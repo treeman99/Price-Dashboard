@@ -5,8 +5,9 @@ import { AntigravityError } from "../util/antigravity-query.ts";
  * 일일 보고서 취합 모델(three-model-update.md, 2026-11-22 사용자 확정).
  *
  * - 지정 모델을 다른 모델로 바꾸지 않는다(GPT-6.1 Sol 대신 다른 GPT, Opus 대신 Sonnet 금지).
- * - Gemini 는 사용자 결정으로 Gemini 4 Argon `gemini-4-argon-high`(agy 1.5.14 목록의 Argon 최상위 단계).
- *   Carbon 자동 감지·Neon 대체는 하지 않는다. Argon 이 실패하면 그 회차에서 건너뛴다.
+ * - Gemini 는 사용자 결정(price-centric-update.md)으로 Gemini 4 Neon 최상위 단계 `gemini-4-neon-xhigh`
+ *   (agy 1.5.14 목록, 2026-11-22 실제 취합 요청에서 응답 모델 ID 일치 확인). 다른 Gemini 로 자동 대체하지
+ *   않는다. Neon 이 실패하면 그 회차에서 건너뛴다.
  * - 배열 순서 = 최종 편집 우선순위(Opus → GPT → Gemini).
  */
 export interface ModelSpec {
@@ -18,8 +19,11 @@ export interface ModelSpec {
 export const REPORT_MODELS: ModelSpec[] = [
   { key: "claude", label: "Claude Opus 5.5", model: "claude-opus-5-5" },
   { key: "gpt", label: "GPT-6.1 Sol", model: "gpt-6.1-sol" },
-  { key: "gemini", label: "Gemini 4 Argon", model: "gemini-4-argon-high" },
+  { key: "gemini", label: "Gemini 4 Neon", model: "gemini-4-neon-xhigh" },
 ];
+
+/** 보고서·탭 화면에 쓰는 짧은 표시명(찾은 모델 표기). */
+export const MODEL_SHORT: Record<string, string> = { claude: "Opus 5.5", gpt: "GPT-6.1 Sol", gemini: "Gemini 4 Neon" };
 
 export type ModelOutcome = "success" | "skipped-limit" | "skipped-error";
 

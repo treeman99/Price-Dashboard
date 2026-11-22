@@ -27,7 +27,7 @@ fs.writeFileSync(
 
 const { config } = await import("../config.ts");
 const { __setAgentQueryDepsForTest } = await import("../util/agent-query.ts");
-const { curateYoutube, CHANNEL_DISCOVERY_TIMEOUT_MS } = await import("./curate.ts");
+const { curateYoutube, CHANNEL_DISCOVERY_TIMEOUT_MS, channelDiscoveryTimeoutMs } = await import("./curate.ts");
 
 after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -62,6 +62,12 @@ test("유튜브: 큐레이션은 youtubeTimeoutMs, 채널 발굴은 전용 상�
   // 발굴은 탭 예산과 별개인 곁가지 예산이다(상수 선언부 주석 참고). 탭 예산을 따라가면 안 된다.
   assert.equal(discovery.timeoutMs, CHANNEL_DISCOVERY_TIMEOUT_MS);
   assert.equal(discovery.timeoutMs, 240_000);
+});
+
+test("유튜브: Gemini(agy) 경로만 채널 발굴 예산을 8분으로 늘린다", () => {
+  assert.equal(channelDiscoveryTimeoutMs("gemini-4-neon-xhigh"), 480_000);
+  assert.equal(channelDiscoveryTimeoutMs("claude-opus-5-5"), CHANNEL_DISCOVERY_TIMEOUT_MS);
+  assert.equal(channelDiscoveryTimeoutMs("gpt-6.1-sol"), CHANNEL_DISCOVERY_TIMEOUT_MS);
 });
 
 test("유튜브: 대시보드 운영 설정 저장 직후 다음 수집이 새 신선도·타임아웃을 쓴다(재시작 불필요)", async () => {

@@ -1,5 +1,5 @@
 import type { ReportGroup } from "./merge.ts";
-import { OUTCOME_LABEL } from "./models.ts";
+import { MODEL_SHORT, OUTCOME_LABEL } from "./models.ts";
 import type { CategoryInfo, EditorRecord, ModelRunRecord, RawData, SharedSeedVideo } from "./pipeline.ts";
 
 export interface RenderInput {
@@ -50,8 +50,6 @@ function link(label: string, url: string | null | undefined): string {
   if (!url || !/^https?:\/\//.test(url)) return md(label);
   return `[${md(label) || "링크"}](${url.replace(/\)/g, "%29").replace(/\s/g, "%20")})`;
 }
-
-const MODEL_SHORT: Record<string, string> = { claude: "Opus 5.5", gpt: "GPT-6.1 Sol", gemini: "Gemini 4 Argon" };
 
 function foundBy(g: ReportGroup): string {
   return g.models.map((m) => MODEL_SHORT[m] ?? m).join(", ");

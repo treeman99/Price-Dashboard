@@ -15,6 +15,8 @@ import {
 } from "./merge.ts";
 import { modelOutcome, runWithLimitRetry, type ModelOutcome, type ModelSpec } from "./models.ts";
 import { renderReport } from "./render.ts";
+import { buildReportJson, buildTabSnapshots, type CategoryMeta, type OriginalItems } from "./output.ts";
+import { localDate } from "../util/date.ts";
 
 /**
  * 일일 뉴스·유튜브 통합 보고서 — 한 번의 실행.
@@ -53,8 +55,9 @@ export interface RawData {
 }
 
 export interface CategoryInfo {
-  news: { key: string; label: string }[];
-  youtube: { key: string; label: string }[];
+  /** label 은 보고서 표기(이모지 포함), name·emoji·color 는 탭 스냅샷용 원래 값(없으면 label·빈 값). */
+  news: { key: string; label: string; name?: string; emoji?: string; color?: string }[];
+  youtube: { key: string; label: string; name?: string; emoji?: string; color?: string }[];
   freshDays: number;
 }
 
@@ -122,6 +125,10 @@ export interface RunResult {
   editor: EditorRecord;
   counts: { before: number; afterMerge: number; alreadyReported: number; reported: number; seedsOnly: number };
   checkpointAdvanced: boolean;
+  /** 구조화 보고서(report.json) 경로. */
+  reportJsonPath: string;
+  /** 세 모델 통합 탭 스냅샷 경로(성공 모델이 없으면 null). */
+  tabs: { news: string; youtube: string } | null;
 }
 
 export interface RunOptions {
@@ -134,6 +141,8 @@ export interface RunOptions {
   retryDelayMs: number;
   /** 실행 전·후 원본 상태 해시 기록(호출부가 계산). */
   sourceHashes?: { before: Record<string, string>; after?: () => Record<string, string> };
+  /** 누가 돌렸나(price:schedule · price:catchup · price:manual · cli). 기록용. */
+  trigger?: string;
 }
 
 function writeJson(file: string, value: unknown): void {
@@ -155,10 +164,11 @@ export function readCheckpoint(outputDir: string): Checkpoint {
   return { ...structuredClone(EMPTY_CHECKPOINT), ...v };
 }
 
-function newsItems(spec: ModelSpec, snap: NewsSnapshot, labels: Map<string, string>): ReportItem[] {
+function newsItems(spec: ModelSpec, snap: NewsSnapshot, labels: Map<string, string>, originals: OriginalItems): ReportItem[] {
   const out: ReportItem[] = [];
   for (const c of snap.categories ?? []) {
     for (const it of c.items ?? []) {
+      originals.set(`${spec.key}:news:${out.length}`, it);
       out.push({
         id: `${spec.key}:news:${out.length}`,
         kind: "news",
@@ -177,10 +187,11 @@ function newsItems(spec: ModelSpec, snap: NewsSnapshot, labels: Map<string, stri
   return out;
 }
 
-function youtubeItems(spec: ModelSpec, snap: YoutubeSnapshot, labels: Map<string, string>): ReportItem[] {
+function youtubeItems(spec: ModelSpec, snap: YoutubeSnapshot, labels: Map<string, string>, originals: OriginalItems): ReportItem[] {
   const out: ReportItem[] = [];
   for (const c of snap.categories ?? []) {
     for (const v of c.items ?? []) {
+      originals.set(`${spec.key}:youtube:${out.length}`, v);
       out.push({
         id: `${spec.key}:youtube:${out.length}`,
         kind: "youtube",
@@ -253,6 +264,16 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
   const cats = deps.categories();
   const newsLabels = new Map(cats.news.map((c) => [c.key, c.label]));
   const ytLabels = new Map(cats.youtube.map((c) => [c.key, c.label]));
+  const originals: OriginalItems = new Map();
+  /** 탭 스냅샷용 카테고리 표시값: 탭 정의 → 모델 스냅샷 순으로 채운다. */
+  const catMeta: { news: Map<string, CategoryMeta>; youtube: Map<string, CategoryMeta> } = { news: new Map(), youtube: new Map() };
+  const noteMeta = (kind: "news" | "youtube", c: { key: string; label: string; emoji?: string; color?: string }) => {
+    if (!catMeta[kind].has(c.key) && c.emoji !== undefined && c.color) {
+      catMeta[kind].set(c.key, { key: c.key, label: c.label, emoji: c.emoji, color: c.color });
+    }
+  };
+  for (const c of cats.news) noteMeta("news", { ...c, label: c.name ?? c.label });
+  for (const c of cats.youtube) noteMeta("youtube", { ...c, label: c.name ?? c.label });
 
   // ── 1. 공용 원자료(모델 결과가 아니다): GeekNews 공식 피드 + 추천 채널 RSS ──
   deps.log("공용 원자료 수집 시작");
@@ -277,8 +298,10 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
       ) => (r.ok ? { ok: true, attempts: r.attempts } : { ok: false, kind: r.kind, error: r.error, attempts: r.attempts });
       const parts = { news: partOf(news), youtube: partOf(youtube) };
       const outcome = modelOutcome([parts.news, parts.youtube]);
-      const nItems = news.ok ? newsItems(spec, news.value, newsLabels) : [];
-      const yItems = youtube.ok ? youtubeItems(spec, youtube.value, ytLabels) : [];
+      const nItems = news.ok ? newsItems(spec, news.value, newsLabels, originals) : [];
+      const yItems = youtube.ok ? youtubeItems(spec, youtube.value, ytLabels, originals) : [];
+      if (news.ok) for (const c of news.value.categories ?? []) noteMeta("news", c);
+      if (youtube.ok) for (const c of youtube.value.categories ?? []) noteMeta("youtube", c);
       const actualModels = [...new Set(traces.map((t) => t.actualModel).filter((x): x is string => !!x))];
       const reason =
         outcome === "success"
@@ -380,7 +403,7 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
   // ── 5. 보고서 ──
   const ok = succeeded.length > 0;
   const lastSuccessAt = checkpoint.lastSuccessAt;
-  const markdown = renderReport({
+  const renderInput = {
     now,
     runId: opts.runId,
     runDir: opts.runDir,
@@ -394,9 +417,40 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
     freshDays: cats.freshDays,
     lastSuccessAt,
     categories: cats,
-  });
+  };
+  const markdown = renderReport(renderInput);
   const reportPath = path.join(opts.runDir, "report.md");
   writeJson(reportPath, markdown);
+  const reportJsonPath = path.join(opts.runDir, "report.json");
+  writeJson(
+    reportJsonPath,
+    buildReportJson({ ...renderInput, trigger: opts.trigger ?? "cli", startedAt: nowIso, finishedAt: deps.now().toISOString() })
+  );
+
+  // ── 5-1. price 탭 스냅샷(통합 결과 전체 — 증분 아님) ──
+  // 성공 모델이 없으면 만들지 않는다 → price 는 기존 탭 스냅샷을 그대로 둔다.
+  let tabs: RunResult["tabs"] = null;
+  if (ok) {
+    const skipped = models.filter((m) => m.outcome !== "success");
+    const note = skipped.length
+      ? `세 모델 통합 — ${models.length}개 중 ${succeeded.length}개 성공(건너뜀: ${skipped.map((m) => m.spec.label).join(", ")})`
+      : null;
+    const metaList = (kind: "news" | "youtube") =>
+      cats[kind].map((c) => catMeta[kind].get(c.key) ?? { key: c.key, label: c.name ?? c.label, emoji: "", color: "#6b7280" });
+    const snaps = buildTabSnapshots({
+      now,
+      date: localDate(now),
+      freshDays: cats.freshDays,
+      groups,
+      originals,
+      newsCategories: metaList("news"),
+      youtubeCategories: metaList("youtube"),
+      note,
+    });
+    tabs = { news: path.join(opts.runDir, "tabs", "news.json"), youtube: path.join(opts.runDir, "tabs", "youtube.json") };
+    writeJson(tabs.news, snaps.news);
+    writeJson(tabs.youtube, snaps.youtube);
+  }
 
   // ── 6. 체크포인트·포인터 ──
   let checkpointAdvanced = false;
@@ -441,10 +495,18 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
     editor,
     counts,
     checkpointAdvanced,
+    reportJsonPath,
+    tabs,
   };
   const hashes = opts.sourceHashes
     ? { before: opts.sourceHashes.before, after: opts.sourceHashes.after?.() ?? null }
     : null;
-  writeJson(path.join(opts.runDir, "summary.json"), { ...result, sourceHashes: hashes });
+  writeJson(path.join(opts.runDir, "summary.json"), {
+    ...result,
+    trigger: opts.trigger ?? "cli",
+    startedAt: nowIso,
+    finishedAt: new Date().toISOString(),
+    sourceHashes: hashes,
+  });
   return result;
 }

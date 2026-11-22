@@ -449,6 +449,18 @@ function rssToVideo(r: RssVideo): YoutubeVideo {
 export const CHANNEL_DISCOVERY_TIMEOUT_MS = 240_000;
 
 /**
+ * Gemini(agy) 경로의 채널 발굴 예산(ms). Gemini 4 Neon XHigh 는 추론 시간이 길어 도구 없는 1턴에서도
+ * 240초를 넘겼다(2026-11-22 실측, 보고서 미리보기 20261122T122053Z-7deb — 발굴 실패로 추천 채널만 사용).
+ * 탭 예산(기본 20분) 안에서 발굴만 8분까지 허용한다. 다른 모델 경로는 위 240초 그대로다.
+ */
+export const GEMINI_CHANNEL_DISCOVERY_TIMEOUT_MS = 480_000;
+
+/** 모델별 채널 발굴 예산. gemini-* 만 길게 준다. */
+export function channelDiscoveryTimeoutMs(model: string): number {
+  return /^gemini-/i.test(model) ? GEMINI_CHANNEL_DISCOVERY_TIMEOUT_MS : CHANNEL_DISCOVERY_TIMEOUT_MS;
+}
+
+/**
  * 카테고리별 '조사할 채널' 발굴. LLM 지식으로 실존 채널명을 나열하고(웹 도구 없이 1턴 — 빠름),
  * 서버가 그 이름을 channelId→RSS 로 실검증한다(채널명은 LLM, 최신 영상·게시일은 RSS 진실).
  * 실패하면 빈 맵(추천 채널만으로 진행).
@@ -486,7 +498,7 @@ ${catList}
         systemPrompt:
           "너는 유튜브 채널 생태계에 정통한 전문가다. 실존하는 채널만 정확히 나열하고 지정된 JSON 하나만 출력한다.",
       },
-      CHANNEL_DISCOVERY_TIMEOUT_MS, // 근거는 상수 선언부 주석
+      channelDiscoveryTimeoutMs(model), // 근거는 상수 선언부 주석
       strictModel ? `유튜브 채널 발굴(${model})` : "유튜브 채널 발굴",
       { strictModel }
     );
