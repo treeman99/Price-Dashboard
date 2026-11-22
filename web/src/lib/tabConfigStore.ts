@@ -5,9 +5,9 @@ import type { ScheduleResponse, TabSettingsResponse } from "@shared/types";
 /**
  * 스케줄(/api/schedule)·운영 설정(/api/settings) 응답을 화면 전체가 **한 벌** 공유하는 저장소.
  *
- * 탭 툴바 버튼, 상단 '설정' 전체 보기, 스킬 랭킹 안내 문구, 툴바의 알림 표기가 같은 값을 본다.
+ * 탭 툴바 버튼, 상단 '설정' 전체 보기, 스킬 랭킹 안내 문구가 같은 값을 본다.
  * 각자 따로 불러오면 한 곳에서 저장한 뒤 다른 곳이 옛 값을 계속 보여 준다(예: 전체 보기에서
- * 뉴스 알림을 끄고 닫았는데 뉴스 툴바엔 여전히 '이메일 발송').
+ * 수집 시각을 바꾸고 닫았는데 탭 툴바엔 여전히 옛 시각).
  */
 export interface TabConfigState {
   schedule: ScheduleResponse | null;

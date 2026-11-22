@@ -1,6 +1,5 @@
 import { Router } from "express";
-import { getTabSettings, getTabSettingsResponse, saveTabSettings } from "../settings/tab-settings.ts";
-import { rescheduleAll } from "../scheduler/scheduler.ts";
+import { getTabSettingsResponse, saveTabSettings } from "../settings/tab-settings.ts";
 import type { DeepPartial, TabSettings } from "../../shared/types.ts";
 
 /**
@@ -12,7 +11,7 @@ import type { DeepPartial, TabSettings } from "../../shared/types.ts";
  */
 export const settingsApi = Router();
 
-/** 현재 유효 설정 + .env 기본값 + 숫자 범위 + 탭별 채널 + 전역 채널 상태. */
+/** 현재 유효 설정 + .env 기본값 + 숫자 범위. */
 settingsApi.get("/settings", (_req, res) => {
   res.json(getTabSettingsResponse());
 });
@@ -20,20 +19,12 @@ settingsApi.get("/settings", (_req, res) => {
 /**
  * 부분 수정(DeepPartial<TabSettings>). 검증 실패는 400 {error}(한국어 사유).
  *
- * 조용 시간 끝(quietEndHour)은 펄스 보류분 묶음 발송 cron 의 시각이다 — 바뀌면 재시작 없이
- * 즉시 재등록해야 그날 아침 발송이 새 시각에 나간다. 시작 시각은 cron 이 아니지만 같은 쌍이라
- * 함께 본다(재등록은 멱등이라 한 번 더 불러도 무해하다).
+ * (예전에는 조용 시간이 바뀌면 펄스 보류분 묶음 발송 cron 을 재등록했다. 메일·문자 발송 기능을
+ *  제거하면서 그 cron 이 없어졌고, 조용 시간은 펄스 판정 게이트가 호출 시점마다 읽는다.)
  */
 settingsApi.put("/settings", (req, res) => {
   try {
-    const before = getTabSettings().stockPulse;
-    const updated = saveTabSettings((req.body ?? {}) as DeepPartial<TabSettings>);
-    if (
-      updated.stockPulse.quietStartHour !== before.quietStartHour ||
-      updated.stockPulse.quietEndHour !== before.quietEndHour
-    ) {
-      rescheduleAll();
-    }
+    saveTabSettings((req.body ?? {}) as DeepPartial<TabSettings>);
     res.json(getTabSettingsResponse());
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });

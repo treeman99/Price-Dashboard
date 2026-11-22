@@ -149,14 +149,12 @@ export function isNewsCollecting(): boolean {
   return running;
 }
 
-/** refreshNews 한 회차의 처리 방침(순수 판정 — 디스크/알림 부작용 없음). */
+/** refreshNews 한 회차의 처리 방침(순수 판정 — 디스크 부작용 없음). */
 export interface NewsSnapshotDecision {
   /** "save" = 이번 결과를 저장 / "keep" = 직전 스냅샷 유지(빈 결과의 덮어쓰기 차단) */
   action: "save" | "keep";
   /** 실제로 화면·API 에 노출할 스냅샷 */
   snapshot: NewsSnapshot;
-  /** 이번 회차 결과가 알림(이메일·iMessage) 대상인지 — opts.notify 와 AND 로 묶인다 */
-  notify: boolean;
   /** 이번 시도의 성패 기록 */
   attempt: NewsAttemptRecord;
 }
@@ -169,7 +167,6 @@ export interface NewsSnapshotDecision {
  *    직전이 어제자여도 유지한다 — "어제 뉴스가 보이는 것"이 "빈 화면"보다 낫다.
  *    대신 notes 에 상황을 적어 날짜를 오해하지 않게 한다(스키마는 그대로 두고 기존 필드만 쓴다).
  * 2. 직전이 없거나 직전도 실패성이면 이번 결과를 그대로 저장한다(첫 실행 시 빈 화면은 정상).
- * 3. 보호가 걸린 회차는 **알림을 보내지 않는다** — 어제 다이제스트가 오늘 아침에 또 오면 안 된다.
  *
  * 이 판정만으로는 catch-up 이 30분마다 무한 재시도할 수 있으므로, 성패를 attempt 로 함께
  * 돌려주어 스케줄러가 getNewsLastAttempt() 로 백오프를 걸 수 있게 한다(자기봉인/무한재시도 동시 차단).
@@ -198,12 +195,11 @@ export function decideNewsSnapshot(
       // date/updatedAt 은 건드리지 않는다 — 스케줄러 catch-up 이 이 두 값으로 '언제 자료인지'를 본다.
       // notes 는 매번 통째로 다시 쓴다(누적 append 금지 — 실패가 반복돼도 길이가 늘지 않는다).
       snapshot: { ...kept, notes: staleNote(kept, fresh, attemptedAt) },
-      notify: false,
       attempt,
     };
   }
 
-  return { action: "save", snapshot: fresh, notify: total > 0, attempt };
+  return { action: "save", snapshot: fresh, attempt };
 }
 
 /** 보호 발동 시 스냅샷에 남길 안내문(화면·API·JSON 을 직접 열어본 사람 모두를 위한 것). */
@@ -216,7 +212,7 @@ function staleNote(kept: NewsSnapshot, fresh: NewsSnapshot, attemptedAt: string)
 }
 
 /**
- * 뉴스 수집 실행: Claude Agent SDK 큐레이션 → 캐시 갱신 → (옵션)이메일.
+ * 뉴스 수집 실행: 큐레이션(대시보드에서 고른 모델) → 캐시 갱신.
  * 이력은 저장하지 않고 최신 스냅샷만 덮어쓴다. 단 실패한 회차는 덮어쓰지 않는다(decideNewsSnapshot).
  */
 export async function refreshNews(
@@ -250,7 +246,6 @@ export async function refreshNews(
     }
 
     const total = decision.attempt.total ?? 0;
-    // 기사가 0건이면 이메일을 보내지 않는다(빈 다이제스트 방지).
     // 보고서는 Orca IT News에서 전달한다.
     log.info(
       `뉴스 수집 완료 [${opts.trigger}] ${date} (총 ${total}건, source=${decision.snapshot.source})`

@@ -686,7 +686,7 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
 
         // 마지막 관문: watch 페이지의 실제 업로드일로 신선도 재검증(LLM 의 날짜 위조 차단).
         const fresh = await verifyRealDates(items, today, cutoff);
-        // 최신(업로드일 내림차순) 우선 정렬 — 저장·API·이메일 모두 일관되게 최신순.
+        // 최신(업로드일 내림차순) 우선 정렬 — 저장·API·보고서 모두 일관되게 최신순.
         fresh.sort((a, b) => b.date.localeCompare(a.date));
         return toCategory(meta, fresh);
       })
@@ -694,7 +694,7 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
 
     // 교차 카테고리 중복 제거: 카테고리별 파이프라인은 각자 videoId 를 dedup 하지만
     // 서로 다른 카테고리에 같은 영상이 걸치는 경우(LLM 이 한 영상을 두 곳에 배치)는 못 막는다.
-    // 저장·이메일·iMessage 는 모두 이 스냅샷을 그대로 쓰므로 여기서 한 번 정리한다.
+    // 저장·API·보고서는 모두 이 스냅샷을 그대로 쓰므로 여기서 한 번 정리한다.
     const dedupedCategories = dedupeCategoriesByVideoId(categories);
     const total = dedupedCategories.reduce((a, c) => a + c.items.length, 0);
     const snapshot: YoutubeSnapshot = {

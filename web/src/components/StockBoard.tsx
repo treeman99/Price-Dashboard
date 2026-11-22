@@ -381,8 +381,8 @@ export function StockBoard() {
   const bySymbol = new Map<string, StockAnalysis>();
   snap?.analyses.forEach((a) => bySymbol.set(a.symbol, a));
 
-  // 관심 종목은 '이 시장 종목'과 '해외 참고'가 한 배열에 섞여 온다 — 반드시 공용 헬퍼로 가른다
-  // (이메일도 같은 함수를 쓴다). 헬퍼가 watchlist 부재를 방어하므로 옛 스냅샷도 안전하다.
+  // 관심 종목은 '이 시장 종목'과 '해외 참고'가 한 배열에 섞여 온다 — 반드시 공용 헬퍼로 가른다.
+  // 헬퍼가 watchlist 부재를 방어하므로 옛 스냅샷도 안전하다.
   const { domestic, foreign } = snap
     ? partitionWatchlist(snap)
     : { domestic: [], foreign: [] };

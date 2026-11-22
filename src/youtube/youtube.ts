@@ -71,7 +71,7 @@ export function isYoutubeCollecting(): boolean {
 }
 
 /**
- * 유튜브 소식 수집 실행: Claude Agent SDK 큐레이션 → 캐시 갱신 → (옵션)이메일.
+ * 유튜브 소식 수집 실행: 큐레이션(대시보드에서 고른 모델) → 캐시 갱신.
  * 이력은 저장하지 않고 최신 스냅샷만 덮어쓴다.
  */
 export async function refreshYoutube(
@@ -104,7 +104,6 @@ export async function refreshYoutube(
     saveToDisk(snapshot);
 
     const total = snapshot.categories.reduce((a, c) => a + c.items.length, 0);
-    // 영상이 0건이면 이메일을 보내지 않는다(빈 다이제스트 방지).
     // 보고서는 Orca IT News에서 전달한다.
     log.info(`유튜브 수집 완료 [${opts.trigger}] ${date} (총 ${total}건, source=${snapshot.source})`);
     // 여기까지 왔어도 source=empty 면(이전 스냅샷이 없어 빈 결과를 그대로 저장한 경우) 실패다.

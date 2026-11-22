@@ -135,11 +135,6 @@ test("실패한 회차는 직전 성공 스냅샷을 덮지 않는다", () => {
   assert.match(d.snapshot.notes ?? "", /2026-09-07 스냅샷을 유지/);
 });
 
-test("보호가 걸린 회차는 알림을 보내지 않는다", () => {
-  const d = decideSkillsSnapshot(prevOk(), freshError(), "2026-09-14T09:00:00.000Z");
-  assert.equal(d.notify, false, "지난주 랭킹이 이번 주 메일로 또 오면 안 된다");
-});
-
 test("보호가 걸려도 시도 기록은 실패로 남는다(백오프의 근거)", () => {
   const d = decideSkillsSnapshot(prevOk(), freshError(), "2026-09-14T09:00:00.000Z", "catchup");
   assert.equal(d.attempt.ok, false);
@@ -162,7 +157,6 @@ test("직전이 없으면(첫 실행) 실패 결과를 그대로 저장한다 �
   const d = decideSkillsSnapshot(null, freshError(), "2026-09-14T09:00:00.000Z");
   assert.equal(d.action, "save");
   assert.equal(d.snapshot.source, "error");
-  assert.equal(d.notify, false);
 });
 
 test("직전도 실패성이면 새 결과가 이긴다(낡은 실패를 붙들지 않는다)", () => {
@@ -171,10 +165,10 @@ test("직전도 실패성이면 새 결과가 이긴다(낡은 실패를 붙들�
   assert.equal(d.snapshot.date, "2026-09-14");
 });
 
-test("성공한 회차는 저장하고 알림 대상이 된다", () => {
+test("성공한 회차는 저장하고 성공으로 기록한다(알림 판정 필드는 없다 — 메일·문자 발송 제거)", () => {
   const d = decideSkillsSnapshot(prevOk(), freshOk(), "2026-09-14T09:00:00.000Z", "schedule");
   assert.equal(d.action, "save");
-  assert.equal(d.notify, true);
+  assert.equal("notify" in d, false);
   assert.equal(d.attempt.ok, true);
   assert.equal(d.attempt.error, null);
   assert.equal(d.attempt.tracked, 400);

@@ -75,11 +75,6 @@ test("빈 결과 + 직전 성공 스냅샷 → 덮어쓰지 않고 직전 것을
   assert.match(String(d.snapshot.notes), /2026-08-01 스냅샷을 유지/);
 });
 
-test("보호가 발동한 회차는 알림을 보내지 않는다(어제 다이제스트 재발송 금지)", () => {
-  const d = decideNewsSnapshot(prevOk(), freshEmpty(), AT);
-  assert.equal(d.notify, false);
-});
-
 test("보호 발동 회차의 성패는 실패로 기록된다(자기봉인 차단의 핵심)", () => {
   const d = decideNewsSnapshot(prevOk(), freshEmpty(), AT, "catchup");
   assert.equal(d.attempt.ok, false);
@@ -96,7 +91,6 @@ test("빈 결과 + 직전 스냅샷 없음 → 그대로 저장한다(첫 실행
 
   assert.equal(d.action, "save");
   assert.equal(d.snapshot, fresh);
-  assert.equal(d.notify, false); // 0건이면 알림도 없다
   assert.equal(d.attempt.ok, false);
 });
 
@@ -122,7 +116,7 @@ test("성공 결과는 직전 성공본을 정상적으로 덮어쓴다", () => 
   assert.equal(d.action, "save");
   assert.equal(d.snapshot, fresh);
   assert.equal(d.snapshot.date, "2026-08-02");
-  assert.equal(d.notify, true);
+  assert.equal("notify" in d, false, "알림 판정 필드는 없다(메일·문자 발송 제거)");
   assert.deepEqual(d.attempt, {
     ok: true,
     at: AT,

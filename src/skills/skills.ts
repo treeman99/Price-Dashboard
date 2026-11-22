@@ -261,14 +261,12 @@ export function refreshSkillsNow(now: Date = new Date()): Promise<SkillsSnapshot
 
 // ── 스냅샷 보호 ──────────────────────────────────────────────────────────────
 
-/** refreshSkills 한 회차의 처리 방침(순수 판정 — 디스크/알림 부작용 없음). */
+/** refreshSkills 한 회차의 처리 방침(순수 판정 — 디스크 부작용 없음). */
 export interface SkillsSnapshotDecision {
   /** "save" = 이번 결과를 저장 / "keep" = 직전 스냅샷 유지(실패 결과의 덮어쓰기 차단) */
   action: "save" | "keep";
   /** 실제로 화면·API 에 노출할 스냅샷 */
   snapshot: SkillsSnapshot;
-  /** 이번 회차 결과가 알림 대상인지 — opts.notify 와 AND 로 묶인다 */
-  notify: boolean;
   /** 이번 시도의 성패 기록 */
   attempt: SkillsAttemptRecord;
 }
@@ -280,7 +278,6 @@ export interface SkillsSnapshotDecision {
  *    지난주 랭킹이 보이는 것이 빈 화면보다 낫다. 대신 notes 에 상황을 적어 날짜를 오해하지
  *    않게 한다(스키마는 그대로 두고 계약에 이미 있는 notes 만 쓴다).
  * 2. 직전이 없거나 직전도 실패성이면 이번 결과를 그대로 저장한다(첫 실행의 빈 화면은 정상).
- * 3. 보호가 걸린 회차는 **알림을 보내지 않는다** — 지난주 랭킹이 이번 주 메일로 또 오면 안 된다.
  *
  * 성패를 attempt 로 함께 돌려주어 스케줄러가 getSkillsLastAttempt() 로 백오프를 걸 수 있게
  * 한다(자기봉인과 무한 재시도를 동시에 막는 조합이다).
@@ -308,12 +305,11 @@ export function decideSkillsSnapshot(
       // date/updatedAt 은 건드리지 않는다 — 스케줄러 catch-up 이 이 값으로 '언제 자료인지'를 본다.
       // notes 는 매번 통째로 다시 쓴다(누적 append 금지 — 실패가 반복돼도 길이가 늘지 않는다).
       snapshot: { ...kept, notes: staleNote(kept, fresh, attemptedAt) },
-      notify: false,
       attempt,
     };
   }
 
-  return { action: "save", snapshot: fresh, notify: ok, attempt };
+  return { action: "save", snapshot: fresh, attempt };
 }
 
 /** 보호 발동 시 스냅샷에 남길 안내문(화면·API·JSON 을 직접 열어본 사람 모두를 위한 것). */

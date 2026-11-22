@@ -1,13 +1,12 @@
 /**
  * `/api/settings`(탭별 운영 설정) 라우트 회귀 테스트.
  *
- * 1. GET — TabSettingsResponse 형태(settings·defaults·numberRules·channels·globalChannels).
+ * 1. GET — TabSettingsResponse 형태(settings·defaults·numberRules). 메일·문자 알림 채널 정보는 없다.
  * 2. PUT — 부분 수정이 저장·병합되어 같은 형태로 돌아온다.
  * 3. PUT 검증 실패 — 400 `{error}`(한국어 사유), 저장분은 그대로.
  *
  * ★ 실제 `data/` 를 건드리지 않는다(config 가 import 시점에 DB_PATH 를 읽으므로 먼저 갈아끼운다).
- * ★ 조용 시간(quietStart/EndHour)은 PUT 하지 않는다 — rescheduleAll() 이 이 프로세스에 cron 을
- *   등록해 테스트 프로세스가 끝나지 않는다. 그 경로는 임시 서버 + curl 로 확인한다.
+ * ★ 조용 시간 변경은 이제 cron 을 재등록하지 않는다(펄스 보류분 발송 cron 제거) — 아래에서 함께 확인한다.
  */
 
 import assert from "node:assert/strict";
@@ -75,4 +74,12 @@ test("PUT /settings — 범위 밖·타입 오류는 400 {error}, 저장분은 �
   }
   const r = (await (await fetch(`${base}/settings`)).json()) as TabSettingsResponse;
   assert.equal(r.settings.youtube.freshDays, 6);
+});
+
+test("PUT /settings — 조용 시간 변경은 저장만 한다(펄스 보류분 발송 cron 재등록 없음 — 테스트 프로세스가 그대로 끝난다)", async () => {
+  const res = await put({ stockPulse: { quietStartHour: 22, quietEndHour: 6 } });
+  assert.equal(res.status, 200);
+  const r = (await res.json()) as TabSettingsResponse;
+  assert.equal(r.settings.stockPulse.quietStartHour, 22);
+  assert.equal(r.settings.stockPulse.quietEndHour, 6);
 });

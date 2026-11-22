@@ -79,7 +79,7 @@ export interface AppConfig {
     macroCap: number;
     /** 같은 이슈 재발송 차단 시간(시간). 강도가 오르면 이 창 안에서도 다시 보낸다. */
     dedupHours: number;
-    /** 문자 발송 문턱. 이 강도 미만은 원장에만 남는다(일일 브리핑 요약에서 회수). */
+    /** 판정 문턱. 이 강도 이상은 'muted'(발송 대상이던 판정), 미만은 'below' 로 원장에 남는다(문자 발송은 제거). */
     threshold: "urgent" | "important" | "info";
     /** 야간 시작 시각(이 시각부터 긴급만 즉시 발송). 예: 23 */
     quietStartHour: number;
