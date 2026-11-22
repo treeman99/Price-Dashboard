@@ -11,8 +11,6 @@ import {
   getEventsLastAttempt,
   isEventsCollecting,
 } from "../events/events.ts";
-import { getNewsSnapshot } from "../news/news.ts";
-import { getYoutubeSnapshot } from "../youtube/youtube.ts";
 import {
   getReportLastAttempt,
   isReportRunning,
@@ -604,53 +602,12 @@ async function checkReportCatchup() {
   await safeRunReport("catchup");
 }
 
-/**
- * 해당 예정 시각(scheduled)을 커버하는 **정상** 뉴스 스냅샷이 있는지. (2026-11-22 이후 정기 수집 게이트는
- * reportCoveredAt 이다 — 이 술어는 화면·진단용으로 남긴다.)
- *
- * ⚠️ `source === "llm"` 조건이 핵심이다. 큐레이션이 실패하면 news.ts 는 오늘 날짜 + 지금
- * updatedAt 을 단 빈 스냅샷(source="empty")을 저장할 수 있는데, 날짜·시각만 보는 예전 게이트는
- * 그걸 커버로 인정해 **그날의 뉴스를 통째로 포기**했다(실패 후 재시도가 한 번도 안 돌았다).
- * 이제는 실패가 커버로 안 잡히므로 catch-up 이 다시 돈다 — 무한 재시도는 위쪽 백오프가 막는다.
- *
- * 날짜 조건은 '스냅샷 날짜 ≥ 예정 시각의 날짜'다(스케줄 v2). 예정 시각이 오늘이면 예전의
- * `date === today` 와 같고, 주간 잡의 지난 occurrence(월요일 슬롯을 화요일에 판정)도 답할 수 있다.
- */
-export function newsCoveredAt(scheduled: Date): boolean {
-  const snap = getNewsSnapshot();
-  if (!snap || snap.date < localDate(scheduled)) return false;
-  if (snap.source !== "llm") return false;
-  // updatedAt 이 없는 스냅샷은 이론상 없지만, 있다면 '언제 갱신됐는지 모름'이다.
-  // 그 경우는 커버로 본다 — 모른다는 이유로 30분마다 20분짜리 LLM 작업을 돌릴 수는 없다.
-  if (!snap.updatedAt) return true;
-  const at = new Date(snap.updatedAt);
-  return Number.isNaN(at.getTime()) ? true : at >= scheduled;
-}
-
 /** HH:mm → 오늘 그 시각의 Date */
 export function scheduledToday(hhmm: string): Date {
   const { hour, minute } = parseCollectTime(hhmm);
   const d = new Date();
   d.setHours(hour, minute, 0, 0);
   return d;
-}
-
-/**
- * 해당 예정 시각을 커버하는 **정상** 유튜브 스냅샷이 있는지.
- *
- * 뉴스와 같은 이유로 `source === "llm"` 을 요구한다. 유튜브는 실패 시 보통 기존 스냅샷을
- * 유지하지만(youtube.ts: 빈 결과로 덮어쓰지 않음), **이전 스냅샷이 아예 없는 날**에는 빈
- * 스냅샷(source="empty")이 오늘 날짜로 저장된다 — 날짜만 보는 게이트는 그 하루를 통째로
- * 포기했다. 조용한 구멍이라 여기서 막는다.
- */
-export function youtubeCoveredAt(scheduled: Date): boolean {
-  const snap = getYoutubeSnapshot();
-  // 날짜 조건은 newsCoveredAt 과 같다('스냅샷 날짜 ≥ 예정 시각의 날짜').
-  if (!snap || snap.date < localDate(scheduled)) return false;
-  if (snap.source !== "llm") return false;
-  if (!snap.updatedAt) return true; // 뉴스와 동일: '모름'은 커버로 본다
-  const at = new Date(snap.updatedAt);
-  return Number.isNaN(at.getTime()) ? true : at >= scheduled;
 }
 
 // ── 증시 브리핑 스케줄 (한국장 08:00 / 미국장 18:00) ──

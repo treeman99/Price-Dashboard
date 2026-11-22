@@ -1,8 +1,6 @@
 import type {
   EventsSnapshot,
-  NewsSnapshot,
   NewsCategoryDef,
-  YoutubeSnapshot,
   YoutubeCategoryDef,
   BlockedChannel,
   WatchedVideo,
@@ -22,16 +20,18 @@ import type {
   StockHoldingSummary,
   StockHorizon,
   PulseRunResult,
+  NewsExcludedDomain,
 } from "@shared/types";
 import type { LottoSnapshot } from "@shared/lotto";
 import type { SkillsSnapshot } from "@shared/skills";
 import type { DowntimeEvent, DowntimeView } from "@shared/uptime";
-import type { DailyReportJson, DailyReportListResponse } from "@shared/report";
+import type { DailyReportListResponse, DailyReportRunView } from "@shared/report";
 
 /** 보고서 실행 1건 상세(GET /api/report/runs/:id). 옛 실행은 report 가 null 이고 markdown 원문만 있다. */
 export interface DailyReportRunDetail {
   runId: string;
-  report: DailyReportJson | null;
+  /** report.json 위에 사용자 동작(카테고리 이동·본영상·제외·차단 상태)을 얹은 보기. */
+  report: DailyReportRunView | null;
   markdown: string | null;
   delivered: { email?: string; imessage?: string };
 }
@@ -153,21 +153,6 @@ export const api = {
 
   eventsStatus: () => fetch("/api/events/status").then((r) => j<CollectStatus>(r)),
 
-  news: () => fetch("/api/news").then((r) => j<NewsSnapshot | null>(r)),
-
-  /**
-   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 시작하지 못하면 409 → { busy: true }.
-   * 완료 여부는 newsStatus() 폴링으로 확인한다. 409 두 종류의 구분은 refreshEvents 주석 참고.
-   */
-  refreshNews: async (): Promise<RefreshResult> => {
-    const res = await fetch("/api/news/refresh", { method: "POST" });
-    if (res.status === 409) return busyResult(res);
-    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
-    return { started: true, busy: false, collecting: true, reason: null };
-  },
-
-  newsStatus: () => fetch("/api/news/status").then((r) => j<CollectStatus>(r)),
-
   newsCategories: () =>
     fetch("/api/news/categories").then((r) => j<NewsCategoryDef[]>(r)),
 
@@ -215,37 +200,6 @@ export const api = {
     }).then((r) => j<NewsCategoryDef[]>(r)),
 
   // ── 유튜브 소식 ──
-  youtube: () => fetch("/api/youtube").then((r) => j<YoutubeSnapshot | null>(r)),
-
-  /**
-   * 수집을 백그라운드로 시작(202)하고 즉시 반환. 이미 수집 중이면 409 → { busy: true }.
-   * 완료 여부는 youtubeStatus() 폴링으로 확인한다.
-   */
-  refreshYoutube: async (): Promise<{ started: boolean; busy: boolean }> => {
-    const res = await fetch("/api/youtube/refresh", { method: "POST" });
-    if (res.status === 409) return { started: false, busy: true };
-    await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
-    return { started: true, busy: false };
-  },
-
-  youtubeStatus: () =>
-    fetch("/api/youtube/status").then((r) =>
-      j<{
-        collecting: boolean;
-        updatedAt: string | null;
-        /** 마지막 수집 '시도' 결과. 실패해도 기존 스냅샷을 유지하므로 화면 경고에 필요하다. */
-        lastAttempt: { at: string; ok: boolean; trigger: string; error: string | null } | null;
-      }>(r)
-    ),
-
-  /** 카드(영상)를 다른 카테고리로 이동. 갱신된 스냅샷을 반환. */
-  moveYoutubeVideo: (input: { videoId: string; fromKey: string; toKey: string }) =>
-    fetch("/api/youtube/move", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    }).then((r) => j<YoutubeSnapshot>(r)),
-
   youtubeCategories: () =>
     fetch("/api/youtube/categories").then((r) => j<YoutubeCategoryDef[]>(r)),
 
@@ -593,6 +547,30 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ channels }),
     }).then((r) => j<DailyReportSendResult>(r)),
+
+  /** 보고서 항목을 다른 카테고리로 옮긴다(화면 즉시 반영 + 다음 실행 분류 학습). */
+  moveReportEntry: (runId: string, key: string, toKey: string) =>
+    fetch(`/api/report/runs/${encodeURIComponent(runId)}/move`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key, toKey }),
+    }).then((r) => j<{ runId: string; report: DailyReportRunView }>(r)),
+
+  // ── 뉴스 취합 제외 사이트 ──
+  newsExcludedDomains: () => fetch("/api/news/excluded-domains").then((r) => j<NewsExcludedDomain[]>(r)),
+
+  /** 기사 링크(또는 도메인)의 사이트를 앞으로 취합에서 제외한다. */
+  excludeNewsDomain: (input: { url?: string; domain?: string; label?: string | null }) =>
+    fetch("/api/news/excluded-domains", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => j<{ entry: NewsExcludedDomain; list: NewsExcludedDomain[] }>(r)),
+
+  unexcludeNewsDomain: (domain: string) =>
+    fetch(`/api/news/excluded-domains/${encodeURIComponent(domain)}`, { method: "DELETE" }).then((r) =>
+      j<{ ok: boolean; list: NewsExcludedDomain[] }>(r)
+    ),
 
   // ── 가동 중단 사후 보고 ──
   //

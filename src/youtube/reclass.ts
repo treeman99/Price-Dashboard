@@ -20,7 +20,7 @@ const PROMPT_LIMIT = 25;
 let memo: YoutubeReclass[] | null = null;
 
 /** 제목/채널 정규화(소문자+공백정리) → 재이동 시 같은 항목으로 덮어쓰기 위한 키. */
-function reclassKey(title: string, channel: string): string {
+export function reclassKey(title: string, channel: string): string {
   const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
   return `${norm(title)}::${norm(channel)}`;
 }

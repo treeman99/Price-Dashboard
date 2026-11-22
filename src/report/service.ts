@@ -3,8 +3,9 @@
  *
  * price 스케줄러가 '보고서' 일정(기본 09:00·17:00)마다 Orca IT News 봇 홈에 배포된 수집기
  * (`~/.orca/bots/it-news/daily-news/collector/daily-report.mjs`)를 자식 프로세스로 실행하고, 결과 파일을 읽어
- *   1) 뉴스·유튜브 탭 스냅샷을 통합 결과로 갱신하고(기존 보호 규칙 그대로 — 결과가 비면 직전 유지),
- *   2) 켜 둔 채널로 보고서를 메일·문자로 보낸다(같은 실행은 한 번만).
+ * 켜 둔 채널로 보고서를 메일·문자로 보낸다(같은 실행은 한 번만). 2026-11-23 부터 뉴스·유튜브 탭은 없고
+ * '보고서' 탭이 유일한 화면이다 — 탭 스냅샷 반영은 하지 않는다. 화면용으로는 실행별 report.json 위에
+ * 사용자 동작(카테고리 이동 오버레이, 본영상·제외·차단 상태)을 얹어 돌려준다.
  *
  * 왜 price 가 직접 실행하나(Orca 자동화·웹훅 대신): 중간에 LLM 단계가 없어 결정적이고, Orca 앱이 꺼져 있어도
  * 돌며, 결과를 price 가 바로 읽는다. 비밀값도 필요 없다 — 자식 프로세스에는 실행에 필요한 기본 환경 변수만 넘기고
@@ -19,17 +20,27 @@ import os from "node:os";
 import path from "node:path";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
-import { applyNewsReportSnapshot, markNewsCollecting, recordNewsReportFailure } from "../news/news.ts";
-import { applyYoutubeReportSnapshot, markYoutubeCollecting, recordYoutubeReportFailure } from "../youtube/youtube.ts";
 import { deliverReport, reportChannels, type DeliveryResult, type ReportChannel } from "./deliver.ts";
+import { reportEntryKey } from "./output.ts";
+import { loadCategories as loadNewsCategories } from "../news/categories.ts";
+import { loadCategories as loadYoutubeCategories } from "../youtube/categories.ts";
+import { buildDomainMatcher } from "../news/excluded.ts";
+import { addNewsReclass } from "../news/reclass.ts";
+import { addReclass } from "../youtube/reclass.ts";
+import { buildBlockMatcher } from "../youtube/blocklist.ts";
+import { buildDismissMatcher } from "../youtube/dismissed.ts";
+import { activeWatched } from "../youtube/watched.ts";
+import { isRecommendedChannel } from "../../shared/youtube.ts";
 import type {
   DailyReportAttempt,
+  DailyReportEntryView,
   DailyReportJson,
   DailyReportListResponse,
   DailyReportModelOutcome,
   DailyReportRunSummary,
+  DailyReportRunView,
+  DailyReportSection,
 } from "../../shared/report.ts";
-import type { NewsSnapshot, YoutubeSnapshot } from "../../shared/types.ts";
 
 export type ReportTrigger = "schedule" | "catchup" | "manual";
 
@@ -38,6 +49,8 @@ const DATA_DIR = path.dirname(config.dbPath);
 const ATTEMPT_PATH = path.join(DATA_DIR, "daily-report-attempt.json");
 /** 실행별 발송 기록(같은 실행을 두 번 보내지 않는다). */
 const DELIVERY_PATH = path.join(DATA_DIR, "daily-report-delivery.json");
+/** 보고서 화면의 카테고리 이동 오버레이(실행별·항목별). 학습 기록(*-reclass.json)과 별도로 화면 반영용. */
+const MOVES_PATH = path.join(DATA_DIR, "report-moves.json");
 const DELIVERY_KEEP = 200;
 /** 잠금 해제를 확인하는 간격(다른 실행 결과를 이어받을 때). */
 const LOCK_POLL_MS = 20_000;
@@ -260,26 +273,10 @@ async function finishRun(
 ): Promise<DailyReportAttempt> {
   const runDir = path.join(runsDir(), runId);
   const report = readJson<DailyReportJson>(path.join(runDir, "report.json"));
-  const tag = `report:${trigger}`;
   const finishedAt = () => deps.now().toISOString();
   if (!report) {
     const error = "보고서 결과(report.json)를 찾지 못했습니다 — 수집기 배포 버전을 확인하세요.";
-    recordNewsReportFailure(startedAt, tag, error);
-    recordYoutubeReportFailure(startedAt, tag, error);
     return { at: startedAt, finishedAt: finishedAt(), trigger, ok: false, runId, adopted, error };
-  }
-
-  if (report.ok) {
-    const news = readJson<NewsSnapshot>(path.join(runDir, "tabs", "news.json"));
-    const yt = readJson<YoutubeSnapshot>(path.join(runDir, "tabs", "youtube.json"));
-    if (news) applyNewsReportSnapshot(news, startedAt, tag);
-    else recordNewsReportFailure(startedAt, tag, "통합 결과에 뉴스 탭 파일이 없습니다");
-    if (yt) applyYoutubeReportSnapshot(yt, startedAt, tag);
-    else recordYoutubeReportFailure(startedAt, tag, "통합 결과에 유튜브 탭 파일이 없습니다");
-  } else {
-    const why = `세 모델이 모두 건너뛰어 통합 결과가 없습니다(${report.models.map((m) => `${m.label}: ${m.outcome}`).join(", ")})`;
-    recordNewsReportFailure(startedAt, tag, why);
-    recordYoutubeReportFailure(startedAt, tag, why);
   }
 
   // 발송 — 같은 실행은 한 번만(이어받은 실행 포함).
@@ -352,8 +349,6 @@ export async function runDailyReportJob(
   }
   const startedAt = deps.now().toISOString();
   running = { trigger, startedAt };
-  markNewsCollecting(true);
-  markYoutubeCollecting(true);
   let attempt: DailyReportAttempt;
   try {
     attempt = await execute(trigger, startedAt, deps);
@@ -368,8 +363,6 @@ export async function runDailyReportJob(
       error: `보고서 처리 예외: ${(e as Error).message}`,
     };
   } finally {
-    markNewsCollecting(false);
-    markYoutubeCollecting(false);
     running = null;
   }
   recordAttempt(attempt);
@@ -478,10 +471,82 @@ export function getReportOverview(limit = 40): DailyReportListResponse {
   };
 }
 
+type MovesLedger = Record<string, Record<string, { kind: "news" | "youtube"; toKey: string; at: string }>>;
+
+function readMoves(): MovesLedger {
+  return readJson<MovesLedger>(MOVES_PATH) ?? {};
+}
+
+/** 종류별 카테고리 key → 표시 라벨(이모지 포함, 보고서 표기와 같은 형식) + 원래 이름. */
+function categoryDefs(kind: "news" | "youtube"): Map<string, { label: string; name: string }> {
+  const defs = kind === "news" ? loadNewsCategories() : loadYoutubeCategories();
+  return new Map(defs.map((d) => [d.key, { label: `${d.emoji} ${d.label}`.trim(), name: d.label }]));
+}
+
+/** 항목 키(예전 실행은 같은 규칙으로 만든다). */
+function keyOf(e: DailyReportJson["news"][number]["items"][number]): string {
+  return e.key ?? reportEntryKey(e.kind, e.url, e.title, e.videoId);
+}
+
+/**
+ * 화면용 실행 보기: report.json 위에 ① 사용자 카테고리 이동 오버레이 ② 항목 상태(본영상·제외 영상·차단 채널·
+ * 추천 채널·뉴스 제외 사이트)를 얹는다. 보고서 파일 자체는 고치지 않는다(봇 홈 산출물은 불변).
+ */
+export function buildRunView(report: DailyReportJson, moves: MovesLedger[string] = {}): DailyReportRunView {
+  const watched = new Set(activeWatched().map((w) => w.videoId));
+  const isDismissed = buildDismissMatcher();
+  const isBlocked = buildBlockMatcher();
+  const isExcluded = buildDomainMatcher();
+  const ytDefs = loadYoutubeCategories();
+  const recommendedOf = new Map(ytDefs.map((d) => [d.key, d.recommendedChannels ?? []]));
+  const view = (kind: "news" | "youtube", sections: DailyReportSection[]) => {
+    const defs = categoryDefs(kind);
+    const order = [...defs.keys()];
+    const out = new Map<string, { key: string; label: string; items: DailyReportEntryView[] }>();
+    const ensure = (key: string, label: string) => {
+      if (!out.has(key)) out.set(key, { key, label: defs.get(key)?.label ?? label, items: [] });
+      return out.get(key)!;
+    };
+    for (const s of sections) ensure(s.key, s.label);
+    for (const s of sections) {
+      for (const e of s.items) {
+        const key = keyOf(e);
+        const mv = moves[key];
+        const to = mv && mv.kind === kind && defs.has(mv.toKey) ? mv.toKey : null;
+        const catKey = to ?? s.key;
+        const videoId = kind === "youtube" ? (e.videoId ?? (key.startsWith("yt:") ? key.slice(3) : null)) : null;
+        const state: DailyReportEntryView["state"] =
+          kind === "youtube"
+            ? {
+                watched: !!videoId && watched.has(videoId),
+                dismissed: isDismissed(videoId),
+                blocked: isBlocked(e.source, e.channelHandle ?? null, catKey),
+                recommended: isRecommendedChannel(recommendedOf.get(catKey) ?? [], e.source, e.channelHandle ?? null),
+              }
+            : { excluded: isExcluded(e.url) };
+        ensure(catKey, catKey).items.push({
+          ...e,
+          key,
+          videoId,
+          categoryKey: catKey,
+          categoryLabel: defs.get(catKey)?.label ?? e.categoryLabel,
+          movedFrom: to && to !== s.key ? s.key : undefined,
+          state,
+        });
+      }
+    }
+    // 정의 순서대로, 빈 칸은 뺀다(옮겨서 비게 된 카테고리 포함).
+    return [...out.values()]
+      .filter((x) => x.items.length)
+      .sort((a, b) => (order.indexOf(a.key) + 1 || 99) - (order.indexOf(b.key) + 1 || 99));
+  };
+  return { ...report, news: view("news", report.news), youtube: view("youtube", report.youtube) };
+}
+
 /** 실행 1건 상세. report.json 이 없는 옛 실행은 report.md 원문만. */
 export function getReportRun(
   runId: string
-): { report: DailyReportJson | null; markdown: string | null; delivered: Partial<Record<ReportChannel, string>> } | null {
+): { report: DailyReportRunView | null; markdown: string | null; delivered: Partial<Record<ReportChannel, string>> } | null {
   if (!isValidRunId(runId)) return null;
   const dir = path.join(runsDir(), runId);
   if (!fs.existsSync(dir)) return null;
@@ -494,7 +559,45 @@ export function getReportRun(
       markdown = null;
     }
   }
-  return { report, markdown, delivered: readDelivery()[runId] ?? {} };
+  return { report: report ? buildRunView(report, readMoves()[runId]) : null, markdown, delivered: readDelivery()[runId] ?? {} };
+}
+
+/**
+ * 보고서 항목을 다른 카테고리로 옮긴다: ① 화면 오버레이(이 실행의 이 항목) ② 학습 기록 — 유튜브는 기존
+ * youtube-reclass.json, 뉴스는 news-reclass.json(제목+출처) — 다음 실행의 세 모델 프롬프트·편집 단계·통합 단계가 참고한다.
+ * 잘못된 실행·항목·카테고리면 사유 문자열을 던진다.
+ */
+export function moveReportEntry(runId: string, key: string, toKey: string, now = new Date()): DailyReportRunView {
+  if (!isValidRunId(runId)) throw new Error("실행 ID 형식이 올바르지 않습니다.");
+  const report = readJson<DailyReportJson>(path.join(runsDir(), runId, "report.json"));
+  if (!report) throw new Error("이 실행에는 구조화 보고서(report.json)가 없습니다.");
+  const ledger = readMoves();
+  const current = buildRunView(report, ledger[runId]);
+  const all = [...current.news, ...current.youtube].flatMap((s) => s.items);
+  const entry = all.find((e) => e.key === key);
+  if (!entry) throw new Error("옮길 항목을 이 보고서에서 찾지 못했습니다.");
+  const defs = categoryDefs(entry.kind);
+  const to = defs.get(toKey);
+  if (!to) throw new Error("옮길 카테고리를 찾지 못했습니다.");
+  if (toKey === entry.categoryKey) return current;
+  const from = defs.get(entry.categoryKey);
+  const record = {
+    title: entry.title,
+    channel: entry.source,
+    fromKey: entry.categoryKey,
+    fromLabel: from?.name ?? entry.categoryKey,
+    toKey,
+    toLabel: to.name,
+    movedAt: now.toISOString(),
+  };
+  if (entry.kind === "youtube") addReclass(record);
+  else addNewsReclass(record);
+  ledger[runId] = { ...ledger[runId], [key]: { kind: entry.kind, toKey, at: now.toISOString() } };
+  // 오래된 실행의 오버레이는 최근 200개 실행만 남긴다.
+  const keep = Object.keys(ledger).sort().slice(-DELIVERY_KEEP);
+  writeJsonAtomic(MOVES_PATH, Object.fromEntries(keep.map((k) => [k, ledger[k]])));
+  log.info(`보고서 항목 이동 [${runId}] ${entry.kind} "${entry.title.slice(0, 60)}" ${record.fromLabel} → ${record.toLabel}`);
+  return buildRunView(report, ledger[runId]);
 }
 
 /**

@@ -16,7 +16,8 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
  *  - 1면은 미리 보기라 읽음 처리하지 않는다(첫 실행 기준 잡기만 예외).
  */
 
-export type SeenTabId = "news" | "youtube" | "events";
+// news·youtube 는 2026-11-23 탭을 없애기 전의 기록(브라우저 저장)과의 호환용으로만 남는다. 지금은 report·events.
+export type SeenTabId = "report" | "news" | "youtube" | "events";
 
 /** 이 시간 동안 화면이 보이는 채로 탭에 머물면 읽음 처리한다. */
 export const SEEN_DWELL_MS = 3000;

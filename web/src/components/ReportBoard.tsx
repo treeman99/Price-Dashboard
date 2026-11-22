@@ -1,17 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Mail, MessageSquare, Play, RefreshCw } from "lucide-react";
+import { Loader2, Mail, MessageSquare, Play, RefreshCw, SlidersHorizontal } from "lucide-react";
+import type { CategoryDef, YoutubeCategoryDef } from "@shared/types";
 import { safeHref } from "@shared/url";
 import {
   DAILY_REPORT_OUTCOME_LABEL,
-  type DailyReportEntry,
   type DailyReportListResponse,
   type DailyReportModelOutcome,
   type DailyReportRunSummary,
-  type DailyReportSection,
+  type DailyReportRunView,
 } from "@shared/report";
 import { api, type DailyReportRunDetail } from "@/lib/api";
 import { formatWhen } from "@/lib/tabConfig";
+import { isHiddenEntry, reportItemId, reportVisibleItems } from "@/lib/feed";
+import { useNewMarks } from "@/lib/seen";
 import { ScheduleControl } from "@/components/ScheduleControl";
+import { ReportSections, type EntryActionsContext } from "@/components/ReportEntries";
+import { CategoriesDialog } from "@/components/CategoriesDialog";
+import { ExcludedDomainsDialog } from "@/components/ExcludedDomainsDialog";
+import { BlockedChannelsDialog } from "@/components/BlockedChannelsDialog";
+import { DismissedVideosDialog } from "@/components/DismissedVideosDialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
   EmptyLine,
@@ -24,7 +32,6 @@ import {
   SectionHeader,
   StatusTag,
   SubHeader,
-  TextLink,
   type TagTone,
 } from "@/components/ui/page";
 import { cn } from "@/lib/utils";
@@ -32,9 +39,10 @@ import { cn } from "@/lib/utils";
 /**
  * '보고서' 탭 — 세 모델(Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon) 통합 뉴스·유튜브 보고서.
  *
- * 실행은 서버 스케줄러가 '통합 보고서' 일정(기본 09:00·17:00)마다 봇 홈의 수집기를 돌려 하고, 같은 실행이
- * 뉴스·유튜브 탭도 갱신한다. 이 화면은 실행 목록·모델별 상태·본문을 보여 주고, 실행 1건을 메일·문자로
- * 다시 보낼 수 있다. 보고서 본문은 직전 보고 이후 **새 항목만** 싣는다(탭은 통합 결과 전체).
+ * 실행은 서버 스케줄러가 '통합 보고서' 일정(기본 09:00·17:00)마다 봇 홈의 수집기를 돌려 한다. 2026-11-23 부터
+ * 뉴스·유튜브 탭은 없고 이 탭이 유일한 화면이다: 실행 목록·모델별 상태·본문(직전 보고 이후 **새 항목만**), 메일·문자 재발송,
+ * 수집 설정(뉴스·유튜브 카테고리·추천 채널·제외 키워드·지역, 제외 사이트, 차단 채널, 제외 영상, 일정·기간·알림),
+ * 항목별 동작(카테고리 이동 학습, 사이트 제외, 영상 제외·본영상·채널 차단·추천 채널)을 모두 여기서 한다.
  */
 
 const POLL_MS = 10_000;
@@ -112,83 +120,41 @@ function RunRow({ run, selected, onSelect }: { run: DailyReportRunSummary; selec
   );
 }
 
-function EntryRow({ e }: { e: DailyReportEntry }) {
-  const href = safeHref(e.url);
-  return (
-    <li className="py-3">
-      <p className="text-[15px] font-semibold leading-snug">
-        {e.update && (
-          <StatusTag tone="info" className="mr-1.5">
-            새 출처
-          </StatusTag>
-        )}
-        {href ? (
-          <a href={href} target="_blank" rel="noreferrer" className="hover:underline">
-            {e.title}
-          </a>
-        ) : (
-          e.title
-        )}
-      </p>
-      <p className="num mt-1 text-[12.5px] text-muted-foreground">
-        {e.source} · {e.kind === "youtube" ? `업로드 ${e.date}` : e.date} · 찾은 모델 {e.foundBy.join(", ")}
-      </p>
-      <p className="mt-1.5 text-[14px] leading-relaxed text-foreground/85">{e.summary}</p>
-      {e.secondary.length > 0 && (
-        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
-          보조 출처:
-          {e.secondary.slice(0, 6).map((s) => {
-            const h = safeHref(s.link);
-            return h ? (
-              <TextLink key={s.link} href={h} target="_blank" rel="noreferrer">
-                {s.label}
-              </TextLink>
-            ) : (
-              <span key={s.link}>{s.label}</span>
-            );
-          })}
-        </p>
-      )}
-      {e.conflict && <p className="mt-1.5 text-[12.5px] text-tone-warn">⚠️ 근거 차이: {e.conflict}</p>}
-    </li>
-  );
-}
-
-function Sections({ title, sections }: { title: string; sections: DailyReportSection[] }) {
-  const total = sections.reduce((a, s) => a + s.items.length, 0);
-  return (
-    <section className="mt-8">
-      <SectionHeader title={title} count={total} />
-      {total === 0 ? (
-        <EmptyLine>새 항목 없음</EmptyLine>
-      ) : (
-        sections.map((s) => (
-          <div key={s.key} className="mt-3">
-            <SubHeader count={s.items.length}>{s.label}</SubHeader>
-            <ul className="divide-y">
-              {s.items.map((e, i) => (
-                <EntryRow key={`${s.key}-${i}`} e={e} />
-              ))}
-            </ul>
-          </div>
-        ))
-      )}
-    </section>
-  );
-}
-
 function ReportDetail({
   detail,
   channels,
+  newsDefs,
+  youtubeDefs,
   onSent,
+  onReload,
+  onReport,
 }: {
   detail: DailyReportRunDetail;
   channels: DailyReportListResponse["channels"] | null;
+  newsDefs: CategoryDef[];
+  youtubeDefs: CategoryDef[];
   onSent: () => void;
+  /** 항목 동작 뒤 이 실행 보기를 다시 읽는다. */
+  onReload: () => Promise<void>;
+  /** 이동 응답으로 받은 보기를 바로 반영한다. */
+  onReport: (r: DailyReportRunView) => void;
 }) {
   const [sending, setSending] = useState<"email" | "imessage" | null>(null);
   const [msg, setMsg] = useState<{ tone: "success" | "error" | "warn"; text: string } | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const r = detail.report;
+  // '지난번 본 뒤 신규' — 1면과 같은 기준(숨긴 항목 제외, 항목 키)으로 센다.
+  const isNew = useNewMarks("report", r ? reportVisibleItems(r).map(reportItemId) : null);
+  const hiddenCount = r ? [...r.news, ...r.youtube].flatMap((s) => s.items).filter(isHiddenEntry).length : 0;
+  const ctx: EntryActionsContext = {
+    runId: detail.runId,
+    newsDefs,
+    youtubeDefs,
+    isNew,
+    reload: onReload,
+    onMoved: onReport,
+    onError: (text) => setMsg({ tone: "error", text }),
+  };
 
   async function send(ch: "email" | "imessage") {
     const label = ch === "email" ? "메일" : "문자";
@@ -317,7 +283,7 @@ function ReportDetail({
           </table>
         </div>
         <p className="num mt-2 text-[12.5px] text-muted-foreground">
-          통합 전 {r.counts.before}건 → 통합 후 {r.counts.afterMerge}건 → 이미 보고한 {r.counts.alreadyReported}건 제외 후 새{" "}
+          통합 전 {r.counts.before}건{r.counts.excludedByUser ? ` → 사용자 취합 제외 ${r.counts.excludedByUser}건 제외` : ""} → 통합 후 {r.counts.afterMerge}건 → 이미 보고한 {r.counts.alreadyReported}건 제외 후 새{" "}
           {r.counts.reported}건{r.counts.seedsOnly ? ` (+ 모델 미선정 추천 채널 업로드 ${r.counts.seedsOnly}건)` : ""}
           {r.editor.note ? ` · ${r.editor.note}` : ""}
         </p>
@@ -325,8 +291,16 @@ function ReportDetail({
 
       {r.ok && (
         <>
-          <Sections title="주요 뉴스" sections={r.news} />
-          <Sections title="유튜브 동향" sections={r.youtube} />
+          {hiddenCount > 0 && (
+            <p className="mt-6 text-[13px] text-muted-foreground">
+              제외·차단해 숨긴 항목 {hiddenCount}건 ·{" "}
+              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => setShowHidden((v) => !v)}>
+                {showHidden ? "숨기기" : "보기"}
+              </button>
+            </p>
+          )}
+          <ReportSections title="주요 뉴스" sections={r.news} showHidden={showHidden} ctx={ctx} />
+          <ReportSections title="유튜브 동향" sections={r.youtube} showHidden={showHidden} ctx={ctx} />
           {r.seedsOnly.length > 0 && (
             <section className="mt-8">
               <SectionHeader title="추천 채널 신규 업로드" count={r.seedsOnly.length} note="모델 미선정 · RSS 기준" />
@@ -372,8 +346,8 @@ function ReportDetail({
         </section>
       )}
       <p className="mt-8 text-[12px] text-muted-foreground">
-        유튜브 요약은 제목·설명·검색 결과 기준이며 영상을 시청한 것은 아닙니다. 뉴스·유튜브 탭에는 이번 실행의 통합 결과
-        전체가 반영되고, 이 보고서는 직전 보고 이후 새 항목만 싣습니다.
+        유튜브 요약은 제목·설명·검색 결과 기준이며 영상을 시청한 것은 아닙니다. 보고서는 직전 보고 이후 새 항목만 싣습니다.
+        카테고리 이동·사이트 제외·영상 제외·채널 차단·본영상은 다음 실행부터 세 모델의 조사·분류에 반영됩니다.
       </p>
     </div>
   );
@@ -387,6 +361,25 @@ export function ReportBoard() {
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<DailyReportRunDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [newsDefs, setNewsDefs] = useState<CategoryDef[]>([]);
+  const [youtubeDefs, setYoutubeDefs] = useState<YoutubeCategoryDef[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dialog, setDialog] = useState<null | "newsCats" | "youtubeCats" | "domains" | "blocked" | "dismissed">(null);
+
+  const loadDefs = useCallback(async () => {
+    const [n, y] = await Promise.allSettled([api.newsCategories(), api.youtubeCategories()]);
+    if (n.status === "fulfilled") setNewsDefs(n.value);
+    if (y.status === "fulfilled") setYoutubeDefs(y.value);
+  }, []);
+
+  const reloadDetail = useCallback(async () => {
+    if (!selected) return;
+    try {
+      setDetail(await api.reportRun(selected));
+    } catch (e) {
+      setDetailErr((e as Error).message);
+    }
+  }, [selected]);
 
   const load = useCallback(async () => {
     try {
@@ -405,7 +398,8 @@ export function ReportBoard() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadDefs();
+  }, [load, loadDefs]);
 
   const running = !!overview?.running;
   // 실행 중이면 10초마다 확인 → 끝나면 목록이 새 실행을 맨 위에 보여 준다.
@@ -461,6 +455,9 @@ export function ReportBoard() {
       <PageToolbar
         actions={
           <>
+            <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+              <SlidersHorizontal className="h-4 w-4" /> 수집 설정
+            </Button>
             <Button variant="outline" onClick={() => void load()} disabled={running}>
               <RefreshCw className="h-4 w-4" /> 새로고침
             </Button>
@@ -527,13 +524,68 @@ export function ReportBoard() {
           <div className="min-w-0">
             {detailErr && <Notice tone="error">{detailErr}</Notice>}
             {detail && detail.runId === selected ? (
-              <ReportDetail detail={detail} channels={ch} onSent={() => void load()} />
+              <ReportDetail
+                detail={detail}
+                channels={ch}
+                newsDefs={newsDefs}
+                youtubeDefs={youtubeDefs}
+                onSent={() => void load()}
+                onReload={reloadDetail}
+                onReport={(report) => setDetail((d) => (d && d.runId === selected ? { ...d, report } : d))}
+              />
             ) : (
               !detailErr && <LoadingState />
             )}
           </div>
         </div>
       )}
+
+      {/* 수집 설정 — 뉴스·유튜브 탭에 흩어져 있던 설정을 한곳에. 각 항목은 기존 대화상자를 그대로 쓴다. */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="max-w-lg p-4 sm:p-6">
+          <DialogHeader className="pr-6">
+            <DialogTitle>수집 설정</DialogTitle>
+            <DialogDescription className="text-sm text-muted-foreground">
+              세 모델이 다음 실행부터 이 설정으로 조사합니다. 일정·최근 영상 기준·본영상 제외 기간·조사 시간·메일/문자는 툴바의
+              &lsquo;통합 보고서&rsquo; 버튼에서 바꿉니다.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="divide-y border-y">
+            {(
+              [
+                ["newsCats", "뉴스 카테고리", `${newsDefs.length}개 — 주제·설명·순서`],
+                ["youtubeCats", "유튜브 카테고리", `${youtubeDefs.length}개 — 검색 범위(한국/해외)·추천 채널·제외 키워드`],
+                ["domains", "뉴스 제외 사이트", "이 사이트의 기사는 취합하지 않음"],
+                ["blocked", "유튜브 차단 채널", "전역 또는 카테고리별 차단"],
+                ["dismissed", "유튜브 제외 영상", "다시 수집하지 않는 영상·사유"],
+              ] as const
+            ).map(([id, label, hint]) => (
+              <li key={id}>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-1 py-2.5 text-left hover:bg-muted/60"
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    setDialog(id);
+                  }}
+                >
+                  <span className="text-[14px] font-medium">{label}</span>
+                  <span className="text-[12.5px] text-muted-foreground">{hint}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </DialogContent>
+      </Dialog>
+      <CategoriesDialog
+        open={dialog === "newsCats" || dialog === "youtubeCats"}
+        kind={dialog === "youtubeCats" ? "youtube" : "news"}
+        onClose={() => setDialog(null)}
+        onChanged={() => void loadDefs().then(reloadDetail)}
+      />
+      <ExcludedDomainsDialog open={dialog === "domains"} onClose={() => setDialog(null)} onChanged={() => void reloadDetail()} />
+      <BlockedChannelsDialog open={dialog === "blocked"} defs={youtubeDefs} onClose={() => setDialog(null)} onChanged={() => void reloadDetail()} />
+      <DismissedVideosDialog open={dialog === "dismissed"} defs={youtubeDefs} onClose={() => setDialog(null)} onChanged={() => void reloadDetail()} />
     </div>
   );
 }

@@ -64,9 +64,12 @@ test("탭 ↔ 잡 매핑: 증시는 시장별 브리핑 2개, 로또는 운영 �
   const notifyFields = Object.values(TAB_CONFIG).flatMap((d) => d.fields.map((f) => f.path)).filter((p) => p.startsWith("report.notify"));
   assert.deepEqual(notifyFields, ["report.notifyEmail", "report.notifyImessage"]);
   assert.equal(TAB_CONFIG.lotto.fields.length, 0);
-  // 뉴스·유튜브는 각자 일정이 없고 통합 보고서 일정을 함께 본다.
-  assert.deepEqual(TAB_CONFIG.news.jobs, ["report"]);
-  assert.deepEqual(TAB_CONFIG.youtube.jobs, ["report"]);
+  // 뉴스·유튜브 탭은 없다(2026-11-23) — 그 운영 설정은 보고서 탭에서 관리한다.
+  assert.equal("news" in TAB_CONFIG || "youtube" in TAB_CONFIG, false);
+  const reportPaths = TAB_CONFIG.report.fields.map((f) => f.path);
+  for (const p of ["youtube.freshDays", "youtube.watchedExcludeDays", "timeouts.newsMin", "timeouts.youtubeMin"]) {
+    assert.ok(reportPaths.includes(p), `보고서 탭에서 ${p} 를 편집할 수 있다`);
+  }
   // 7개 잡이 빠짐없이 어느 탭에 속한다.
   const all = [...new Set(Object.values(TAB_CONFIG).flatMap((d) => d.jobs))].sort();
   assert.deepEqual(all, ["events", "lotto", "report", "skills", "stockKr", "stockPulse", "stockUs"]);
@@ -80,7 +83,7 @@ test("MANUAL_RUN_LABEL: 스케줄 '꺼짐' 안내의 수동 실행 문구는 화
   for (const id of ["events", "stockKr", "stockUs", "skills"] as const) {
     assert.equal(MANUAL_RUN_LABEL[id], "지금 갱신", id);
   }
-  assert.equal(MANUAL_RUN_LABEL.report, "지금 실행·지금 갱신", "보고서 탭 '지금 실행' = 뉴스·유튜브 탭 '지금 갱신'");
+  assert.equal(MANUAL_RUN_LABEL.report, "지금 실행", "보고서 탭 버튼 문구");
 });
 
 test("setAtPath 는 원본을 바꾸지 않고 중간 객체를 만든다", () => {

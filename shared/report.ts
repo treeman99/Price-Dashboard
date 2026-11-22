@@ -28,6 +28,13 @@ export interface DailyReportModel {
 }
 
 export interface DailyReportEntry {
+  /**
+   * 항목의 안정 키(영상 `yt:<ID>`, 기사 정규화 URL). 2026-11-23 이전 실행에는 없다 — price 가 같은 규칙으로 만든다.
+   */
+  key?: string;
+  /** 유튜브: 영상 ID·채널 핸들(제외·본영상·채널 차단 동작용). */
+  videoId?: string | null;
+  channelHandle?: string | null;
   kind: "news" | "youtube";
   categoryKey: string;
   categoryLabel: string;
@@ -56,6 +63,8 @@ export interface DailyReportSection {
 
 export interface DailyReportCounts {
   before: number;
+  /** 사용자 취합 제외(뉴스 제외 사이트·유튜브 채널 차단·제외 영상)로 통합 단계에서 거른 건수. 예전 실행에는 없다. */
+  excludedByUser?: number;
   afterMerge: number;
   alreadyReported: number;
   reported: number;
@@ -96,6 +105,30 @@ export interface DailyReportJson {
 }
 
 // ── price API ──
+
+/** 화면용 항목: report.json 항목 + 사용자 동작 반영(이동·상태). */
+export interface DailyReportEntryView extends DailyReportEntry {
+  key: string;
+  /** 사용자가 옮겼으면 원래 카테고리 key. */
+  movedFrom?: string;
+  /**
+   * 지금 기준 사용자 상태. 영상: 본영상·제외 영상·차단 채널(전역/그 카테고리)·추천 채널, 기사: 취합 제외 사이트.
+   * 제외·차단·제외 사이트 항목은 화면이 기본으로 숨긴다(다음 실행부터 취합에서도 빠진다).
+   */
+  state: { watched?: boolean; dismissed?: boolean; blocked?: boolean; recommended?: boolean; excluded?: boolean };
+}
+
+export interface DailyReportSectionView {
+  key: string;
+  label: string;
+  items: DailyReportEntryView[];
+}
+
+/** GET /api/report/runs/:id 의 report — report.json 위에 사용자 동작을 얹은 보기. */
+export interface DailyReportRunView extends Omit<DailyReportJson, "news" | "youtube"> {
+  news: DailyReportSectionView[];
+  youtube: DailyReportSectionView[];
+}
 
 /** 보고서 목록 1행(GET /api/report). */
 export interface DailyReportRunSummary {

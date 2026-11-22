@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { AlertTriangle, ArrowRight } from "lucide-react";
-import type { CategoryDef, StockMarket, StockSnapshot } from "@shared/types";
+import type { StockMarket, StockSnapshot } from "@shared/types";
 import { changeTone } from "@shared/stock";
 import { safeHref } from "@shared/url";
 import { api } from "@/lib/api";
@@ -8,10 +8,10 @@ import { formatWhen } from "@/lib/tabConfig";
 import { cn } from "@/lib/utils";
 import {
   eventsVisibleItems,
-  newsItemId,
+  reportFailed,
+  reportItemId,
+  reportVisibleItems,
   snapshotFailed,
-  youtubeFailed,
-  youtubeItemId,
   type EventKind,
   type Feeds,
 } from "@/lib/feed";
@@ -21,7 +21,7 @@ import { LoadingState, Meta, MetaDot, PageToolbar, SectionHeader } from "@/compo
 /**
  * 1면 — 지난번 본 뒤 각 지면에 새로 들어온 것을 한 장에 추린다(1면 브리프).
  *
- * 맨 위 증시 한 줄, 그 아래 새 소식이 있는 지면(뉴스·유튜브·팝업·전시)의 머리기사, 마지막에
+ * 맨 위 증시 한 줄, 그 아래 새 소식이 있는 지면(보고서 — 세 모델 통합 뉴스·유튜브, 팝업·전시)의 머리기사, 마지막에
  * 새 소식이 없는 지면을 회색 한 줄씩. 1면은 미리 보기라 **읽음 처리하지 않는다** — 그 탭을 열고
  * 머물러야 정리된다(lib/seen.ts). 기록이 없는 지면의 기준 잡기만 예외다.
  *
@@ -62,12 +62,6 @@ interface Desk {
 
 const EVENT_KIND_LABEL: Record<EventKind, string> = { popup: "팝업", exhibition: "전시", festival: "축제" };
 
-/** 정의 순서대로 카테고리 라벨을 함께 펼친다(게시판과 같은 범위·순서 — lib/feed.ts 의 byDefs). */
-function withCategory<T>(categories: { key: string; label: string; items: T[] }[], defs: CategoryDef[]) {
-  const byKey = new Map(categories.map((c) => [c.key, c]));
-  return defs.flatMap((d) => (byKey.get(d.key)?.items ?? []).map((item) => ({ item, category: d.label })));
-}
-
 function pick<T>(all: T[], ids: (t: T) => string, unseen: Set<string>): T[] {
   return all.filter((t) => unseen.has(ids(t)));
 }
@@ -81,51 +75,28 @@ function buildDesks(feeds: Feeds, tabs: Map<string, FrontTab>): Desk[] {
   });
   const out: Desk[] = [];
 
-  const news = feeds.news;
-  if (news?.snap) {
-    const rows = withCategory(news.snap.categories, news.defs);
-    const unseen = new Set(unseenIds("news", rows.map((r) => newsItemId(r.item))));
+  // 보고서(세 모델 통합 뉴스·유튜브): 최신 실행의 항목 중 지난번 보고서 탭을 본 뒤 새로 들어온 것.
+  const rep = feeds.report;
+  const latest = rep?.latest?.report ?? null;
+  if (rep && latest) {
+    const rows = reportVisibleItems(latest).filter((e) => !e.state.watched); // 본영상은 새 소식이 아니다
+    const unseen = new Set(unseenIds("report", rows.map(reportItemId)));
     out.push({
-      ...desk("news"),
+      ...desk("report"),
       unknown: false,
       hasSnapshot: true,
-      updatedAt: news.snap.updatedAt,
-      collecting: !!news.status?.collecting,
-      failed: snapshotFailed(news.snap, news.status),
-      fresh: pick(rows, (r) => newsItemId(r.item), unseen).map(({ item, category }) => ({
-        id: newsItemId(item),
-        title: item.title,
-        href: safeHref(item.link),
-        meta: [item.source, category],
+      updatedAt: latest.finishedAt,
+      collecting: !!rep.overview.running,
+      failed: reportFailed(rep.overview),
+      fresh: pick(rows, reportItemId, unseen).map((e) => ({
+        id: reportItemId(e),
+        title: e.title,
+        href: safeHref(e.url),
+        meta: [e.kind === "youtube" ? "영상" : "뉴스", e.source, e.categoryLabel].filter(Boolean),
       })),
     });
   } else {
-    out.push(emptyDesk(desk("news"), news === undefined, news?.status?.collecting));
-  }
-
-  const yt = feeds.youtube;
-  if (yt?.snap) {
-    const rows = withCategory(yt.snap.categories, yt.defs);
-    const unseen = new Set(unseenIds("youtube", rows.map((r) => youtubeItemId(r.item))));
-    out.push({
-      ...desk("youtube"),
-      unknown: false,
-      hasSnapshot: true,
-      updatedAt: yt.snap.updatedAt,
-      collecting: !!yt.status?.collecting,
-      failed: youtubeFailed(yt.status),
-      // 이미 '본영상'으로 체크한 영상은 새 소식이 아니다(게시판의 '신규' 표시와 같은 규칙).
-      fresh: pick(rows, (r) => youtubeItemId(r.item), unseen)
-        .filter((r) => !r.item.watched)
-        .map(({ item, category }) => ({
-          id: youtubeItemId(item),
-          title: item.title,
-          href: safeHref(item.url),
-          meta: [item.channel, category, item.duration ?? ""].filter(Boolean),
-        })),
-    });
-  } else {
-    out.push(emptyDesk(desk("youtube"), yt === undefined, yt?.status?.collecting));
+    out.push(emptyDesk(desk("report"), rep === undefined, !!rep?.overview.running));
   }
 
   const ev = feeds.events;
@@ -185,9 +156,8 @@ export function FrontPage({
   // 기준 잡기는 부수 효과라 렌더가 아니라 여기서 한다 — 그 사이 렌더는 기록 없음 = 새 소식 0건으로 본다.
   useEffect(() => {
     if (!feeds) return;
-    if (feeds.news?.snap) ensureBaseline("news", withCategory(feeds.news.snap.categories, feeds.news.defs).map((r) => newsItemId(r.item)));
-    if (feeds.youtube?.snap)
-      ensureBaseline("youtube", withCategory(feeds.youtube.snap.categories, feeds.youtube.defs).map((r) => youtubeItemId(r.item)));
+    const latest = feeds.report?.latest?.report;
+    if (latest) ensureBaseline("report", reportVisibleItems(latest).map(reportItemId));
     if (feeds.events?.snap) ensureBaseline("events", eventsVisibleItems(feeds.events.snap).map((r) => r.id));
   }, [feeds]);
 
@@ -199,7 +169,7 @@ export function FrontPage({
   const total = busy.reduce((n, d) => n + d.fresh.length, 0);
 
   const open = (id: string) => (e: MouseEvent<HTMLAnchorElement>) => {
-    // 주소(#news)는 그대로 둬서 가운데 클릭·새 탭 열기가 되게 하고, 보통 클릭만 가로챈다.
+    // 주소(#report)는 그대로 둬서 가운데 클릭·새 탭 열기가 되게 하고, 보통 클릭만 가로챈다.
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
     onOpenTab(id);

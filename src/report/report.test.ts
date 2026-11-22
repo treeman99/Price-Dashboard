@@ -359,24 +359,8 @@ test("세 모델 모두 성공: 같은 사건은 하나로(세 모델 표기), �
     assert.ok(fs.existsSync(path.join(r.runDir, "models", m, "status.json")));
   }
 
-  // price 탭 스냅샷: 통합 결과 전체를 탭 형식으로(대표 원본 항목 + 보조 출처 + 찾은 모델)
-  assert.ok(r.tabs, "성공 모델이 있으면 탭 스냅샷을 남긴다");
-  const tabNews = JSON.parse(fs.readFileSync(r.tabs!.news, "utf8")) as NewsSnapshot;
-  assert.equal(tabNews.source, "llm");
-  assert.equal(tabNews.notes, null, "세 모델 모두 성공이면 안내문 없음");
-  assert.equal(tabNews.categories[0].key, "ai");
-  assert.equal(tabNews.categories[0].emoji, "🤖", "모델 스냅샷의 카테고리 표시값을 쓴다");
-  const items = tabNews.categories[0].items;
-  assert.equal(items.length, 2);
-  assert.equal(items[0].title, "앤트로픽 새 모델", "여러 모델이 찾은 사건이 먼저, 대표는 Opus 원본");
-  assert.deepEqual(items[0].foundBy, ["Opus 5.5", "Gemini 4 Neon", "GPT-6.1 Sol"]);
-  assert.ok(items[0].related.some((x) => x.link === "https://techsite.com/claude"), "보조 출처를 관련 출처로");
-  assert.equal(items[1].title, "양자 신기록(단독)");
-  const tabYt = JSON.parse(fs.readFileSync(r.tabs!.youtube, "utf8")) as YoutubeSnapshot;
-  assert.equal(tabYt.freshDays, 2);
-  assert.equal(tabYt.categories[0].items.length, 1);
-  assert.equal(tabYt.categories[0].items[0].videoId, "abcdefghijk");
-  assert.equal(tabYt.categories[0].items[0].foundBy?.length, 3);
+  // 탭 스냅샷(tabs/)은 2026-11-23 뉴스·유튜브 탭을 없애며 걷어 냈다.
+  assert.equal(fs.existsSync(path.join(r.runDir, "tabs")), false);
 
   // 구조화 보고서(report.json): 화면·메일용
   const rj = JSON.parse(fs.readFileSync(r.reportJsonPath, "utf8"));
@@ -387,7 +371,12 @@ test("세 모델 모두 성공: 같은 사건은 하나로(세 모델 표기), �
   assert.deepEqual(rj.highlights, ["앤트로픽이 새 모델을 공개했다.", "양자 오류정정 신기록이 나왔다."]);
   assert.equal(rj.models.find((m: { key: string }) => m.key === "gemini").model, "gemini-4-neon-xhigh");
   assert.equal(rj.news[0].items.length, 2);
+  assert.equal(rj.news[0].items[0].title, "앤트로픽 새 모델", "대표는 원출처(Opus 원본)");
+  assert.equal(rj.news[0].items[0].key, "https://anthropic.com/news/x", "항목 키 = 정규화 URL");
+  assert.deepEqual(rj.news[0].items[0].foundBy, ["Opus 5.5", "Gemini 4 Neon", "GPT-6.1 Sol"]);
   assert.equal(rj.youtube[0].items.length, 1);
+  assert.equal(rj.youtube[0].items[0].key, "yt:abcdefghijk");
+  assert.equal(rj.youtube[0].items[0].videoId, "abcdefghijk");
   assert.equal(rj.seedsOnly.length, 1);
   assert.equal(rj.editor.model, "claude-opus-5-5");
 });
@@ -402,8 +391,6 @@ test("한 모델 한도: 짧은 1회 재시도 후 '한도로 건너뜀', 나머
   assert.equal(r.successCount, 2);
   const gpt = r.models.find((m) => m.spec.key === "gpt")!;
   assert.equal(gpt.outcome, "skipped-limit");
-  const tabNotes = (JSON.parse(fs.readFileSync(r.tabs!.news, "utf8")) as NewsSnapshot).notes;
-  assert.match(tabNotes ?? "", /3개 중 2개 성공\(건너뜀: GPT-6\.1 Sol\)/);
   const md = fs.readFileSync(r.reportPath, "utf8");
   assert.match(md, /부분 결과/);
   assert.match(md, /\| GPT-6\.1 Sol \| `gpt-6\.1-sol` → - \| 한도로 건너뜀 \| .*hit your usage limit/);
@@ -439,8 +426,6 @@ test("세 모델 모두 건너뜀: 실패 보고서만 내고 체크포인트·s
   assert.equal(r.ok, false);
   assert.equal(r.successCount, 0);
   assert.equal(r.checkpointAdvanced, false);
-  assert.equal(r.tabs, null, "성공 모델이 없으면 탭 스냅샷을 만들지 않는다(price 는 기존 탭 유지)");
-  assert.equal(fs.existsSync(path.join(r.runDir, "tabs")), false);
   const failJson = JSON.parse(fs.readFileSync(r.reportJsonPath, "utf8"));
   assert.equal(failJson.ok, false);
   assert.deepEqual(failJson.news, []);
@@ -569,4 +554,82 @@ test("agy 프롬프트: Claude 의 maxTurns 대신 도구 호출 예산(상한 8
   assert.match(news, /최대 40회까지만/);
   const noWeb = buildAgyPrompt("작업", { maxTurns: 1 }, false);
   assert.doesNotMatch(noWeb, /도구 호출\(검색·열람\)/);
+});
+
+// ── 사용자 규칙(2026-11-23): 통합 단계의 취합 제외·카테고리 이동 ──
+
+test("취합 제외: 모델이 가져온 제외 사이트 기사·차단 채널·제외 영상은 통합 단계에서 다시 걸러진다", async () => {
+  const out = path.join(tmpRoot, "user-exclude");
+  const { deps } = fakeDeps();
+  let editorPrompt = "";
+  const runEditor = deps.runEditor;
+  const r = await run(out, {
+    ...deps,
+    runEditor: async (spec, prompt) => {
+      editorPrompt = prompt;
+      return runEditor(spec, prompt);
+    },
+    exclusions: () => ({
+      newsUrl: (u) => !!u && u.includes("quantum.example"),
+      youtubeChannel: () => false,
+      youtubeVideo: (id) => id === "abcdefghijk",
+    }),
+  });
+  const rj = JSON.parse(fs.readFileSync(r.reportJsonPath, "utf8"));
+  const titles = rj.news.flatMap((s: { items: { title: string }[] }) => s.items.map((i) => i.title));
+  assert.equal(titles.includes("양자 신기록(단독)"), false, "제외 사이트 기사는 보고서에 없다");
+  assert.equal(rj.youtube.length, 0, "제외 영상은 세 모델이 모두 가져와도 빠진다");
+  assert.equal(rj.counts.excludedByUser, 4, "Gemini 의 제외 사이트 기사 1 + 세 모델의 제외 영상 3");
+  assert.doesNotMatch(editorPrompt, /quantum\.example/, "편집기에도 넘기지 않는다");
+  assert.match(fs.readFileSync(r.reportPath, "utf8"), /사용자 취합 제외 4건 제외/);
+});
+
+test("카테고리 이동 학습: 사용자 기록이 통합 단계에 적용되고 편집기 교정보다 우선하며, 편집기 프롬프트에 교정 기록이 들어간다", async () => {
+  const out = path.join(tmpRoot, "user-moves");
+  let editorPrompt = "";
+  const { deps } = fakeDeps({
+    editorGroups: (ids) => {
+      const news = ids.filter((i) => i.includes(":news:"));
+      const yt = ids.filter((i) => i.includes(":youtube:"));
+      const quantum = news.filter((i) => i.endsWith("gemini:news:1"));
+      const anth = news.filter((i) => !i.endsWith("gemini:news:1"));
+      return {
+        groups: [
+          { ids: anth, representative: anth[0], category: "sci" }, // 사용자 기록 없음 → 편집기 교정 적용
+          { ids: quantum, representative: quantum[0], category: "ai" }, // 사용자 기록(sci)과 충돌 → 사용자 기록 우선
+          { ids: yt, representative: yt[0], category: "없는키" }, // 모르는 key → 무시
+        ],
+        highlights: [],
+      };
+    },
+  });
+  const runEditor = deps.runEditor;
+  const r = await run(out, {
+    ...deps,
+    categories: () => ({
+      news: [
+        { key: "ai", label: "🤖 AI" },
+        { key: "sci", label: "⚛️ 과학" },
+      ],
+      youtube: [{ key: "tools", label: "🛠️ 도구" }],
+      freshDays: 2,
+    }),
+    runEditor: async (spec, prompt) => {
+      editorPrompt = prompt;
+      return runEditor(spec, prompt);
+    },
+    categoryMoves: () => ({
+      news: [{ title: "  양자 신기록(단독) ", channel: "매체", toKey: "sci" }],
+      youtube: [{ title: "공통 영상", channel: "채널", toKey: "없는카테고리" }],
+    }),
+  });
+  assert.match(editorPrompt, /교정 기록/);
+  assert.match(editorPrompt, /뉴스 "  양자 신기록\(단독\) " \(매체\) → ⚛️ 과학 \(key=sci\)/);
+  assert.doesNotMatch(editorPrompt, /없는카테고리/, "지금 없는 카테고리로의 기록은 쓰지 않는다");
+  const rj = JSON.parse(fs.readFileSync(r.reportJsonPath, "utf8"));
+  const where = (title: string) =>
+    rj.news.find((s: { items: { title: string }[] }) => s.items.some((i) => i.title === title))?.key;
+  assert.equal(where("양자 신기록(단독)"), "sci", "사용자 기록(제목·출처 정규화 일치) 적용, 편집기의 'ai' 교정은 무시");
+  assert.equal(where("앤트로픽 새 모델"), "sci", "사용자 기록이 없는 그룹은 편집기 교정 적용");
+  assert.equal(rj.youtube[0].key, "tools", "모르는 key 의 편집기 교정은 무시");
 });

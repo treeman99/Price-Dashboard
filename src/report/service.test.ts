@@ -7,7 +7,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DailyReportJson } from "../../shared/report.ts";
-import type { NewsSnapshot, YoutubeSnapshot } from "../../shared/types.ts";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "report-service-"));
 const DATA = path.join(TMP, "data");
@@ -18,16 +17,34 @@ process.env.DB_PATH = path.join(DATA, "price.db");
 process.env.DAILY_NEWS_DIR = OUT;
 process.env.DAILY_REPORT_COLLECTOR = path.join(OUT, "collector", "daily-report.mjs");
 fs.writeFileSync(process.env.DAILY_REPORT_COLLECTOR, "// 가짜 — 테스트는 runCollector 를 주입한다\n");
+fs.writeFileSync(
+  path.join(DATA, "news-categories.json"),
+  JSON.stringify([
+    { key: "ai", label: "AI", emoji: "🤖", color: "#000" },
+    { key: "sci", label: "과학", emoji: "⚛️", color: "#111" },
+  ])
+);
+fs.writeFileSync(
+  path.join(DATA, "youtube-categories.json"),
+  JSON.stringify([
+    { key: "tools", label: "도구", emoji: "🛠️", color: "#000", region: "global", recommendedChannels: ["추천채널"] },
+    { key: "review", label: "리뷰", emoji: "📱", color: "#111", region: "kr" },
+  ])
+);
 
 const svc = await import("./service.ts");
-const news = await import("../news/news.ts");
-const yt = await import("../youtube/youtube.ts");
+const blocklist = await import("../youtube/blocklist.ts");
+const dismissed = await import("../youtube/dismissed.ts");
+const watched = await import("../youtube/watched.ts");
+const excluded = await import("../news/excluded.ts");
+const ytReclass = await import("../youtube/reclass.ts");
+const newsReclass = await import("../news/reclass.ts");
 
 after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
 beforeEach(() => {
   svc.__resetReportServiceForTest();
-  for (const f of ["daily-report-attempt.json", "daily-report-delivery.json"]) fs.rmSync(path.join(DATA, f), { force: true });
+  for (const f of ["daily-report-attempt.json", "daily-report-delivery.json", "report-moves.json"]) fs.rmSync(path.join(DATA, f), { force: true });
   fs.rmSync(path.join(OUT, "runs"), { recursive: true, force: true });
   fs.rmSync(path.join(OUT, "latest.json"), { force: true });
   fs.rmSync(path.join(OUT, ".run.lock"), { force: true });
@@ -57,60 +74,37 @@ function report(id: string, over: Partial<DailyReportJson> = {}): DailyReportJso
     highlights: ["요약"],
     counts: { before: 2, afterMerge: 2, alreadyReported: 0, reported: 2, seedsOnly: 0 },
     coverage: { lastSuccessAt: null, freshDays: 2, gap: null, geekNews: { ok: true, count: 0, since: "", until: "", error: null } },
-    news: [{ key: "ai", label: "AI", items: [{ kind: "news", categoryKey: "ai", categoryLabel: "AI", title: "새 기사", summary: "s", source: "src", url: "https://a.example/1", date: "2026-11-23", foundBy: ["Opus 5.5"], secondary: [], conflict: "", update: false }] }],
-    youtube: [],
+    news: [
+      {
+        key: "ai",
+        label: "🤖 AI",
+        items: [
+          { key: "https://a.example/1", kind: "news", categoryKey: "ai", categoryLabel: "🤖 AI", title: "양자 기사", summary: "s", source: "과학일보", url: "https://a.example/1", date: "2026-11-23", foundBy: ["Opus 5.5"], secondary: [], conflict: "", update: false },
+          { kind: "news", categoryKey: "ai", categoryLabel: "🤖 AI", title: "옛 형식 기사(키 없음)", summary: "s", source: "스팸뉴스", url: "https://www.spam.example/x?utm_source=a", date: "2026-11-23", foundBy: ["Opus 5.5"], secondary: [], conflict: "", update: false },
+        ],
+      },
+    ],
+    youtube: [
+      {
+        key: "tools",
+        label: "🛠️ 도구",
+        items: [
+          { key: "yt:abcdefghij1", videoId: "abcdefghij1", channelHandle: null, kind: "youtube", categoryKey: "tools", categoryLabel: "🛠️ 도구", title: "영상1", summary: "s", source: "추천채널", url: "https://www.youtube.com/watch?v=abcdefghij1", date: "2026-11-23", foundBy: ["Opus 5.5"], secondary: [], conflict: "", update: false },
+          { kind: "youtube", categoryKey: "tools", categoryLabel: "🛠️ 도구", title: "영상2", summary: "s", source: "차단채널", url: "https://www.youtube.com/watch?v=abcdefghij2", date: "2026-11-23", foundBy: ["Opus 5.5"], secondary: [], conflict: "", update: false },
+        ],
+      },
+    ],
     seedsOnly: [],
     sourceFailures: [],
     ...over,
   };
 }
 
-function tabNews(title: string, n = 1): NewsSnapshot {
-  return {
-    date: "2026-11-23",
-    updatedAt: new Date().toISOString(),
-    source: "llm",
-    notes: null,
-    categories: [
-      {
-        key: "ai",
-        label: "AI",
-        emoji: "🤖",
-        color: "#000",
-        items: Array.from({ length: n }, (_, i) => ({ title: `${title}${i}`, source: "s", date: "2026-11-23", summary: "s", link: `https://a.example/${i}`, related: [], foundBy: ["Opus 5.5", "Gemini 4 Neon"] })),
-      },
-    ],
-  };
-}
-
-function tabYoutube(n = 1): YoutubeSnapshot {
-  return {
-    date: "2026-11-23",
-    updatedAt: new Date().toISOString(),
-    source: "llm",
-    freshDays: 2,
-    notes: null,
-    categories: [
-      {
-        key: "tools",
-        label: "도구",
-        emoji: "🛠️",
-        color: "#000",
-        items: Array.from({ length: n }, (_, i) => ({ title: `영상${i}`, channel: "c", date: "2026-11-23", summary: "s", url: `https://www.youtube.com/watch?v=abcdefghij${i}`, videoId: `abcdefghij${i}`, thumbnail: null })),
-      },
-    ],
-  };
-}
-
 /** 수집기가 남기는 실행 결과를 흉내 낸다. */
-function writeRun(id: string, r: DailyReportJson, tabs?: { news: NewsSnapshot; youtube: YoutubeSnapshot }): void {
+function writeRun(id: string, r: DailyReportJson): void {
   const dir = path.join(OUT, "runs", id);
-  fs.mkdirSync(path.join(dir, "tabs"), { recursive: true });
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "report.json"), JSON.stringify(r));
-  if (tabs) {
-    fs.writeFileSync(path.join(dir, "tabs", "news.json"), JSON.stringify(tabs.news));
-    fs.writeFileSync(path.join(dir, "tabs", "youtube.json"), JSON.stringify(tabs.youtube));
-  }
   fs.writeFileSync(path.join(OUT, "latest.json"), JSON.stringify({ runId: id, ok: r.ok, finishedAt: new Date().toISOString() }));
 }
 
@@ -139,62 +133,38 @@ function deps(opts: {
   };
 }
 
-test("성공: 통합 결과로 뉴스·유튜브 탭을 갱신하고(실행 중엔 '수집 중'), 보고서를 한 번 보내고, 시도를 기록한다", async () => {
+test("성공: 보고서를 한 번 보내고 시도를 기록한다(뉴스·유튜브 탭 스냅샷은 더 쓰지 않는다)", async () => {
   const id = runId();
-  let collectingDuring = false;
   const d = deps({
     collector: async () => {
-      collectingDuring = news.isNewsCollecting() && yt.isYoutubeCollecting();
-      writeRun(id, report(id), { news: tabNews("통합"), youtube: tabYoutube(2) });
+      writeRun(id, report(id));
       return { code: 0, stdout: `${JSON.stringify({ ok: true, runId: id })}\n` };
     },
   });
   const a = await svc.runDailyReportJob("schedule", d.deps);
   assert.equal(a?.ok, true);
   assert.equal(a?.runId, id);
-  assert.equal(collectingDuring, true, "실행 중에는 두 탭이 '수집 중'");
-  assert.equal(news.isNewsCollecting() || yt.isYoutubeCollecting(), false, "끝나면 해제");
-  assert.equal(news.getNewsSnapshot()?.categories[0].items[0].title, "통합0");
-  assert.deepEqual(news.getNewsSnapshot()?.categories[0].items[0].foundBy, ["Opus 5.5", "Gemini 4 Neon"]);
-  assert.equal(news.getNewsLastAttempt()?.ok, true);
-  assert.equal(yt.getYoutubeSnapshot()?.categories[0].items.length, 2);
-  assert.equal(yt.getYoutubeLastAttempt()?.ok, true);
   assert.equal(d.delivered.length, 1);
   assert.deepEqual(d.argsSeen[0], ["--source-data", DATA, "--output", OUT, "--trigger", "price:schedule"]);
   assert.equal(svc.getReportLastAttempt()?.runId, id);
-  // 발송 기록 → 목록에 보낸 채널이 보인다
+  assert.equal(fs.existsSync(path.join(DATA, "news-latest.json")), false, "탭 스냅샷 파일을 만들지 않는다");
+  assert.equal(fs.existsSync(path.join(DATA, "youtube-latest.json")), false);
   const row = svc.listReportRuns().find((r) => r.runId === id);
   assert.ok(row?.delivered.email);
-  // catch-up 판정: 이 시도가 끝난 뒤의 슬롯은 아직 커버가 아니다
   assert.equal(svc.reportCoveredAt(new Date(Date.now() - 60_000)), true);
   assert.equal(svc.reportCoveredAt(new Date(Date.now() + 60_000)), false);
 });
 
-test("세 모델 모두 건너뜀: 탭은 그대로(직전 유지), 실패 시도만 기록, 연속 실패는 첫 회만 알린다", async () => {
-  // 먼저 정상 1회로 탭을 채운다.
-  const okId = runId();
-  await svc.runDailyReportJob(
-    "schedule",
-    deps({
-      collector: async () => {
-        writeRun(okId, report(okId), { news: tabNews("직전"), youtube: tabYoutube(1) });
-        return { code: 0, stdout: JSON.stringify({ runId: okId }) };
-      },
-    }).deps
-  );
+test("세 모델 모두 건너뜀: 실패 시도 기록, 연속 실패는 첫 회만 알린다", async () => {
   const failed = (id: string) =>
     deps({
       collector: async () => {
-        writeRun(id, report(id, { ok: false, successCount: 0, news: [], highlights: [] }));
+        writeRun(id, report(id, { ok: false, successCount: 0, news: [], youtube: [], highlights: [] }));
         return { code: 2, stdout: JSON.stringify({ ok: false, runId: id }) };
       },
     });
   const f1 = failed(runId());
-  const a1 = await svc.runDailyReportJob("schedule", f1.deps);
-  assert.equal(a1?.ok, false);
-  assert.equal(news.getNewsSnapshot()?.categories[0].items[0].title, "직전0", "실패면 기존 스냅샷 유지");
-  assert.equal(news.getNewsLastAttempt()?.ok, false);
-  assert.equal(yt.getYoutubeLastAttempt()?.ok, false);
+  assert.equal((await svc.runDailyReportJob("schedule", f1.deps))?.ok, false);
   assert.equal(f1.delivered.length, 1, "첫 실패는 알린다");
   const f2 = failed(runId());
   await svc.runDailyReportJob("catchup", f2.deps);
@@ -202,24 +172,19 @@ test("세 모델 모두 건너뜀: 탭은 그대로(직전 유지), 실패 시�
   assert.equal(svc.reportCoveredAt(new Date(Date.now() - 3_600_000)), false, "실패 실행은 커버가 아니다");
 });
 
-test("새 항목이 없는 보고서는 자동 발송하지 않는다(탭은 그대로 갱신)", async () => {
+test("새 항목이 없는 보고서는 자동 발송하지 않는다", async () => {
   const id = runId();
   const d = deps({
     collector: async () => {
-      writeRun(id, report(id, { news: [], highlights: [], counts: { before: 3, afterMerge: 3, alreadyReported: 3, reported: 0, seedsOnly: 0 } }), {
-        news: tabNews("전체", 3),
-        youtube: tabYoutube(1),
-      });
+      writeRun(id, report(id, { news: [], youtube: [], highlights: [] }));
       return { code: 0, stdout: JSON.stringify({ runId: id }) };
     },
   });
-  const a = await svc.runDailyReportJob("schedule", d.deps);
-  assert.equal(a?.ok, true);
+  assert.equal((await svc.runDailyReportJob("schedule", d.deps))?.ok, true);
   assert.equal(d.delivered.length, 0);
-  assert.equal(news.getNewsSnapshot()?.categories[0].items.length, 3, "탭은 증분이 아니라 통합 결과 전체");
 });
 
-test("다른 실행(Orca 자동화 등)이 잠금을 쥐고 있으면 끝날 때까지 기다렸다가 그 결과를 이어받는다", async () => {
+test("다른 실행(Orca 자동화 등)이 잠금을 쥐고 있으면 끝날 때까지 기다렸다가 그 결과를 이어받는다(같은 실행은 두 번 안 받음)", async () => {
   const other = runId();
   fs.mkdirSync(OUT, { recursive: true });
   fs.writeFileSync(path.join(OUT, ".run.lock"), "99999");
@@ -228,32 +193,24 @@ test("다른 실행(Orca 자동화 등)이 잠금을 쥐고 있으면 끝날 때
     collector: async () => ({ code: 3, stdout: JSON.stringify({ ok: false, error: "다른 보고서 실행이 진행 중입니다." }) }),
     sleep: async () => {
       slept += 1;
-      // 다른 실행이 끝났다: 결과를 남기고 잠금을 푼다.
-      writeRun(other, report(other), { news: tabNews("이어받음"), youtube: tabYoutube(1) });
+      writeRun(other, report(other));
       fs.rmSync(path.join(OUT, ".run.lock"), { force: true });
     },
   });
   const a = await svc.runDailyReportJob("schedule", d.deps);
   assert.ok(slept >= 1);
-  assert.equal(a?.ok, true);
   assert.equal(a?.adopted, true);
   assert.equal(a?.runId, other);
-  assert.equal(news.getNewsSnapshot()?.categories[0].items[0].title, "이어받음0");
   assert.equal(d.delivered.length, 1);
-  // 같은 실행을 또 이어받지 않는다(이미 처리·발송).
   fs.writeFileSync(path.join(OUT, ".run.lock"), "99999");
-  const d2 = deps({
-    collector: async () => ({ code: 3 }),
-    sleep: async () => fs.rmSync(path.join(OUT, ".run.lock"), { force: true }),
-  });
+  const d2 = deps({ collector: async () => ({ code: 3 }), sleep: async () => fs.rmSync(path.join(OUT, ".run.lock"), { force: true }) });
   const a2 = await svc.runDailyReportJob("catchup", d2.deps);
   assert.equal(a2?.ok, false);
   assert.equal(d2.delivered.length, 0);
 });
 
-test("수집기 오류·시간 초과·결과 없음은 실패 시도로 남고 throw 하지 않는다", async () => {
+test("수집기 오류·시간 초과는 실패 시도로 남고 throw 하지 않는다", async () => {
   const crash = await svc.runDailyReportJob("manual", deps({ collector: async () => ({ code: 1, stdout: JSON.stringify({ ok: false, error: "price 데이터 폴더를 찾지 못했습니다" }) }) }).deps);
-  assert.equal(crash?.ok, false);
   assert.match(crash?.error ?? "", /종료 코드 1.*데이터 폴더/);
   const slow = await svc.runDailyReportJob("manual", deps({ collector: async () => ({ code: null, timedOut: true }) }).deps);
   assert.match(slow?.error ?? "", /분 안에 끝나지 않아/);
@@ -266,7 +223,7 @@ test("동시에 두 번 부르면 두 번째는 아무것도 하지 않는다(nu
   const d = deps({
     collector: async () => {
       await gate;
-      writeRun(id, report(id), { news: tabNews("x"), youtube: tabYoutube(1) });
+      writeRun(id, report(id));
       return { code: 0, stdout: JSON.stringify({ runId: id }) };
     },
   });
@@ -316,6 +273,57 @@ test("기록이 아예 없으면(배포 직후) 봇 홈의 마지막 성공 실�
   assert.equal(svc.reportCoveredAt(new Date(Date.now() - 60_000)), true);
 });
 
+test("보고서 보기: 항목 키(옛 형식은 같은 규칙으로 생성)와 사용자 상태(본영상·제외 영상·차단 채널·추천 채널·제외 사이트)를 얹는다", () => {
+  const id = runId();
+  writeRun(id, report(id));
+  watched.markWatched({ videoId: "abcdefghij1", title: "영상1", channel: "추천채널" });
+  blocklist.addBlock({ channel: "차단채널", handle: null, categoryKey: "tools" });
+  excluded.addExcludedDomain({ url: "https://spam.example/" });
+  const v = svc.getReportRun(id)!.report!;
+  const [n1, n2] = v.news[0].items;
+  assert.equal(n1.key, "https://a.example/1");
+  assert.equal(n2.key, "https://spam.example/x", "옛 형식 항목은 정규화 URL 로 키를 만든다(추적 파라미터·www 제거)");
+  assert.equal(n1.state.excluded, false);
+  assert.equal(n2.state.excluded, true, "제외 사이트 기사 → 화면이 숨긴다");
+  const [y1, y2] = v.youtube[0].items;
+  assert.equal(y1.state.watched, true);
+  assert.equal(y1.state.recommended, true, "이 카테고리의 추천 채널");
+  assert.equal(y2.key, "yt:abcdefghij2");
+  assert.equal(y2.videoId, "abcdefghij2");
+  assert.equal(y2.state.blocked, true, "이 카테고리에서 차단한 채널");
+  dismissed.addDismiss({ videoId: "abcdefghij1", title: "영상1", channel: "추천채널" });
+  assert.equal(svc.getReportRun(id)!.report!.youtube[0].items[0].state.dismissed, true);
+  // 원본 report.json 은 그대로다
+  assert.equal(JSON.parse(fs.readFileSync(path.join(OUT, "runs", id, "report.json"), "utf8")).news[0].items[1].key, undefined);
+});
+
+test("카테고리 이동: 화면에 바로 반영(오버레이)되고, 학습 기록(뉴스 news-reclass·유튜브 youtube-reclass)이 다음 프롬프트 규칙이 된다", () => {
+  const id = runId();
+  writeRun(id, report(id));
+  const v1 = svc.moveReportEntry(id, "https://a.example/1", "sci", new Date("2026-11-23T01:00:00Z"));
+  assert.deepEqual(v1.news.map((s) => s.key), ["ai", "sci"]);
+  const moved = v1.news.find((s) => s.key === "sci")!.items[0];
+  assert.equal(moved.title, "양자 기사");
+  assert.equal(moved.movedFrom, "ai");
+  assert.equal(moved.categoryLabel, "⚛️ 과학");
+  assert.match(newsReclass.buildNewsReclassSection([
+    { key: "ai", label: "AI", emoji: "🤖", color: "#000" },
+    { key: "sci", label: "과학", emoji: "⚛️", color: "#111" },
+  ] as never), /"양자 기사" \(과학일보\) 같은 기사 → 'AI'가 아니라 '과학'에 넣어라/);
+
+  const v2 = svc.moveReportEntry(id, "yt:abcdefghij1", "review");
+  assert.deepEqual(v2.youtube.map((s) => s.key), ["tools", "review"]);
+  assert.match(ytReclass.buildReclassSection([
+    { key: "tools", label: "도구", emoji: "🛠️", color: "#000", region: "global" },
+    { key: "review", label: "리뷰", emoji: "📱", color: "#111", region: "kr" },
+  ] as never), /"영상1" \(추천채널\) 같은 영상 → '도구'가 아니라 '리뷰'에 넣어라/);
+
+  // 다시 읽어도(새로고침) 이동이 남는다
+  assert.equal(svc.getReportRun(id)!.report!.news.find((s) => s.key === "sci")!.items.length, 1);
+  assert.throws(() => svc.moveReportEntry(id, "https://a.example/1", "없는키"), /카테고리를 찾지 못했습니다/);
+  assert.throws(() => svc.moveReportEntry(id, "없는항목", "sci"), /항목을 이 보고서에서 찾지 못했습니다/);
+});
+
 test("실제 자식 프로세스 경로: 가짜 수집기 스크립트를 띄워 인자·환경(비밀값 제외)을 넘기고 결과를 읽는다", async () => {
   const id = runId();
   const probe = path.join(TMP, "probe.json");
@@ -327,10 +335,8 @@ const args = process.argv.slice(2);
 const out = args[args.indexOf("--output") + 1];
 fs.writeFileSync(${JSON.stringify(probe)}, JSON.stringify({ args, envKeys: Object.keys(process.env), cwd: process.cwd() }));
 const dir = path.join(out, "runs", ${JSON.stringify(id)});
-fs.mkdirSync(path.join(dir, "tabs"), { recursive: true });
-fs.writeFileSync(path.join(dir, "report.json"), ${JSON.stringify(JSON.stringify(report(id, { news: [], highlights: [] })))});
-fs.writeFileSync(path.join(dir, "tabs", "news.json"), ${JSON.stringify(JSON.stringify(tabNews("실프로세스")))});
-fs.writeFileSync(path.join(dir, "tabs", "youtube.json"), ${JSON.stringify(JSON.stringify(tabYoutube(1)))});
+fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, "report.json"), ${JSON.stringify(JSON.stringify(report(id, { news: [], youtube: [], highlights: [] })))});
 process.stderr.write("로그는 stderr\\n");
 process.stdout.write(JSON.stringify({ ok: true, runId: ${JSON.stringify(id)} }) + "\\n");
 `
@@ -340,7 +346,6 @@ process.stdout.write(JSON.stringify({ ok: true, runId: ${JSON.stringify(id)} }) 
   try {
     const a = await svc.runDailyReportJob("manual"); // 실제 spawn(REAL_DEPS). 새 항목 0건이라 발송도 없다.
     assert.equal(a?.ok, true, a?.error ?? "");
-    assert.equal(news.getNewsSnapshot()?.categories[0].items[0].title, "실프로세스0");
     const p = JSON.parse(fs.readFileSync(probe, "utf8")) as { args: string[]; envKeys: string[]; cwd: string };
     assert.deepEqual(p.args, ["--source-data", DATA, "--output", OUT, "--trigger", "price:manual"]);
     assert.equal(p.envKeys.includes("GMAIL_ADDRESS"), false);

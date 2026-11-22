@@ -467,6 +467,22 @@ export interface DismissedVideo {
  * 사용자가 카드를 다른 카테고리로 옮긴 사례(재분류 피드백).
  * 다음 수집 프롬프트에 few-shot 규칙으로 주입해 큐레이터의 분류를 교정한다.
  */
+/**
+ * 사용자가 '이 사이트는 앞으로 취합에서 제외'한 뉴스 출처 도메인(data/news-excluded-domains.json 1건).
+ * 세 모델 프롬프트에 알리고, 모델이 가져와도 큐레이션 후처리와 보고서 통합 단계에서 다시 걸러낸다.
+ */
+export interface NewsExcludedDomain {
+  /** 정규화한 호스트(소문자, www./m. 제거). 하위 도메인까지 함께 제외한다. */
+  domain: string;
+  /** 제외할 때 보였던 출처 이름(표시용). */
+  label: string | null;
+  /** 제외 시각(ISO). */
+  addedAt: string;
+}
+
+/** 뉴스 재분류 기록(data/news-reclass.json 1건) — 유튜브 재분류(YoutubeReclass)와 같은 모양, channel 자리는 출처 이름. */
+export type NewsReclass = YoutubeReclass;
+
 export interface YoutubeReclass {
   /** 정규화된 식별키(제목+채널 기반). 같은 영상 재이동 시 최신으로 덮어씀. */
   id: string;

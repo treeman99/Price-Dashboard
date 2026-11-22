@@ -11,7 +11,7 @@ export interface RenderInput {
   editor: EditorRecord;
   groups: ReportGroup[];
   seedsOnly: SharedSeedVideo[];
-  counts: { before: number; afterMerge: number; alreadyReported: number; reported: number; seedsOnly: number };
+  counts: { before: number; excludedByUser?: number; afterMerge: number; alreadyReported: number; reported: number; seedsOnly: number };
   raw: RawData;
   freshDays: number;
   lastSuccessAt: string | null;
@@ -96,7 +96,7 @@ export function renderReport(r: RenderInput): string {
   const failedEditors = r.editor.attempts.filter((a) => !a.ok);
   if (failedEditors.length) L.push(`- 편집 실패 시도: ${failedEditors.map((a) => `\`${a.model}\` ${md(a.error)}`).join(" / ")}`);
   L.push(
-    `- 중복 제거: 통합 전 ${r.counts.before}건 → 통합 후 ${r.counts.afterMerge}건 → 이미 보고된 ${r.counts.alreadyReported}건 제외 후 **${r.counts.reported}건**${
+    `- 중복 제거: 통합 전 ${r.counts.before}건${r.counts.excludedByUser ? ` → 사용자 취합 제외 ${r.counts.excludedByUser}건 제외` : ""} → 통합 후 ${r.counts.afterMerge}건 → 이미 보고된 ${r.counts.alreadyReported}건 제외 후 **${r.counts.reported}건**${
       r.counts.seedsOnly ? ` (+ 모델 미선정 추천 채널 업로드 ${r.counts.seedsOnly}건 별도)` : ""
     }`
   );

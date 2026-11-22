@@ -5,6 +5,8 @@ import { getAgentModel } from "../util/model-store.ts";
 import { localDate, localDateDaysAgo } from "../util/date.ts";
 import { loadCategories } from "./categories.ts";
 import { fetchGeekNews, type GeekNewsEntry } from "./geeknews.ts";
+import { buildDomainMatcher, excludedDomainsSection, loadExcludedDomains } from "./excluded.ts";
+import { buildNewsReclassSection } from "./reclass.ts";
 import type {
   NewsSnapshot,
   NewsItem,
@@ -36,12 +38,14 @@ function geekNewsInstruction(entries: GeekNewsEntry[] | null): string {
 ${rows || "   (최근 24시간 등록 글 없음)"}`;
 }
 
-function buildPrompt(
+export function buildPrompt(
   defs: NewsCategoryDef[],
   today: string,
   yesterday: string,
   now: string,
-  geekNews: GeekNewsEntry[] | null = null
+  geekNews: GeekNewsEntry[] | null = null,
+  /** 사용자 취합 제외 사이트 섹션(excludedDomainsSection) + 재분류 규칙 섹션(buildNewsReclassSection). */
+  userRules = ""
 ): string {
   const cats = defs
     .map((c) => `${c.emoji} ${c.label} (key: "${c.key}")${c.description ? ` — ${c.description}` : ""}`)
@@ -50,7 +54,7 @@ function buildPrompt(
 아래 ${defs.length}개 카테고리로 정리한다. 모든 제목·요약은 **반드시 한국어**로 작성한다(영문 소스도 번역).
 
 카테고리:
-  - ${cats}
+  - ${cats}${userRules}
 
 수집 방법(WebSearch / WebFetch 사용):
 1. 각 카테고리별로 WebSearch를 여러 번 수행한다. 한국 소식은 "site:news.naver.com" 등을 활용하고,
@@ -66,7 +70,7 @@ ${geekNewsInstruction(geekNews)}
 
 ⚠️ 유튜브/영상 제외(중요):
 - 이 뉴스 다이제스트는 **텍스트 기사 전용**이다. YouTube 등 영상은 출처로도 related로도 넣지 마라.
-  (유튜브 소식은 별도 "유튜브 소식" 탭에서 전문적으로 다룬다.)
+  (유튜브는 같은 보고서의 유튜브 부분에서 따로 조사한다.)
 
 중복 통합:
 - 제목이 달라도 "누가+무엇을"이 같으면 동일 사건. 카테고리를 넘어서도 중복 제거(더 맞는 한 곳에만).
@@ -115,6 +119,16 @@ function normItem(r: any): NewsItem | null {
   };
 }
 
+/**
+ * 취합 제외 사이트 하드 필터: 대표 링크가 제외 도메인이면 그 기사를 버리고, 관련 출처에서도 뺀다.
+ * (프롬프트로 알려도 모델이 가져올 수 있다 — 서버가 다시 거른다.)
+ */
+export function dropExcluded(item: NewsItem, isExcluded: (url: string | null | undefined) => boolean): NewsItem | null {
+  if (isExcluded(item.link)) return null;
+  const related = item.related.filter((r) => !isExcluded(r.link));
+  return related.length === item.related.length ? item : { ...item, related };
+}
+
 function toCategory(def: NewsCategoryDef, items: NewsItem[]): NewsCategory {
   return { key: def.key, label: def.label, emoji: def.emoji, color: def.color, items };
 }
@@ -153,6 +167,10 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
   const today = date;
   const yesterday = localDateDaysAgo(1);
   const defs = loadCategories();
+  // 실행 시작 시점에 한 번 읽는다(사용자 제외 사이트·재분류 규칙 — 대시보드 조작이 다음 수집부터 반영).
+  const excluded = loadExcludedDomains();
+  const isExcluded = buildDomainMatcher(excluded);
+  const userRules = `${excludedDomainsSection(excluded)}${buildNewsReclassSection(defs)}`;
   let geekNews: GeekNewsEntry[] | null;
   if (opts.geekNews !== undefined) geekNews = opts.geekNews;
   else {
@@ -162,7 +180,7 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
   }
   try {
     const finalText = await runAgentQueryText(
-      buildPrompt(defs, today, yesterday, nowLabel(), geekNews),
+      buildPrompt(defs, today, yesterday, nowLabel(), geekNews, userRules),
       {
         // tools = 가용 도구 제한(웹 조사 외 차단 — 외부 페이지 프롬프트 인젝션 방어), allowedTools = 무프롬프트 허용
         tools: ["WebSearch", "WebFetch"],
@@ -199,7 +217,9 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
       const items = raw
         .map(normItem)
         .filter((x: NewsItem | null): x is NewsItem => !!x)
-        .filter((x: NewsItem) => isFresh(x.date, today, yesterday));
+        .filter((x: NewsItem) => isFresh(x.date, today, yesterday))
+        .map((x: NewsItem) => dropExcluded(x, isExcluded))
+        .filter((x: NewsItem | null): x is NewsItem => !!x);
       return toCategory(meta, items);
     });
 

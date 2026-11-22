@@ -14,7 +14,6 @@ import {
   isEventsCollecting,
   getEventsLastAttempt,
 } from "../events/events.ts";
-import { getNewsSnapshot, isNewsCollecting, getNewsLastAttempt } from "../news/news.ts";
 import {
   loadCategories,
   addCategory,
@@ -22,12 +21,6 @@ import {
   deleteCategory,
   reorderCategories,
 } from "../news/categories.ts";
-import {
-  getYoutubeSnapshot,
-  isYoutubeCollecting,
-  getYoutubeLastAttempt,
-  moveYoutubeVideo,
-} from "../youtube/youtube.ts";
 import {
   loadCategories as ytLoadCategories,
   addCategory as ytAddCategory,
@@ -40,18 +33,15 @@ import {
   addBlock,
   removeBlock,
   removeBlocksForCategory,
-  applyBlocklist,
 } from "../youtube/blocklist.ts";
 import { addRecommendedChannel, removeRecommendedChannel } from "../../shared/youtube.ts";
-import { markWatched, unmarkWatched, activeWatched, annotateWatched } from "../youtube/watched.ts";
+import { markWatched, unmarkWatched, activeWatched } from "../youtube/watched.ts";
 import {
   loadDismissed,
   addDismiss,
   setDismissReason,
   removeDismiss,
-  applyDismissed,
 } from "../youtube/dismissed.ts";
-import { applyRegionFilter, applyYoutubeDedup } from "../youtube/curate.ts";
 import { getStockSnapshot, refreshStock, isStockCollecting } from "../stock/stock.ts";
 import {
   listStocks,
@@ -103,9 +93,11 @@ import {
   getReportRun,
   isReportRunning,
   isValidRunId,
+  moveReportEntry,
   runDailyReportJob,
   sendReportRun,
 } from "../report/service.ts";
+import { addExcludedDomain, loadExcludedDomains, removeExcludedDomain } from "../news/excluded.ts";
 import type { ReportChannel } from "../report/deliver.ts";
 import { localDate } from "../util/date.ts";
 import { log } from "../util/log.ts";
@@ -151,8 +143,6 @@ let manualHolder: { label: string; since: number } | null = null;
  */
 function llmBusyLabel(): string | null {
   if (isReportRunning()) return "통합 보고서";
-  if (isNewsCollecting()) return "뉴스";
-  if (isYoutubeCollecting()) return "유튜브";
   if (isEventsCollecting()) return "팝업/전시";
   if (isStockCollecting("kr")) return "국내 증시";
   if (isStockCollecting("us")) return "미국 증시";
@@ -667,35 +657,51 @@ api.post("/report/runs/:runId/send", async (req, res) => {
   }
 });
 
-// ── 데일리 뉴스 다이제스트 ──
-
-/** 최신 뉴스 스냅샷 */
-api.get("/news", (_req, res) => {
-  res.json(getNewsSnapshot());
-});
-
 /**
- * 지금 갱신 (수동). 2026-11-22 부터 뉴스·유튜브는 **세 모델 통합 보고서 한 번**으로 함께 갱신된다
- * (src/report/service.ts — 30분 안팎). 백그라운드로 시작하고 즉시 202 를 돌려준다. 프론트는 /news/status 를
- * 폴링해 '수집 중'을 표시하고, 끝나면 /news 를 다시 불러온다. 이미 실행 중이면 409.
+ * 보고서 항목을 다른 카테고리로 옮긴다(화면 즉시 반영 + 재분류 학습 기록 → 다음 실행의 세 모델·편집·통합 단계가 참고).
+ * 본문: { key, toKey }. 응답: 갱신된 실행 보기.
  */
-api.post("/news/refresh", async (_req, res) => {
-  await startReportRun(res);
+api.post("/report/runs/:runId/move", (req, res) => {
+  const runId = String(req.params.runId ?? "");
+  const key = typeof req.body?.key === "string" ? req.body.key : "";
+  const toKey = typeof req.body?.toKey === "string" ? req.body.toKey : "";
+  if (!isValidRunId(runId) || !key || !toKey) return res.status(400).json({ error: "runId·key·toKey 가 필요합니다." });
+  try {
+    res.json({ runId, report: moveReportEntry(runId, key, toKey) });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
 });
 
-/**
- * 뉴스 수집 진행 상태(프론트 폴링용).
- * lastAttempt 는 '갱신을 눌러도 화면이 그대로'인 상황을 설명하기 위한 것 — 수집이 실패하면
- * 직전(=어제) 스냅샷을 유지하므로 updatedAt 만으로는 실패를 구분할 수 없다.
- */
-api.get("/news/status", (_req, res) => {
-  const snap = getNewsSnapshot();
-  res.json({
-    collecting: isNewsCollecting(),
-    updatedAt: snap?.updatedAt ?? null,
-    lastAttempt: getNewsLastAttempt(),
-  });
+// ── 뉴스 취합 제외 사이트(2026-11-23) ──
+// 보고서 뉴스 항목의 '이 사이트는 앞으로 취합에서 제외'. 세 모델 프롬프트·큐레이션 후처리·보고서 통합 단계가 모두 쓴다.
+
+api.get("/news/excluded-domains", (_req, res) => {
+  res.json(loadExcludedDomains());
 });
+
+/** 본문: { url } 또는 { domain }, 선택 { label }. 이미 있으면 그대로 200. */
+api.post("/news/excluded-domains", (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const entry = addExcludedDomain({
+      url: typeof b.url === "string" ? b.url : undefined,
+      domain: typeof b.domain === "string" ? b.domain : undefined,
+      label: typeof b.label === "string" ? b.label : null,
+    });
+    res.json({ entry, list: loadExcludedDomains() });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+api.delete("/news/excluded-domains/:domain", (req, res) => {
+  const ok = removeExcludedDomain(String(req.params.domain ?? ""));
+  if (!ok) return res.status(404).json({ error: "그 사이트는 제외 목록에 없습니다." });
+  res.json({ ok: true, list: loadExcludedDomains() });
+});
+
+// ── 뉴스 카테고리(보고서 탭의 수집 설정) ──
 
 /** 뉴스 카테고리 목록 */
 api.get("/news/categories", (_req, res) => {
@@ -755,64 +761,6 @@ api.delete("/news/categories/:key", (req, res) => {
 });
 
 // ── 유튜브 소식 ──
-
-/**
- * 최신 유튜브 스냅샷. 읽기 시점 필터: 차단 채널 제외(해제 시 즉시 복원) +
- * 제외한 개별 영상 제외(카드의 [제외] 버튼, 해제 시 즉시 복원) +
- * kr 카테고리의 해외 영상 제외(카테고리 검색범위 반영 → 재수집 없이 즉시 정리).
- */
-api.get("/youtube", (_req, res) => {
-  const snap = applyDismissed(applyBlocklist(getYoutubeSnapshot()));
-  res.json(annotateWatched(applyYoutubeDedup(applyRegionFilter(snap, ytLoadCategories()))));
-});
-
-/** 지금 갱신 (수동) — 뉴스와 같은 통합 보고서 실행이다(/news/refresh 주석). */
-api.post("/youtube/refresh", async (_req, res) => {
-  await startReportRun(res);
-});
-
-/**
- * 유튜브 수집 진행 상태(프론트 폴링용).
- * lastAttempt 는 '갱신을 눌러도 화면이 그대로'인 상황을 설명하기 위한 것 — 수집이 실패하면
- * 기존 스냅샷을 유지하므로 updatedAt 만으로는 실패를 구분할 수 없다.
- */
-api.get("/youtube/status", (_req, res) => {
-  const snap = getYoutubeSnapshot();
-  res.json({
-    collecting: isYoutubeCollecting(),
-    updatedAt: snap?.updatedAt ?? null,
-    lastAttempt: getYoutubeLastAttempt(),
-  });
-});
-
-/**
- * 카드(영상)를 다른 카테고리로 이동. 스냅샷을 즉시 갱신하고, 이동 사례를 재분류 기록에 남겨
- * 다음 수집 프롬프트가 학습하게 한다. 응답은 읽기 필터(차단/제외 영상/지역)를 적용한 최신 스냅샷.
- */
-api.post("/youtube/move", (req, res) => {
-  try {
-    const { videoId, fromKey, toKey } = req.body ?? {};
-    if (!videoId || !fromKey || !toKey) {
-      return res.status(400).json({ error: "videoId, fromKey, toKey 가 모두 필요합니다." });
-    }
-    // 수집 중 이동은 완료 시점 스냅샷 덮어쓰기로 유실되므로 거부(재분류 기록도 남기지 않음).
-    if (isYoutubeCollecting()) {
-      return res
-        .status(409)
-        .json({ error: "수집이 진행 중입니다. 완료된 뒤 카드를 이동해 주세요.", collecting: true });
-    }
-    const snap = moveYoutubeVideo(String(videoId), String(fromKey), String(toKey));
-    res.json(
-      annotateWatched(
-        applyYoutubeDedup(
-          applyRegionFilter(applyDismissed(applyBlocklist(snap)), ytLoadCategories())
-        )
-      )
-    );
-  } catch (e) {
-    res.status(400).json({ error: (e as Error).message });
-  }
-});
 
 /** 유튜브 카테고리 목록 */
 api.get("/youtube/categories", (_req, res) => {

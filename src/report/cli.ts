@@ -27,6 +27,9 @@ export const STATE_FILES = [
   "youtube-reclass.json",
   "youtube-channels.json",
   "tab-settings.json",
+  // 2026-11-23: 뉴스 취합 제외 사이트·뉴스 재분류 학습(보고서 탭에서 사용자가 만든 기록).
+  "news-excluded-domains.json",
+  "news-reclass.json",
 ];
 
 /** price 운영 체크아웃의 data 폴더(launchd 서비스가 쓰는 원본). 다르면 --source-data 또는 PRICE_DATA_DIR. */
@@ -209,7 +212,6 @@ async function main(): Promise<number> {
         runId: result.runId,
         report: result.reportPath,
         reportJson: result.reportJsonPath,
-        tabs: result.tabs,
         trigger: args.trigger,
         preview: result.preview,
         successCount: result.successCount,

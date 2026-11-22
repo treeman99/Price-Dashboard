@@ -19,6 +19,9 @@ import { getTabSettings } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { withQueryTrace } from "../util/agent-trace.ts";
 import { localDate } from "../util/date.ts";
+import { buildDomainMatcher } from "../news/excluded.ts";
+import { loadNewsReclass } from "../news/reclass.ts";
+import { loadReclass } from "../youtube/reclass.ts";
 import type { PipelineDeps, RawData, SharedSeedVideo, SourceStatus } from "./pipeline.ts";
 
 /** 편집기 예산: 도구 없는 1턴이지만 항목이 많으면 출력이 길다. */
@@ -154,6 +157,19 @@ export const defaultDeps: PipelineDeps = {
       `보고서 편집(${spec.model})`,
       { strictModel: true }
     ),
+  // 사용자 취합 제외(보고서 탭에서 만든 기록) — 통합 단계에서 다시 거른다. 사본(state/)을 읽는다.
+  exclusions: () => {
+    const newsUrl = buildDomainMatcher();
+    const blocked = buildBlockMatcher();
+    const dismissed = buildDismissMatcher();
+    return {
+      newsUrl,
+      youtubeChannel: (channel, handle, categoryKey) => blocked(channel, handle, categoryKey),
+      youtubeVideo: (videoId) => !!videoId && dismissed(videoId),
+    };
+  },
+  // 사용자 카테고리 이동 기록(재분류 학습) — 통합 단계의 결정론적 적용과 편집기 교정에 쓴다.
+  categoryMoves: () => ({ news: loadNewsReclass(), youtube: loadReclass() }),
   trace: (sink, fn) => withQueryTrace(sink, fn),
   log: (msg) => console.error(`[daily-report ${new Date().toISOString()}] ${msg}`),
 };

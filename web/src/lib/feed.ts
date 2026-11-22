@@ -1,17 +1,8 @@
-import type {
-  CategoryDef,
-  EventsSnapshot,
-  ExhibitionItem,
-  FestivalItem,
-  NewsItem,
-  NewsSnapshot,
-  PopupItem,
-  YoutubeSnapshot,
-  YoutubeVideo,
-} from "@shared/types";
+import type { EventsSnapshot, ExhibitionItem, FestivalItem, NewsSnapshot, PopupItem } from "@shared/types";
+import type { DailyReportEntryView, DailyReportListResponse, DailyReportRunView } from "@shared/report";
 import { exhibitionKey, festivalKey, popupKey, withLinkedItemsOnly } from "@shared/events";
 import { snapshotHealth } from "@/components/SnapshotNotice";
-import { api, type CollectStatus } from "@/lib/api";
+import { api, type CollectStatus, type DailyReportRunDetail } from "@/lib/api";
 
 /**
  * 1면과 '신규' 표시가 함께 쓰는 지면 단위 도구.
@@ -22,15 +13,11 @@ import { api, type CollectStatus } from "@/lib/api";
 
 // ── 항목 식별자 ──────────────────────────────────────────────────────────────
 
-/** 뉴스: 원문 링크. 링크가 없으면 출처+제목. */
-export function newsItemId(item: NewsItem): string {
-  return item.link ?? `${item.source}|${item.title}`;
-}
-
-/** 유튜브: videoId(11자 안정 식별자). 없으면 watch URL. */
-export function youtubeItemId(video: YoutubeVideo): string {
-  return video.videoId ?? video.url;
-}
+/**
+ * 보고서 항목: 서버가 준 안정 키(영상 `yt:<ID>`, 기사 정규화 URL). 2026-11-23 뉴스·유튜브 탭을 없애고
+ * 보고서 탭 하나로 합치면서 1면·'신규' 표시는 이 키로 센다.
+ */
+export const reportItemId = (e: DailyReportEntryView) => e.key;
 
 /** 행사: 서버 '신규' 판정과 같은 정규화 키(shared/events.ts). 전시는 전시장 묶음 이름까지 포함한다. */
 export const popupItemId = (p: PopupItem) => popupKey(p.name);
@@ -40,20 +27,16 @@ export const festivalItemId = (f: FestivalItem) => festivalKey(f.name);
 // ── 화면에 보이는 목록 ───────────────────────────────────────────────────────
 
 /**
- * 카테고리 정의 순서대로, 정의에 있는 카테고리의 항목만. 게시판이 그리는 순서·범위와 같다
- * (정의에서 지운 카테고리가 스냅샷에 남아 있어도 화면에는 없다).
+ * 보고서 한 실행에서 화면에 기본으로 보이는 항목: 뉴스 → 유튜브, 카테고리 순. 사용자가 제외·차단한 항목
+ * (제외 영상·차단 채널·제외 사이트)은 보고서 탭이 숨기므로 여기서도 뺀다. 본영상은 새 소식이 아니다.
  */
-function byDefs<T>(categories: { key: string; items: T[] }[], defs: CategoryDef[]): T[] {
-  const byKey = new Map(categories.map((c) => [c.key, c.items]));
-  return defs.flatMap((d) => byKey.get(d.key) ?? []);
+export function reportVisibleItems(r: DailyReportRunView): DailyReportEntryView[] {
+  return [...r.news, ...r.youtube].flatMap((s) => s.items).filter((e) => !isHiddenEntry(e));
 }
 
-export function newsVisibleItems(snap: NewsSnapshot, defs: CategoryDef[]): NewsItem[] {
-  return byDefs(snap.categories, defs);
-}
-
-export function youtubeVisibleItems(snap: YoutubeSnapshot, defs: CategoryDef[]): YoutubeVideo[] {
-  return byDefs(snap.categories, defs);
+/** 보고서 탭이 기본으로 숨기는 항목인가(제외 영상·차단 채널·제외 사이트). */
+export function isHiddenEntry(e: DailyReportEntryView): boolean {
+  return !!(e.state.dismissed || e.state.blocked || e.state.excluded);
 }
 
 export type EventKind = "popup" | "exhibition" | "festival";
@@ -112,52 +95,54 @@ export function snapshotFailed(
   return snapshotHealth(snap, status?.lastAttempt, { collecting: status?.collecting })?.tone === "warn";
 }
 
-/** 유튜브: 수집 중이 아니고 마지막 시도가 실패로 남아 있는 경우(YoutubeBoard 의 실패 안내와 같은 조건). */
-export function youtubeFailed(status: { collecting: boolean; lastAttempt: { ok: boolean } | null } | null): boolean {
-  return !!status && !status.collecting && !!status.lastAttempt && !status.lastAttempt.ok;
+/** 보고서: 실행 중이 아니고 마지막 실행이 실패로 남아 있는 경우(보고서 탭의 실패 안내와 같은 조건). */
+export function reportFailed(o: DailyReportListResponse | null): boolean {
+  return !!o && !o.running && !!o.lastAttempt && !o.lastAttempt.ok;
 }
 
 // ── 한 번에 불러오기 ─────────────────────────────────────────────────────────
 
-type YoutubeStatus = Awaited<ReturnType<typeof api.youtubeStatus>>;
-
 export interface FeedTab<S, T> {
   snap: S | null;
   status: T | null;
-  defs: CategoryDef[];
+}
+
+/** 보고서 지면: 실행 목록·상태 + 최신 실행 보기(없으면 null). */
+export interface ReportFeed {
+  overview: DailyReportListResponse;
+  latest: DailyReportRunDetail | null;
 }
 
 export interface Feeds {
-  /** 불러오기에 실패한 탭은 undefined — 모르는 상태를 '실패'나 '새 소식 없음'으로 단정하지 않는다. */
-  news?: FeedTab<NewsSnapshot, CollectStatus>;
-  youtube?: FeedTab<YoutubeSnapshot, YoutubeStatus>;
+  /** 불러오기에 실패한 지면은 undefined — 모르는 상태를 '실패'나 '새 소식 없음'으로 단정하지 않는다. */
+  report?: ReportFeed;
   events?: FeedTab<EventsSnapshot, CollectStatus>;
 }
 
 /** 상태 폴링 실패는 null 로 접는다. 스냅샷만 있으면 목록은 그릴 수 있다. */
 const orNull = <T,>(p: Promise<T>) => p.catch(() => null);
 
+async function loadReportFeed(): Promise<ReportFeed> {
+  const overview = await api.report();
+  const latestId = overview.runs[0]?.runId;
+  return { overview, latest: latestId ? await orNull(api.reportRun(latestId)) : null };
+}
+
 export async function loadFeeds(): Promise<Feeds> {
-  const [news, youtube, events] = await Promise.allSettled([
-    Promise.all([api.news(), orNull(api.newsStatus()), api.newsCategories()]),
-    Promise.all([api.youtube(), orNull(api.youtubeStatus()), api.youtubeCategories()]),
+  const [report, events] = await Promise.allSettled([
+    loadReportFeed(),
     Promise.all([api.events(), orNull(api.eventsStatus())]),
   ]);
   return {
-    news: news.status === "fulfilled" ? { snap: news.value[0], status: news.value[1], defs: news.value[2] } : undefined,
-    youtube:
-      youtube.status === "fulfilled"
-        ? { snap: youtube.value[0], status: youtube.value[1], defs: youtube.value[2] }
-        : undefined,
-    events: events.status === "fulfilled" ? { snap: events.value[0], status: events.value[1], defs: [] } : undefined,
+    report: report.status === "fulfilled" ? report.value : undefined,
+    events: events.status === "fulfilled" ? { snap: events.value[0], status: events.value[1] } : undefined,
   };
 }
 
 /** 탭 줄 경고 점: 오늘 수집이 실패한 탭 id. */
 export function failedTabs(feeds: Feeds): Set<string> {
   const out = new Set<string>();
-  if (feeds.news && snapshotFailed(feeds.news.snap, feeds.news.status)) out.add("news");
-  if (feeds.youtube && youtubeFailed(feeds.youtube.status)) out.add("youtube");
+  if (feeds.report && reportFailed(feeds.report.overview)) out.add("report");
   if (feeds.events && snapshotFailed(feeds.events.snap, feeds.events.status)) out.add("events");
   return out;
 }

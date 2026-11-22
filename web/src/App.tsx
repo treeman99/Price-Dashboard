@@ -5,8 +5,6 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/page";
 import { EventsBoard } from "@/components/EventsBoard";
-import { NewsBoard } from "@/components/NewsBoard";
-import { YoutubeBoard } from "@/components/YoutubeBoard";
 import { ReportBoard } from "@/components/ReportBoard";
 import { MailAuthBanner } from "@/components/MailAuthBanner";
 import { StockBoard } from "@/components/StockBoard";
@@ -54,9 +52,8 @@ const TAB_PANEL_ID = "tab-panel";
 // DB(price_points/listings)에 그대로 보존돼 있다.
 const TABS: TabDef[] = [
   { id: FRONT_TAB_ID, label: "Overview", color: "#1b1a17", content: null },
-  { id: "news", label: "뉴스", color: "#d97706", content: <NewsBoard /> },
-  { id: "youtube", label: "유튜브 소식", color: "#dc2626", content: <YoutubeBoard /> },
-  // 세 모델 통합 뉴스·유튜브 보고서(2026-11-22). 뉴스·유튜브 탭을 갱신하는 같은 실행의 기록·본문·발송.
+  // 세 모델 통합 뉴스·유튜브 보고서. 2026-11-23 '뉴스'·'유튜브 소식' 탭을 없애고 이 탭 하나로 합쳤다
+  // (수집 설정·영상 제외·본영상·채널 차단·카테고리 이동도 여기서 한다).
   { id: "report", label: "보고서", color: "#4f46e5", content: <ReportBoard /> },
   { id: "skills", label: "스킬 랭킹", color: "#2563eb", content: <SkillsBoard /> },
   { id: "stock", label: "증시", color: "#059669", content: <StockBoard /> },
@@ -75,9 +72,13 @@ const DOWNTIME_POLL_MS = 60_000;
  */
 const FEEDS_POLL_MS = 5 * 60_000;
 
+/** 없어진 탭의 예전 주소(북마크) → 지금 탭. */
+const TAB_ALIASES: Record<string, string> = { news: "report", youtube: "report" };
+
 /** 주소의 #탭id. 없거나 모르는 값이면 1면. */
 function tabFromHash(): string {
-  const id = decodeURIComponent(window.location.hash.slice(1));
+  const raw = decodeURIComponent(window.location.hash.slice(1));
+  const id = TAB_ALIASES[raw] ?? raw;
   return TABS.some((t) => t.id === id) ? id : FRONT_TAB_ID;
 }
 
@@ -86,7 +87,7 @@ export default function App() {
   const activeTab = TABS.find((t) => t.id === active) ?? TABS[0];
 
   /**
-   * 활성 탭을 주소(#news)에 남겨 새로고침·서비스 재시작 뒤에도 그 탭에 머문다. 1면은 주소를 비워 둔다
+   * 활성 탭을 주소(#report)에 남겨 새로고침·서비스 재시작 뒤에도 그 탭에 머문다. 1면은 주소를 비워 둔다
    * (북마크 = 1면). 탭 전환마다 방문 기록을 쌓지 않도록 replaceState 를 쓴다 — 뒤로 가기는 대시보드 이전 페이지로.
    */
   const selectTab = useCallback((id: string, opts?: { scrollTop?: boolean }) => {

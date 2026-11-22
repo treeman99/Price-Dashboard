@@ -26,6 +26,8 @@ export interface ReportItem {
   /** 발행일(뉴스)·업로드일(유튜브) YYYY-MM-DD. */
   date: string;
   videoId?: string | null;
+  /** 유튜브 채널 핸들(있으면) — 채널 차단 판정용. */
+  channelHandle?: string | null;
   originalTitle?: string | null;
   related?: { label: string; link: string }[];
 }
@@ -230,6 +232,63 @@ export interface EditorGroup {
   representative: string;
   reason?: string;
   conflict?: string;
+  /** 편집기가 사용자 분류 교정 규칙에 비춰 고친 카테고리 key(그 종류의 카테고리일 때만 적용). */
+  category?: string;
+}
+
+/** 종류별 카테고리 key → 표시 라벨(편집기·사용자 이동의 카테고리 검증용). */
+export type CategoryLabels = Record<ReportKind, Map<string, string>>;
+
+/**
+ * 재분류 기록 매칭 키: 제목+출처(채널) 정규화. src/youtube/reclass.ts·src/news/reclass.ts 의 reclassKey 와
+ * **같은 규칙**이어야 한다(소문자·앞뒤 공백 제거·연속 공백 하나로).
+ */
+export function titleSourceKey(title: string, source: string): string {
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  return `${norm(title)}::${norm(source)}`;
+}
+
+/** 사용자가 옮긴 기록(재분류 학습) 1건의 필요한 부분. */
+export interface MoveRecord {
+  title: string;
+  channel: string;
+  toKey: string;
+}
+
+/**
+ * 사용자 카테고리 이동을 결정론적으로 적용한다: 같은 제목+출처(채널)를 사용자가 옮긴 적이 있으면 그 카테고리로.
+ * 기록은 오래된 것 → 최신 순이라 뒤의 것이 이긴다. 지금 없는 카테고리로의 기록은 무시한다.
+ * 반환: 사용자 기록과 일치한 항목 id → 그 카테고리 key(이미 그 카테고리였던 항목 포함 — 편집기가 다시 옮기지 못하게).
+ */
+export function applyUserMoves(
+  items: ReportItem[],
+  moves: Record<ReportKind, MoveRecord[]>,
+  labels: CategoryLabels
+): Map<string, string> {
+  const target: Record<ReportKind, Map<string, string>> = { news: new Map(), youtube: new Map() };
+  for (const kind of ["news", "youtube"] as const) {
+    for (const r of moves[kind] ?? []) if (labels[kind].has(r.toKey)) target[kind].set(titleSourceKey(r.title, r.channel), r.toKey);
+  }
+  const matched = new Map<string, string>();
+  for (const it of items) {
+    const to = target[it.kind].get(titleSourceKey(it.title, it.source));
+    if (!to) continue;
+    matched.set(it.id, to);
+    it.categoryKey = to;
+    it.categoryLabel = labels[it.kind].get(to) ?? to;
+  }
+  return matched;
+}
+
+/** 그룹의 어느 항목이라도 사용자 기록과 일치하면 그 카테고리로 둔다(편집기 교정보다 사용자 결정이 우선). */
+export function keepUserMoves(groups: ReportGroup[], forced: Map<string, string>, labels: CategoryLabels): ReportGroup[] {
+  if (!forced.size) return groups;
+  return groups.map((g) => {
+    const hit = g.members.find((m) => forced.has(m.id));
+    const to = hit && forced.get(hit.id);
+    if (!to || to === g.rep.categoryKey) return g;
+    return { ...g, rep: { ...g.rep, categoryKey: to, categoryLabel: labels[g.rep.kind].get(to) ?? to } };
+  });
 }
 
 /**
@@ -239,7 +298,7 @@ export interface EditorGroup {
  * - 뉴스와 영상을 섞지 않는다.
  * - 대표 링크가 같은(정확 키 일치) 항목을 서로 다른 그룹으로 쪼개지 않는다.
  */
-export function applyEditorGroups(items: ReportItem[], groups: EditorGroup[]): ReportGroup[] {
+export function applyEditorGroups(items: ReportItem[], groups: EditorGroup[], labels?: CategoryLabels): ReportGroup[] {
   const byId = new Map(items.map((i) => [i.id, i]));
   const used = new Set<string>();
   const groupOf = new Map<string, number>();
@@ -264,7 +323,12 @@ export function applyEditorGroups(items: ReportItem[], groups: EditorGroup[]): R
   return groups.map((g) => {
     const members = g.ids.map((id) => byId.get(id)!);
     const reason = members.length > 1 ? `편집기 통합 — ${String(g.reason ?? "동일 사건").slice(0, 200)}` : "단독 발견";
-    return buildGroup(members, reason, g.representative, typeof g.conflict === "string" ? g.conflict.slice(0, 300) : "");
+    const group = buildGroup(members, reason, g.representative, typeof g.conflict === "string" ? g.conflict.slice(0, 300) : "");
+    // 편집기의 카테고리 교정: 그 종류의 실제 카테고리 key 일 때만 받는다(지어낸 key·종류 혼동은 무시).
+    const cat = typeof g.category === "string" ? g.category.trim() : "";
+    const label = cat && labels?.[group.rep.kind].get(cat);
+    if (label && cat !== group.rep.categoryKey) group.rep = { ...group.rep, categoryKey: cat, categoryLabel: label };
+    return group;
   });
 }
 
