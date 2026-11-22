@@ -9,7 +9,7 @@ web
 ## Users
 
 - 주 사용자는 **소유자 한 명**이다. 자기 맥북에 localhost 대시보드를 띄워 두고 하루 중 **수시로** 들여다본다(장중 증시, 새로 올라온 뉴스·영상 등). 다른 사용자, 공유 계정, 외부 공개는 없다.
-- 자리를 비운 동안에는 이메일과 iMessage 알림이 빈자리를 메운다.
+- 자리를 비운 동안에는 Orca IT News 봇의 뉴스·유튜브 일일 보고서(매일 09:00·17:00)가 빈자리를 메운다. price 자체의 이메일·iMessage 알림은 2026-11-22 제거했다.
 
 ## Product Purpose
 
@@ -34,7 +34,7 @@ web
 - 탭마다 자동 실행 스케줄(매일 / 매주·격주·N주마다 / 매월·말일)이 있고, 30분마다 누락분을 보충(catch-up)한다. 수동 '지금 갱신'은 스케줄이 꺼져 있어도 동작한다(로또는 화면에 버튼이 없다).
 - 맥이 잠들면(덮개를 닫고 배터리로 쓸 때 등) 자동 수집이 통째로 밀린다. 가동 중단 사후 보고가 이 사실을 알린다.
 - LLM은 기본이 Codex 6.1 Sol(ChatGPT 정액제 로그인)이다. Codex를 쓸 수 없을 때는 그 실행만 Opus 5.5로 임시 대체한다. 로또만 Fable 5.1로 고정한다(통제 변인).
-- 알림은 이메일(Gmail API OAuth)과 iMessage로 보낸다. 탭별 스위치가 켜져 있고 동시에 전역 스위치도 켜져 있어야 발송된다(AND).
+- price 는 알림을 보내지 않는다(이메일·iMessage 발송 기능 제거). 뉴스·유튜브 요약은 `src/report/` 수집기가 Claude Opus 5.5·GPT-6.1 Sol·Gemini 4 Argon 세 모델로 독립 취합해 Orca IT News 봇이 전달한다.
 - 주요 데이터 원천: 네이버 검색 API(webkr/blog), 네이버 증권 API(Yahoo는 이 집 IP에서 429로 차단), 동행복권, GitHub, YouTube watch 페이지.
 
 ## Capabilities and Constraints

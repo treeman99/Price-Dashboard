@@ -171,24 +171,20 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | `EVENTS_COLLECT_TIME` · `NEWS_COLLECT_TIMES` · `YOUTUBE_COLLECT_TIMES` · `STOCK_KR/US_COLLECT_TIMES` · `STOCK_PULSE_TIMES` | 기본 10:00 · 08:00,17:00 · 08:30 · 08:00 / 18:00 · 장중 매시 | 탭별 자동 수집 시각(로컬). **대시보드 설정에서도 변경 가능(대시보드 값 우선)** — 화면에서는 요일·격주·매월까지 |
 | `YOUTUBE_FRESH_DAYS` / `YOUTUBE_WATCHED_EXCLUDE_DAYS` | 기본 7(권장 3) / 7 | 유튜브 신선도(최근 N일 게시만) / '본영상' 제외 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `EVENTS_NEW_GAP_DAYS` / `EVENTS_NEW_SHOW_DAYS` | 기본 7 / 3 | 팝업·전시 '신규' 판정 공백 / 배지 유지 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
-| `STOCK_PULSE_THRESHOLD` · `_PER_SYMBOL_CAP` · `_DAILY_CAP` · `_MACRO_CAP` · `_DEDUP_HOURS` · `_QUIET_START` · `_QUIET_END` | 기본 important · 3 · 10 · 2 · 24 · 23 · 7 | 펄스 문자 문턱·하루 상한·중복 억제·조용 시간(가동 중단 알림도 같은 조용 시간). **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
+| `STOCK_PULSE_THRESHOLD` · `_PER_SYMBOL_CAP` · `_DAILY_CAP` · `_MACRO_CAP` · `_DEDUP_HOURS` · `_QUIET_START` · `_QUIET_END` | 기본 important · 3 · 10 · 2 · 24 · 23 · 7 | 펄스 판정 문턱·하루 상한·중복 억제·조용 시간(판정은 원장에 기록만 하고 발송하지 않는다). **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `HISTORY_RETENTION_DAYS` | 기본 90 | 증시 시계열·펄스 원장 보존 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `NEWS_TIMEOUT_MS` · `YOUTUBE_TIMEOUT_MS` · `EVENTS_TIMEOUT_MS` · `STOCK_BRIEF_TIMEOUT_MS` · `STOCK_PULSE_TIMEOUT_MS` · `SKILLS_SUMMARY_TIMEOUT_MS` · `SKILLS_SUMMARY_BUDGET_MS` | 기본 20 · 20 · 20 · 15 · 10 · 5 · 20분 | 탭별 LLM 1회 최대 대기(ms). **대시보드 설정에서도 변경 가능(대시보드 값 우선, 분 단위, 다음 실행부터)** |
-| `NOTIFY_EMAIL` / `GMAIL_ADDRESS` / `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 선택 | 이메일 리포트 알림 **전역 스위치**·발신 계정·OAuth 클라이언트(.env 에서만) |
-| `NOTIFY_IMESSAGE` / `IMESSAGE_TO` | 선택 | iMessage 알림 **전역 스위치**·수신자(.env 에서만) |
 
-> 알림 자격증명이 없으면 이메일 알림만 경고 후 건너뛰고, 수집/대시보드는 정상 동작한다.
->
-> **메일 미리보기**: `npm run mail:preview` 는 발송 없이 가상 데이터로 메일 5종(+증시 휴장)을 렌더해
-> `data/mail-preview/index.html` 을 연다(데스크톱 720px·아이폰 390px 나란히). 지금 서비스에 있는 실데이터로 보려면
-> `npm run mail:preview -- --live`(읽기 전용 GET 만 쓴다), 브라우저를 열지 않으려면 `-- --no-open`.
+> **메일·문자 알림 제거(2026-11-22)**: 이메일(Gmail API)·iMessage 발송 기능과 `NOTIFY_EMAIL` · `GMAIL_ADDRESS` ·
+> `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `NOTIFY_IMESSAGE` · `IMESSAGE_TO` 설정은 없어졌다(.env 에 남아 있어도 읽지 않는다).
+> 뉴스·유튜브 요약은 Orca IT News 봇의 일일 보고서(매일 09:00·17:00)로 받는다 — 수집기는 `src/report/`,
+> 실행은 `npm run daily:report`(운영 배포는 `npm run daily:report:bundle`, 운영 가이드는 봇 홈의 `daily-news-runbook.md`).
 >
 > **대시보드 값 우선**: 위 표에서 '대시보드 설정에서도 변경 가능' 항목은 탭별 '자동 수집·설정' 버튼
 > 또는 헤더 '설정'에서 바꿀 수 있고, 저장한 값(`data/tab-settings.json`, 스케줄은 `data/schedule.json`)이
 > `.env` 보다 우선한다. 저장 즉시 반영된다(재시작 불필요, 타임아웃은 다음 실행부터). 바꾼 항목만 저장되고
 > 나머지는 계속 `.env` 를 따른다 — '기본값으로 되돌리기'는 그 항목을 다시 `.env` 로 돌린다.
-> 탭별 알림 스위치는 전역 스위치(`NOTIFY_EMAIL` / `NOTIFY_IMESSAGE`+`IMESSAGE_TO`)와 **AND** 다:
-> 전역이 꺼져 있으면 탭에서 켜도 나가지 않는다. 비밀값·경로·포트·수신자는 `.env` 에서만 바꾼다.
+> 비밀값·경로·포트는 `.env` 에서만 바꾼다.
 >
 > **AI 에이전트 선택**: 대시보드 상단에서 `Codex 6.1 Sol`(기본) · `Opus 5.5` 중 고른다.
 > Codex는 `codex login status`가 `Logged in using ChatGPT`일 때만 실행하며,
@@ -263,8 +259,8 @@ npx tsx src/cli.ts config                        # 현재 설정·경고 확인
 | POST | `/api/stock/pulse/run` | 펄스 지금 실행 (백오프 무시) |
 | GET | `/api/lotto` | 다음 회차 예상 번호 + 지난 10회차 비교 결과 |
 | POST | `/api/lotto/cycle` | 주간 사이클 수동 실행 (**운영·검증용**, 화면에 버튼 없음. 응답 즉시) |
-| GET | `/api/settings` | 탭별 운영 설정 `TabSettingsResponse` — 현재값(대시보드 값 우선)·`.env` 기본값·숫자 범위·탭별 알림 채널·전역 채널 상태 |
-| PUT | `/api/settings` | 운영 설정 부분 수정(`DeepPartial<TabSettings>`). 바꾼 필드만 저장하고 기본값과 같으면 다시 `.env` 를 따른다. 범위·타입 오류는 400 `{error}`. 조용 시간을 바꾸면 펄스 보류분 발송 cron 을 즉시 재등록 |
+| GET | `/api/settings` | 탭별 운영 설정 `TabSettingsResponse` — 현재값(대시보드 값 우선)·`.env` 기본값·숫자 범위 |
+| PUT | `/api/settings` | 운영 설정 부분 수정(`DeepPartial<TabSettings>`). 바꾼 필드만 저장하고 기본값과 같으면 다시 `.env` 를 따른다. 범위·타입 오류는 400 `{error}` |
 
 ## 동작 메모
 - **catch-up**: 기동 직후 + 30분마다 점검, 예정 시각이 지났고 오늘 성공 수집이 없으면 1회 보충.
