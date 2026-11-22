@@ -77,32 +77,6 @@ export function renderReport(r: RenderInput): string {
     L.push(`- 통합 상태: ${r.models.length}개 모델 모두 독립 취합 성공`);
   }
 
-  // ── 수집 범위 ──
-  L.push("");
-  L.push("## 수집 범위");
-  L.push("");
-  L.push(
-    `- 뉴스: 실행 시점 기준 **최근 24시간**(기사 발행일 단위로 판정) — price 뉴스 탭 카테고리 ${r.categories.news.length}개(${r.categories.news
-      .map((c) => md(c.label))
-      .join(", ")})와 같은 수집·요약 규칙.`
-  );
-  const gn = r.raw.geekNews;
-  L.push(
-    `- GeekNews 공식 피드: ${gn.ok ? `${kst(gn.since)} 초과 ~ ${kst(gn.until)} 등록 글 ${gn.entries.length}건(커뮤니티 등록 시각, 원문 발행 시각과 다를 수 있음)` : `수집 실패 — ${md(gn.error)}`}`
-  );
-  L.push(
-    `- 유튜브: 최근 **${r.freshDays}일** 업로드(서버가 watch 페이지로 실제 업로드일 재검증) — price 유튜브 탭 카테고리 ${r.categories.youtube.length}개, 기존 채널 차단·제외 영상·본영상·제외 키워드·지역(한국 전용)·Shorts·라이브 규칙 적용.`
-  );
-  L.push(
-    `- 증분: ${r.lastSuccessAt ? `직전 성공 보고(${kst(r.lastSuccessAt)}) 이후` : "첫 성공 실행이라 최근 24시간 전체"}를 대상으로, 이전 보고서에 이미 실린 링크·영상(${r.counts.alreadyReported}건)은 제외했습니다.`
-  );
-  if (r.lastSuccessAt && r.now.getTime() - Date.parse(r.lastSuccessAt) > 24 * 3_600_000) {
-    const gapEnd = new Date(r.now.getTime() - 24 * 3_600_000);
-    L.push(
-      `- ⚠️ 범위 공백: 직전 성공(${kst(r.lastSuccessAt)}) 이후 24시간을 넘는 구간(${kst(r.lastSuccessAt)} ~ ${kst(gapEnd)})은 뉴스 수집기 범위(최근 24시간) 밖이라 확인하지 못했습니다(GeekNews 피드는 출처별 마지막 성공 시점부터 다시 조회).`
-    );
-  }
-
   // ── 모델별 상태 ──
   L.push("");
   L.push("## 모델별 상태");
@@ -131,6 +105,32 @@ export function renderReport(r: RenderInput): string {
   const actionNeeded = r.models.filter((m) => m.outcome === "skipped-error");
   if (actionNeeded.length) {
     L.push(`- **조치 필요**: ${actionNeeded.map((m) => `${m.spec.label} — ${md(m.reason).slice(0, 200)}`).join(" / ")}`);
+  }
+
+  // ── 수집 범위 ──
+  L.push("");
+  L.push("## 수집 범위");
+  L.push("");
+  L.push(
+    `- 뉴스: 실행 시점 기준 **최근 24시간**(기사 발행일 단위로 판정) — price 뉴스 탭 카테고리 ${r.categories.news.length}개(${r.categories.news
+      .map((c) => md(c.label))
+      .join(", ")})와 같은 수집·요약 규칙.`
+  );
+  const gn = r.raw.geekNews;
+  L.push(
+    `- GeekNews 공식 피드: ${gn.ok ? `${kst(gn.since)} 초과 ~ ${kst(gn.until)} 등록 글 ${gn.entries.length}건(커뮤니티 등록 시각, 원문 발행 시각과 다를 수 있음)` : `수집 실패 — ${md(gn.error)}`}`
+  );
+  L.push(
+    `- 유튜브: 최근 **${r.freshDays}일** 업로드(서버가 watch 페이지로 실제 업로드일 재검증) — price 유튜브 탭 카테고리 ${r.categories.youtube.length}개, 기존 채널 차단·제외 영상·본영상·제외 키워드·지역(한국 전용)·Shorts·라이브 규칙 적용.`
+  );
+  L.push(
+    `- 증분: ${r.lastSuccessAt ? `직전 성공 보고(${kst(r.lastSuccessAt)}) 이후` : "첫 성공 실행이라 최근 24시간 전체"}를 대상으로, 이전 보고서에 이미 실린 링크·영상(${r.counts.alreadyReported}건)은 제외했습니다.`
+  );
+  if (r.lastSuccessAt && r.now.getTime() - Date.parse(r.lastSuccessAt) > 24 * 3_600_000) {
+    const gapEnd = new Date(r.now.getTime() - 24 * 3_600_000);
+    L.push(
+      `- ⚠️ 범위 공백: 직전 성공(${kst(r.lastSuccessAt)}) 이후 24시간을 넘는 구간(${kst(r.lastSuccessAt)} ~ ${kst(gapEnd)})은 뉴스 수집기 범위(최근 24시간) 밖이라 확인하지 못했습니다(GeekNews 피드는 출처별 마지막 성공 시점부터 다시 조회).`
+    );
   }
 
   if (!succeeded.length) {
