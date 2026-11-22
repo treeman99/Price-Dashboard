@@ -240,7 +240,7 @@ export async function refreshNews(
     if (decision.action === "keep") {
       log.warn(
         `뉴스 수집 실패 → 기존 스냅샷 유지 [${opts.trigger}] ` +
-          `(유지: ${decision.snapshot.date}, 원인: ${decision.attempt.error}) · 알림 발송 생략`
+          `(유지: ${decision.snapshot.date}, 원인: ${decision.attempt.error})`
       );
       return decision.snapshot;
     }

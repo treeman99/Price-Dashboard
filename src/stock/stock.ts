@@ -697,7 +697,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
       });
       log.info(
         `증시 휴장 [${market}] ${today} — ${closed.reason ?? "사유 미상"} ` +
-          `(LLM·알림 생략, 지수 ${holidayIndices.length}건 최종 거래일 기준으로 유지)`
+          `(LLM 생략, 지수 ${holidayIndices.length}건 최종 거래일 기준으로 유지)`
       );
       return snap;
     }
@@ -771,7 +771,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     // 시세는 전부 null 이 되며 watchlist 는 통째로 드롭되는데, LLM 뉴스·분석 서술은 그대로
     // 남는다. 그러면 hasContent(지수+뉴스+분석)가 참이라 **알맹이 없는 브리핑이 발송되고
     // 슬롯이 닫혀** 몇 분 뒤 네이버가 살아나도 그날은 영영 복구되지 않는다.
-    // 그래서 이 상태는 '성공'이 아니라 수집 실패로 취급한다 → 발송 생략 + 슬롯 열어둠
+    // 그래서 이 상태는 '성공'이 아니라 수집 실패로 취급한다 → 슬롯 열어둠(catch-up 이 다시 시도)
     // → 30분 catch-up 이 재시도한다(scheduler.checkStockCatchup 의 slotNeedsCatchup 게이트).
     // 조건은 watchlist 와 무관한 **등록 종목·지수** 기준이다. LLM 이 종목을 하나도 안 냈거나
     // 심볼을 지어낸 경우(모델 잘못)를 장애로 오판하면 catch-up 이 매번 헛돈다.
@@ -783,7 +783,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     if (quoteOutage) {
       log.warn(
         `증시 시세 인프라 전면 장애 의심 [${market}] — 지수 0건 / 등록 종목 ${g.quotes.length}건 전부 시세 없음 / ` +
-          `관심 종목 조회 실패 ${verified?.lookupFailures ?? 0}건 → 알림 생략, 슬롯 ${slot} 열어둔 채 catch-up 대기`
+          `관심 종목 조회 실패 ${verified?.lookupFailures ?? 0}건 → 슬롯 ${slot} 열어둔 채 catch-up 대기`
       );
     }
 

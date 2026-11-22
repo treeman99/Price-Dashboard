@@ -371,7 +371,7 @@ export async function refreshSkills(
     if (decision.action === "keep") {
       log.warn(
         `스킬 수집 실패 → 기존 스냅샷 유지 [${opts.trigger}] ` +
-          `(유지: ${decision.snapshot.date}, 원인: ${decision.attempt.error}) · 알림 발송 생략`
+          `(유지: ${decision.snapshot.date}, 원인: ${decision.attempt.error})`
       );
       return decision.snapshot;
     }
