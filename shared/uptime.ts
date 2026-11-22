@@ -529,11 +529,13 @@ export function sleepWindowsCoverGap(
  * 없다 … 서버가 4시간 꺼져 있었다면 그 4개 슬롯은 그냥 없던 일이다." 보고하면 1시간 절전마다
  * 4건씩 **거짓 손실**이 생긴다. 그래서 이 유니온에 아예 넣지 않는다 — 타입 차원에서 막는다.
  */
-export type MissedTab = "events" | "news" | "youtube" | "stockKr" | "stockUs" | "lotto";
+// news·youtube 는 2026-11-22 이전 사건 기록을 읽기 위해 남긴다(지금은 report 하나로 집계한다).
+export type MissedTab = "events" | "report" | "news" | "youtube" | "stockKr" | "stockUs" | "lotto";
 
 /** 탭 → 사용자에게 보이는 한국어 라벨(§5.4 주석 그대로). */
 export const MISSED_TAB_LABEL: Record<MissedTab, string> = {
   events: "팝업·전시",
+  report: "뉴스·유튜브 통합 보고서",
   news: "뉴스",
   youtube: "유튜브 소식",
   stockKr: "증시(한국장)",

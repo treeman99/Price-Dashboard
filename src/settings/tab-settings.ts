@@ -71,6 +71,8 @@ export const NUMBER_RULES: Record<string, NumberRule> = {
 
 /** 오류 문구용 한국어 이름. */
 const FIELD_LABEL: Record<string, string> = {
+  "report.notifyEmail": "보고서 메일 받기",
+  "report.notifyImessage": "보고서 문자 받기",
   "youtube.freshDays": "유튜브 신선도",
   "youtube.watchedExcludeDays": "유튜브 본영상 제외 기간",
   "events.newGapDays": "팝업·전시 신규 판정 공백",
@@ -110,6 +112,8 @@ const SEVERITIES: PulseSeverity[] = ["urgent", "important", "info"];
 function defaults(clamped?: string[]): TabSettings {
   const min = (ms: number) => ms / 60_000;
   const out: TabSettings = {
+    // 보고서 발송은 사용자가 시험 발송을 확인한 뒤 화면에서 켠다 — .env 전역 스위치가 켜져 있어도 기본은 꺼짐.
+    report: { notifyEmail: false, notifyImessage: false },
     youtube: {
       freshDays: config.youtubeFreshDays,
       watchedExcludeDays: config.youtubeWatchedExcludeDays,
@@ -245,7 +249,7 @@ function strictLeaf(key: string, def: unknown, v: unknown): unknown {
 /**
  * 부분 수정 저장. 전달된 필드만 검증해 반영하고 최종(병합) 설정을 돌려준다.
  * 알 수 없는 항목·타입 오류·범위 밖 값은 throw(→ 400) — 조용히 버리면 화면은 저장된 줄 안다.
- * (메일·문자 알림 채널 notify 는 2026-11-22 제거 — 보내면 '알 수 없는 설정 항목'이다.)
+ * (탭별 메일·문자 알림 채널 notify 는 2026-11-22 제거 — 보내면 '알 수 없는 설정 항목'이다. 발송은 report 섹션만.)
  *
  * 저장은 **기본값과 다른 필드만**(sparse) 남긴다. 기본값과 같은 값을 보내면 저장분에서 빠져
  * 다시 .env 를 따른다 — 화면의 '기본값으로 되돌리기'가 별도 API 없이 이 경로로 된다.

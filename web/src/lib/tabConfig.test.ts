@@ -22,6 +22,7 @@ import {
 /** 계약(shared/types.ts TabSettings) 모양 그대로의 고정 값. */
 function settingsFixture() {
   return {
+    report: { notifyEmail: false, notifyImessage: false },
     youtube: { freshDays: 7, watchedExcludeDays: 7 },
     events: { newGapDays: 7, newShowDays: 3, verifyDates: true },
     stockPulse: {
@@ -58,12 +59,17 @@ test("TAB_CONFIG 의 모든 필드 경로가 TabSettings 에 실제로 있다(�
 test("탭 ↔ 잡 매핑: 증시는 시장별 브리핑 2개, 로또는 운영 설정 없음", () => {
   assert.deepEqual(TAB_CONFIG.stock.jobs, ["stockKr", "stockUs"]);
   assert.deepEqual(TAB_CONFIG.holdings.jobs, ["stockPulse"]);
-  // 메일·문자 알림 제거(2026-11-22): 어느 탭에도 알림 주체가 없다.
+  // 탭별 메일·문자 알림 주체는 없다(2026-11-22). 발송은 보고서 탭의 두 스위치뿐이다.
   for (const def of Object.values(TAB_CONFIG)) assert.equal("notify" in def, false);
+  const notifyFields = Object.values(TAB_CONFIG).flatMap((d) => d.fields.map((f) => f.path)).filter((p) => p.startsWith("report.notify"));
+  assert.deepEqual(notifyFields, ["report.notifyEmail", "report.notifyImessage"]);
   assert.equal(TAB_CONFIG.lotto.fields.length, 0);
-  // 8개 잡이 빠짐없이 어느 한 탭에 속한다.
-  const all = Object.values(TAB_CONFIG).flatMap((d) => d.jobs).sort();
-  assert.deepEqual(all, ["events", "lotto", "news", "skills", "stockKr", "stockPulse", "stockUs", "youtube"]);
+  // 뉴스·유튜브는 각자 일정이 없고 통합 보고서 일정을 함께 본다.
+  assert.deepEqual(TAB_CONFIG.news.jobs, ["report"]);
+  assert.deepEqual(TAB_CONFIG.youtube.jobs, ["report"]);
+  // 7개 잡이 빠짐없이 어느 탭에 속한다.
+  const all = [...new Set(Object.values(TAB_CONFIG).flatMap((d) => d.jobs))].sort();
+  assert.deepEqual(all, ["events", "lotto", "report", "skills", "stockKr", "stockPulse", "stockUs"]);
 });
 
 test("MANUAL_RUN_LABEL: 스케줄 '꺼짐' 안내의 수동 실행 문구는 화면 버튼이 실제로 있는 잡에만", () => {
@@ -71,9 +77,10 @@ test("MANUAL_RUN_LABEL: 스케줄 '꺼짐' 안내의 수동 실행 문구는 화
   // 스킬 랭킹은 2026-10-25 '지금 갱신'이 생겼다(회차가 기록돼 있으면 중간 점검).
   assert.equal(MANUAL_RUN_LABEL.lotto, undefined);
   assert.equal(MANUAL_RUN_LABEL.stockPulse, "지금 실행", "보유 주식 탭 버튼 문구");
-  for (const id of ["events", "news", "youtube", "stockKr", "stockUs", "skills"] as const) {
+  for (const id of ["events", "stockKr", "stockUs", "skills"] as const) {
     assert.equal(MANUAL_RUN_LABEL[id], "지금 갱신", id);
   }
+  assert.equal(MANUAL_RUN_LABEL.report, "지금 실행·지금 갱신", "보고서 탭 '지금 실행' = 뉴스·유튜브 탭 '지금 갱신'");
 });
 
 test("setAtPath 는 원본을 바꾸지 않고 중간 객체를 만든다", () => {

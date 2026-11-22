@@ -11,13 +11,14 @@ import {
   getEventsLastAttempt,
   isEventsCollecting,
 } from "../events/events.ts";
-import { refreshNews, getNewsSnapshot, getNewsLastAttempt, isNewsCollecting } from "../news/news.ts";
+import { getNewsSnapshot } from "../news/news.ts";
+import { getYoutubeSnapshot } from "../youtube/youtube.ts";
 import {
-  refreshYoutube,
-  getYoutubeSnapshot,
-  getYoutubeLastAttempt,
-  isYoutubeCollecting,
-} from "../youtube/youtube.ts";
+  getReportLastAttempt,
+  isReportRunning,
+  reportCoveredAt,
+  runDailyReportJob,
+} from "../report/service.ts";
 import { refreshStock, snapshotForSlot, isStockCollecting } from "../stock/stock.ts";
 import { runPulse } from "../stock/pulse.ts";
 import { getTabSettings } from "../settings/tab-settings.ts";
@@ -436,8 +437,7 @@ function slotLabel(occ: Date, now: Date = new Date()): string {
 }
 
 const eventsBackoff = createBackoff("팝업/전시", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
-const newsBackoff = createBackoff("뉴스", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
-const youtubeBackoff = createBackoff("유튜브", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
+const reportBackoff = createBackoff("통합 보고서", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
 // 스킬 랭킹은 주 1회지만 백오프 상수는 일간 탭과 공유한다. 주 단위로 늘려 잡으면 월요일 아침의
 // 일시적 실패(네트워크 끊김 등)가 그 주 전체를 날린다 — 30분→4시간 간격이면 하루 안에 회복된다.
 const skillsBackoff = createBackoff("스킬 랭킹", CATCHUP_BACKOFF_BASE_MS, CATCHUP_BACKOFF_MAX_MS);
@@ -553,44 +553,60 @@ async function checkEventsCatchup() {
   await safeRefreshEvents("catchup");
 }
 
-// ── 데일리 뉴스 다이제스트 스케줄 ──
-let newsRunning = false;
-async function safeRefreshNews(trigger: string) {
-  if (newsRunning) {
-    log.warn(`뉴스 수집 진행 중 → ${trigger} 건너뜀`);
+// ── 세 모델 통합 뉴스·유튜브 보고서 스케줄 ──
+//
+// 2026-11-22: 뉴스·유튜브 탭은 각자 일정으로 단일 모델 수집을 돌리지 않는다. '보고서' 일정(기본 09:00·17:00)마다
+// 봇 홈의 수집기가 세 모델(Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon)로 뉴스·유튜브를 함께 취합하고, 그 통합 결과로
+// 두 탭을 갱신한 뒤 켜 둔 채널로 보고서를 보낸다(src/report/service.ts).
+// 세 모델이 동시에 도는 무거운 작업이라 전역 LLM 슬롯 안에서 돌린다(증시 17:00 과 겹치면 차례로).
+let reportRunningFlag = false;
+async function safeRunReport(trigger: "schedule" | "catchup") {
+  if (reportRunningFlag) {
+    log.warn(`통합 보고서 진행 중 → ${trigger} 건너뜀`);
     return;
   }
-  newsRunning = true;
-  // ⚠️ 큐 대기 **전에** 찍는다. 이 시각 이후의 기록만 이번 런의 성패로 인정한다.
-  const runStartedAt = Date.now();
-  // 결말 기본값이 "skipped-queue" 인 이유: 아래 콜백에 **진입조차 못 한** 경우가 정확히 그 상황
-  // (큐 대기 상한 초과)이기 때문이다. 진입하면 첫 줄에서 곧바로 다른 값으로 덮인다.
+  reportRunningFlag = true;
+  const runStartedAt = Date.now(); // 큐 대기 전. 이 시각 이후의 기록만 이번 런의 것이다.
   let outcome: TabRunOutcome = "skipped-queue";
   try {
-    await runLlmJob(`뉴스[${trigger}]`, async () => {
-      // ★ 판정과 호출 사이에 await 가 없다(원자적). 수동 갱신이 도는 중이면 refreshNews 는
-      //   시도 기록 없이 되돌아오므로, 그대로 두면 성패 판정이 '실패'로 오판한다.
-      if (isNewsCollecting()) {
-        log.warn(`뉴스 수집이 이미 진행 중(수동 갱신 등) → ${trigger} 건너뜀`);
+    await runLlmJob(`통합 보고서[${trigger}]`, async () => {
+      if (isReportRunning()) {
+        log.warn(`통합 보고서가 이미 진행 중(수동 실행 등) → ${trigger} 건너뜀`);
         outcome = "skipped-duplicate";
         return;
       }
       outcome = "attempted";
-      await refreshNews({ trigger });
+      await runDailyReportJob(trigger);
     });
   } catch (e) {
-    log.error(`뉴스 수집 오류 [${trigger}]: ${(e as Error).message}`);
+    log.error(`통합 보고서 오류 [${trigger}]: ${(e as Error).message}`);
   } finally {
-    newsRunning = false;
-    // 성패 판정은 news.ts 의 시도 기록이 근거다(계약: getNewsLastAttempt).
-    noteTabOutcome(`뉴스[${trigger}]`, newsBackoff, outcome, () =>
-      attemptSucceededSince(getNewsLastAttempt(), runStartedAt)
-    );
+    reportRunningFlag = false;
+    noteTabOutcome(`통합 보고서[${trigger}]`, reportBackoff, outcome, () => {
+      const a = getReportLastAttempt();
+      return attemptSucceededSince(a ? { ok: a.ok, at: a.finishedAt } : null, runStartedAt);
+    });
   }
 }
 
+/** 통합 보고서 catch-up: 보충 대상 occurrence 를 커버하는 성공 실행이 없으면 보충한다. */
+async function checkReportCatchup() {
+  const target = catchupTarget(getSchedule().report, new Date());
+  const d = decideCatchup({
+    running: reportRunningFlag || isReportRunning(),
+    blocked: reportBackoff.blocked(),
+    slots: target ? [target] : [],
+    past: () => true, // lastOccurrence 는 정의상 이미 지난 시각이다
+    covered: (occ) => reportCoveredAt(occ),
+  });
+  if (!d.run) return;
+  log.info(`${slotLabel(d.slot)} 통합 보고서 누락 감지 → catch-up 실행`);
+  await safeRunReport("catchup");
+}
+
 /**
- * 해당 예정 시각(scheduled)을 커버하는 **정상** 스냅샷이 있는지.
+ * 해당 예정 시각(scheduled)을 커버하는 **정상** 뉴스 스냅샷이 있는지. (2026-11-22 이후 정기 수집 게이트는
+ * reportCoveredAt 이다 — 이 술어는 화면·진단용으로 남긴다.)
  *
  * ⚠️ `source === "llm"` 조건이 핵심이다. 큐레이션이 실패하면 news.ts 는 오늘 날짜 + 지금
  * updatedAt 을 단 빈 스냅샷(source="empty")을 저장할 수 있는데, 날짜·시각만 보는 예전 게이트는
@@ -620,62 +636,6 @@ export function scheduledToday(hhmm: string): Date {
 }
 
 /**
- * 뉴스 catch-up: 보충 대상 occurrence(catchupTarget — 기본 매일 스케줄에서는 '오늘 가장 최근에
- * 지난 시각')를 커버하는 정상 스냅샷이 없으면 보충한다.
- */
-async function checkNewsCatchup() {
-  const target = catchupTarget(getSchedule().news, new Date());
-  const d = decideCatchup({
-    running: newsRunning,
-    blocked: newsBackoff.blocked(), // 연속 실패 백오프 중
-    slots: target ? [target] : [],
-    past: () => true, // lastOccurrence 는 정의상 이미 지난 시각이다
-    covered: (occ) => newsCoveredAt(occ),
-  });
-  if (!d.run) return;
-  log.info(`${slotLabel(d.slot)} 뉴스 다이제스트 갱신 누락 감지 → catch-up 실행`);
-  await safeRefreshNews("catchup");
-}
-
-// ── 유튜브 소식 스케줄 ──
-//
-// 백오프는 원래 여기에만 있었다(유튜브가 반나절 동안 8회 실패한 실측 사례에서 나왔다).
-// 뉴스·팝업/전시도 같은 실패 모양을 가지므로, 3벌 복붙 대신 위쪽 createBackoff 로 공통화했다.
-let youtubeRunning = false;
-
-async function safeRefreshYoutube(trigger: string) {
-  if (youtubeRunning) {
-    log.warn(`유튜브 수집 진행 중 → ${trigger} 건너뜀`);
-    return;
-  }
-  youtubeRunning = true;
-  const runStartedAt = Date.now(); // 큐 대기 전. 이 시각 이후의 기록만 이번 런의 것이다.
-  // 결말 기본값이 "skipped-queue" 인 이유: 아래 콜백에 **진입조차 못 한** 경우가 정확히 그 상황
-  // (큐 대기 상한 초과)이기 때문이다. 진입하면 첫 줄에서 곧바로 다른 값으로 덮인다.
-  let outcome: TabRunOutcome = "skipped-queue";
-  try {
-    await runLlmJob(`유튜브[${trigger}]`, async () => {
-      if (isYoutubeCollecting()) {
-        log.warn(`유튜브 수집이 이미 진행 중(수동 갱신 등) → ${trigger} 건너뜀`);
-        outcome = "skipped-duplicate";
-        return;
-      }
-      outcome = "attempted";
-      await refreshYoutube({ trigger });
-    });
-  } catch (e) {
-    log.error(`유튜브 수집 오류 [${trigger}]: ${(e as Error).message}`);
-  } finally {
-    youtubeRunning = false;
-    // 시도 기록이 없으면(기동 후 첫 예외 등) 실패로 접는다 — 기존 noteYoutubeOutcome 과 같은 판정.
-    // 단 **시도한 런에 한해서다** — 건너뛴 런까지 실패로 세면 백오프가 유령 실패로 걸린다.
-    noteTabOutcome(`유튜브[${trigger}]`, youtubeBackoff, outcome, () =>
-      attemptSucceededSince(getYoutubeLastAttempt(), runStartedAt)
-    );
-  }
-}
-
-/**
  * 해당 예정 시각을 커버하는 **정상** 유튜브 스냅샷이 있는지.
  *
  * 뉴스와 같은 이유로 `source === "llm"` 을 요구한다. 유튜브는 실패 시 보통 기존 스냅샷을
@@ -691,23 +651,6 @@ export function youtubeCoveredAt(scheduled: Date): boolean {
   if (!snap.updatedAt) return true; // 뉴스와 동일: '모름'은 커버로 본다
   const at = new Date(snap.updatedAt);
   return Number.isNaN(at.getTime()) ? true : at >= scheduled;
-}
-
-/**
- * 유튜브 catch-up: 보충 대상 occurrence 를 커버하는 정상 스냅샷이 없으면 보충한다. (뉴스와 동일 패턴)
- */
-async function checkYoutubeCatchup() {
-  const target = catchupTarget(getSchedule().youtube, new Date());
-  const d = decideCatchup({
-    running: youtubeRunning,
-    blocked: youtubeBackoff.blocked(), // 연속 실패 백오프 중 — **catch-up 만** 막는다
-    slots: target ? [target] : [],
-    past: () => true, // lastOccurrence 는 정의상 이미 지난 시각이다
-    covered: (occ) => youtubeCoveredAt(occ),
-  });
-  if (!d.run) return;
-  log.info(`${slotLabel(d.slot)} 유튜브 소식 갱신 누락 감지 → catch-up 실행`);
-  await safeRefreshYoutube("catchup");
 }
 
 // ── 증시 브리핑 스케줄 (한국장 08:00 / 미국장 18:00) ──
@@ -1055,10 +998,11 @@ function scheduleGroup(
 function registerCrons() {
   const s = getSchedule();
   scheduleGroup("events", s.events, "팝업/전시", () => void safeRefreshEvents("schedule"));
-  scheduleGroup("news", s.news, "뉴스 다이제스트", () => void safeRefreshNews("schedule"));
-  scheduleGroup("youtube", s.youtube, "유튜브 소식", () => void safeRefreshYoutube("schedule"));
   scheduleGroup("stock-kr", s.stockKr, "증시(한국장)", (t) => void safeRefreshStock("kr", "schedule", t));
   scheduleGroup("stock-us", s.stockUs, "증시(미국장)", (t) => void safeRefreshStock("us", "schedule", t));
+  // 통합 보고서는 증시 브리핑 **뒤에** 등록한다 — 같은 분(17:00)에 걸리면 시간에 민감한 증시 브리핑이 먼저
+  // 슬롯을 잡고, 30분 안팎의 보고서가 그 뒤를 잇는다(같은 분의 cron 은 대개 등록 순서대로 발화한다 — 어긋나도 둘 다 같은 큐에 줄을 설 뿐이다).
+  scheduleGroup("report", s.report, "통합 보고서", () => void safeRunReport("schedule"));
   // 역할 분리 구성을 남긴다. '슬롯을 하나로 줄이거나 같은 밴드에 몰아넣으면 분리가 조용히
   // 꺼진다'는 비자명 동작의 유일한 가시화 수단이라 옵션이 아니다(slot-role.ts 참고).
   log.info(describeSlotRoles("us", s.stockUs.times));
@@ -1130,10 +1074,10 @@ export function rescheduleAll() {
 // **뒤의 모든 점검을 통째로 취소**시킨다. 조용한 전면 정지라 반드시 막아야 한다.
 const CATCHUP_STEPS: { label: string; run: () => Promise<void> }[] = [
   { label: "팝업/전시", run: checkEventsCatchup },
-  { label: "뉴스", run: checkNewsCatchup },
-  { label: "유튜브", run: checkYoutubeCatchup },
   { label: "증시(kr)", run: () => checkStockCatchup("kr") },
   { label: "증시(us)", run: () => checkStockCatchup("us") },
+  // 통합 보고서는 증시 뒤 — 정시 등록 순서와 같은 이유(시간에 민감한 브리핑 먼저).
+  { label: "통합 보고서", run: checkReportCatchup },
   // 모델 복귀 catch-up 은 없다 — 복귀가 시각이 아니라 '다음 실행의 Codex 확인'에 달려 있어
   // 서버가 꺼져 있던 구간에 놓칠 이벤트 자체가 없다.
   // 로또: 놓친 일요일 사이클(맥이 자고 있었던 경우)과 예약된 재시도를 확인한다.

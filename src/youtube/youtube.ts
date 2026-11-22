@@ -65,9 +65,53 @@ export function hasTodayYoutubeSnapshot(): boolean {
   return getYoutubeSnapshot()?.date === localDate();
 }
 
-/** 현재 유튜브 수집이 진행 중인지 (API가 '수집 중' 안내에 사용) */
+/** 세 모델 통합 보고서 실행(src/report/service.ts)이 유튜브를 수집하는 중인가. */
+let reportCollecting = false;
+
+/** 통합 보고서 실행이 시작·끝날 때 부른다 — 그동안 유튜브 탭이 '수집 중'(카드 이동 거부 포함)으로 보인다. */
+export function markYoutubeCollecting(on: boolean): void {
+  reportCollecting = on;
+}
+
+/** 현재 유튜브 수집이 진행 중인지 (API가 '수집 중' 안내에 사용). 통합 보고서 실행 포함. */
 export function isYoutubeCollecting(): boolean {
-  return running;
+  return running || reportCollecting;
+}
+
+function countVideos(s: YoutubeSnapshot | null | undefined): number {
+  return s ? s.categories.reduce((a, c) => a + c.items.length, 0) : 0;
+}
+
+/**
+ * 세 모델 통합 보고서의 유튜브 결과를 탭 스냅샷으로 저장한다. 결과가 비었고 직전 정상 스냅샷이 있으면
+ * 덮어쓰지 않는다(단일 모델 수집의 보호 규칙과 같다 — 빈 화면보다 직전 목록이 낫다).
+ */
+export function applyYoutubeReportSnapshot(
+  fresh: YoutubeSnapshot,
+  attemptedAt: string,
+  trigger: string
+): { action: "save" | "keep" } {
+  const prev = getYoutubeSnapshot();
+  const total = countVideos(fresh);
+  if ((fresh.source !== "llm" || total === 0) && prev?.source === "llm" && countVideos(prev) > 0) {
+    const error = fresh.notes ?? "통합 결과에 영상이 없습니다";
+    log.warn(`유튜브(통합 보고서) 결과 없음 → 기존 스냅샷 유지 [${trigger}] (${error})`);
+    lastAttempt = { at: attemptedAt, ok: false, trigger, error };
+    return { action: "keep" };
+  }
+  memo = fresh;
+  saveToDisk(fresh);
+  lastAttempt =
+    fresh.source === "llm" && total > 0
+      ? { at: attemptedAt, ok: true, trigger, error: null }
+      : { at: attemptedAt, ok: false, trigger, error: fresh.notes ?? "통합 결과에 영상이 없습니다" };
+  log.info(`유튜브 탭 갱신(통합 보고서) [${trigger}] ${fresh.date} (총 ${total}건)`);
+  return { action: "save" };
+}
+
+/** 통합 보고서가 유튜브 결과를 내지 못했을 때 — 스냅샷은 그대로 두고 실패한 시도만 남긴다. */
+export function recordYoutubeReportFailure(attemptedAt: string, trigger: string, error: string): void {
+  lastAttempt = { at: attemptedAt, ok: false, trigger, error };
 }
 
 /**

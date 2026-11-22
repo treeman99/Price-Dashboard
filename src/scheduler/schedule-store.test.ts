@@ -34,7 +34,9 @@ const norm = (times: string[]) =>
 
 test("파일이 없으면 .env 기본값: 일반 탭은 매일, 스킬은 매주 월 09:00, 로또는 매주 일 10:00", () => {
   const s = getSchedule();
-  assert.deepEqual(s.news, daily(norm(config.newsCollectTimes)));
+  assert.deepEqual(s.report, daily(norm(config.reportCollectTimes)));
+  if (!process.env.REPORT_COLLECT_TIMES) assert.deepEqual(s.report.times, ["09:00", "17:00"], "통합 보고서 기본은 09:00·17:00");
+  assert.equal("news" in s || "youtube" in s, false, "뉴스·유튜브는 각자 일정이 없다(통합 보고서가 둘 다 수집)");
   assert.deepEqual(s.events, daily(norm([config.eventsCollectTime])));
   assert.deepEqual(s.stockPulse.repeat, { kind: "daily" });
   assert.deepEqual(s.skills, {
@@ -53,18 +55,18 @@ test("v1 schedule.json(실제 운영 파일 형식)을 '매일'로 읽는다", (
   // 2026-10-25 실제 data/schedule.json 내용 그대로 — stockUs 가 시각 역순인 것까지 재현한다.
   writeRaw({ youtube: ["09:00", "19:00"], stockUs: ["17:00", "08:00"], stockKr: ["08:00", "17:00"] });
   const s = getSchedule();
-  assert.deepEqual(s.youtube, daily(["09:00", "19:00"]));
+  assert.equal("youtube" in s, false, "예전 유튜브 일정은 읽지 않는다(통합 보고서 일정으로 대체)");
   assert.deepEqual(s.stockUs, daily(["08:00", "17:00"]), "v2 는 시각을 오름차순으로 정규화한다");
   assert.deepEqual(s.stockKr, daily(["08:00", "17:00"]));
   // 파일에 없는 잡은 계속 .env 를 따른다
-  assert.deepEqual(s.news, daily(norm(config.newsCollectTimes)));
+  assert.deepEqual(s.report, daily(norm(config.reportCollectTimes)));
 });
 
 test("읽기는 관대하다 — 깨진 시각만 거르고, 구제가 안 되면 그 잡만 기본값", () => {
   writeRaw({
     events: ["25:00", "9:30"], // 깨진 항목 하나 + 정상 하나 → 정상만
-    news: "garbage", // 형식 자체가 틀림 → 기본값
-    youtube: [], // 빈 배열 → 기본값(v1 lenientMulti 와 같다)
+    report: "garbage", // 형식 자체가 틀림 → 기본값
+    stockKr: [], // 빈 배열 → 기본값(v1 lenientMulti 와 같다)
     lotto: daily(["10:00"]), // 로또에 '매일'은 허용 안 됨 → 기본값
     skills: {
       enabled: true,
@@ -74,8 +76,8 @@ test("읽기는 관대하다 — 깨진 시각만 거르고, 구제가 안 되�
   });
   const s = getSchedule();
   assert.deepEqual(s.events, daily(["09:30"]));
-  assert.deepEqual(s.news, daily(norm(config.newsCollectTimes)));
-  assert.deepEqual(s.youtube, daily(norm(config.youtubeCollectTimes)));
+  assert.deepEqual(s.report, daily(norm(config.reportCollectTimes)));
+  assert.deepEqual(s.stockKr, daily(norm(config.stockKrCollectTimes)));
   assert.equal(s.lotto.repeat.kind, "weekly");
   assert.deepEqual(s.skills.times, ["21:00"]);
 });
@@ -89,9 +91,9 @@ test("읽기도 금지 구간을 지킨다 — 손으로 고친 파일이 로또
 
 test("읽기 경로는 격주 기준일을 '오늘'로 채우지 않는다(날마다 위상이 뒤집히면 안 된다)", () => {
   writeRaw({
-    news: { enabled: true, repeat: { kind: "weekly", days: [1], intervalWeeks: 2 }, times: ["08:00"] },
+    report: { enabled: true, repeat: { kind: "weekly", days: [1], intervalWeeks: 2 }, times: ["08:00"] },
   });
-  const a = getSchedule().news.repeat;
+  const a = getSchedule().report.repeat;
   assert.equal(a.kind, "weekly");
   // 고정 기준(2026-01-05)으로 채워져, 언제 읽어도 같은 값이다.
   assert.equal(a.kind === "weekly" ? a.anchorDate : null, "2026-01-05");
@@ -101,10 +103,11 @@ test("쓰기는 엄격하다 — 하나라도 틀리면 아무것도 저장하�
   writeRaw({ youtube: ["09:00", "19:00"] });
   const before = fs.readFileSync(FILE, "utf8");
   assert.throws(
-    () => saveSchedule({ news: daily(["08:00"]) as never, events: daily(["8시"]) as never }),
+    () => saveSchedule({ report: daily(["08:00"]) as never, events: daily(["8시"]) as never }),
     /팝업·전시: 시각 형식 오류/
   );
-  assert.equal(fs.readFileSync(FILE, "utf8"), before, "첫 잡(news)도 저장되면 안 된다");
+  assert.equal(fs.readFileSync(FILE, "utf8"), before, "다른 잡(report)도 저장되면 안 된다");
+  assert.throws(() => saveSchedule({ news: daily(["08:00"]) } as never), /알 수 없는 스케줄 항목: news/);
 
   assert.throws(() => saveSchedule({ price: ["08:00"] } as never), /알 수 없는 스케줄 항목: price/);
   assert.throws(() => saveSchedule([] as never), /객체여야/);
@@ -121,22 +124,22 @@ test("쓰기는 sparse — 보낸 잡만 v2 로 기록하고, v1 으로 남은 �
   writeRaw({ youtube: ["09:00", "19:00"], stockUs: ["17:00", "08:00"] });
   const now = new Date(2026, 9, 25, 12, 0); // 2026-10-25(일)
   const r = saveSchedule(
-    { news: { enabled: true, repeat: { kind: "weekly", days: [1, 3], intervalWeeks: 2 }, times: ["7:00"] } },
+    { report: { enabled: true, repeat: { kind: "weekly", days: [1, 3], intervalWeeks: 2 }, times: ["7:00"] } },
     now
   );
-  assert.deepEqual(r.news, {
+  assert.deepEqual(r.report, {
     enabled: true,
     repeat: { kind: "weekly", days: [1, 3], intervalWeeks: 2, anchorDate: "2026-10-25" },
     times: ["07:00"],
   });
   const raw = readRaw();
-  assert.deepEqual(Object.keys(raw).sort(), ["news", "stockUs", "youtube"]);
-  assert.deepEqual(raw.youtube, ["09:00", "19:00"], "v1 항목은 그대로 남는다");
-  assert.deepEqual(raw.news, r.news);
+  assert.deepEqual(Object.keys(raw).sort(), ["report", "stockUs", "youtube"]);
+  assert.deepEqual(raw.youtube, ["09:00", "19:00"], "v1 항목(읽지 않는 옛 유튜브 일정 포함)은 그대로 남는다");
+  assert.deepEqual(raw.report, r.report);
 
   // v1 배열 PUT 도 받아 준다(매일)
-  const r2 = saveSchedule({ youtube: ["21:00", "8:00"] } as never);
-  assert.deepEqual(r2.youtube, daily(["08:00", "21:00"]));
+  const r2 = saveSchedule({ events: ["21:00", "8:00"] } as never);
+  assert.deepEqual(r2.events, daily(["08:00", "21:00"]));
 });
 
 test("기본값과 같은 값을 저장하면 override 를 지워 다시 .env 를 따른다('기본값으로 되돌리기')", () => {

@@ -64,6 +64,14 @@ function NewsRow({ item }: { item: NewsItem }) {
           ·
         </span>
         <span className="num">{item.date}</span>
+        {item.foundBy && item.foundBy.length > 0 && (
+          <>
+            <span aria-hidden className="mx-1.5 text-muted-foreground/50">
+              ·
+            </span>
+            <span title="세 모델 통합 보고서에서 이 기사를 찾은 모델">{item.foundBy.join(", ")}</span>
+          </>
+        )}
       </p>
       {/* 요약 — 고정 높이 없이 전문을 그대로 보여준다(다단이 높이 차이를 흡수한다) */}
       <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-foreground/80">{item.summary}</p>
@@ -354,9 +362,13 @@ export function NewsBoard() {
           </>
         }
       >
-        <ScheduleControl tab="news" />
+        <ScheduleControl tab="news" label="통합 보고서" />
         <MetaDot />
-        <Meta>최근 24시간 뉴스</Meta>
+        <Meta>
+          <span title="Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon 이 각자 조사한 결과를 하나로 합친 목록입니다">
+            최근 24시간 뉴스 · 세 모델 통합
+          </span>
+        </Meta>
         {updated && (
           <>
             <MetaDot />
@@ -381,7 +393,8 @@ export function NewsBoard() {
 
       {collecting && (
         <Notice tone="info" progress>
-          뉴스를 수집하는 중입니다… 1~3분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
+          세 모델(Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon)이 뉴스·유튜브를 함께 조사하는 중입니다… 30분 안팎 걸리고,
+          완료되면 자동으로 반영됩니다.
         </Notice>
       )}
 

@@ -72,14 +72,13 @@ function envDaily(id: ScheduleJobId, times: string[]): JobSchedule {
 }
 
 /**
- * .env 기반 기본값. events/news/youtube/증시 3종은 '매일 .env 시각'(v1 과 같은 동작),
+ * .env 기반 기본값. events/report/증시 3종은 '매일 .env 시각'(v1 과 같은 동작),
  * 스킬 랭킹·로또는 기존 주간 cron 과 같은 시각이다.
  */
 function defaults(): ScheduleConfig {
   return {
     events: envDaily("events", [config.eventsCollectTime]),
-    news: envDaily("news", config.newsCollectTimes),
-    youtube: envDaily("youtube", config.youtubeCollectTimes),
+    report: envDaily("report", config.reportCollectTimes),
     stockKr: envDaily("stockKr", config.stockKrCollectTimes),
     stockUs: envDaily("stockUs", config.stockUsCollectTimes),
     stockPulse: envDaily("stockPulse", config.stockPulseTimes),

@@ -25,7 +25,7 @@ function shortTime(iso: string): string {
 
 /**
  * 수집·큐레이션 에이전트를 고르는 전역 컨트롤(헤더 배치).
- * 뉴스·유튜브·팝업/전시·증시 등 모든 자동 수집·큐레이션에 공통 적용되며,
+ * 팝업/전시·증시·스킬 랭킹 등 자동 수집·큐레이션에 공통 적용되며(뉴스·유튜브는 세 모델 통합 보고서가 고정 모델로 수집한다),
  * 변경은 다음 수집부터 반영된다(서버 재시작 불필요).
  *
  * 선택은 그대로 두고 **실행할 때만** 대체 모델로 도는 구간이 있으므로(Codex 로그인 초기화·
@@ -104,8 +104,8 @@ export function ModelControl() {
         <DialogHeader>
           <DialogTitle>수집·큐레이션 AI 모델</DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
-            뉴스·유튜브·팝업/전시·증시 등 모든 자동 수집과 큐레이션에 쓸 에이전트입니다.
-            변경하면 다음 수집부터 적용됩니다.
+            팝업/전시·증시·스킬 랭킹 등 자동 수집과 큐레이션에 쓸 에이전트입니다. 변경하면 다음 수집부터 적용됩니다.
+            뉴스·유튜브는 이 선택과 무관하게 세 모델(Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon) 통합 보고서로 수집합니다.
           </DialogDescription>
         </DialogHeader>
 

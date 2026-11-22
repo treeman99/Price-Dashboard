@@ -26,6 +26,22 @@ import type {
 import type { LottoSnapshot } from "@shared/lotto";
 import type { SkillsSnapshot } from "@shared/skills";
 import type { DowntimeEvent, DowntimeView } from "@shared/uptime";
+import type { DailyReportJson, DailyReportListResponse } from "@shared/report";
+
+/** 보고서 실행 1건 상세(GET /api/report/runs/:id). 옛 실행은 report 가 null 이고 markdown 원문만 있다. */
+export interface DailyReportRunDetail {
+  runId: string;
+  report: DailyReportJson | null;
+  markdown: string | null;
+  delivered: { email?: string; imessage?: string };
+}
+
+/** 보고서 '보내기' 결과. */
+export interface DailyReportSendResult {
+  sent: { email?: string; imessage?: string };
+  skipped: { email?: string; imessage?: string };
+  errors: string[];
+}
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -549,6 +565,34 @@ export const api = {
     await j<{ started: boolean }>(res); // 202; 비정상(5xx)이면 throw
     return { started: true, busy: false, collecting: true, reason: null };
   },
+
+  // ── 세 모델 통합 뉴스·유튜브 보고서 ──
+  //
+  // 실행은 서버 스케줄러가 '보고서' 일정(기본 09:00·17:00)마다 하고, 뉴스·유튜브 탭의 '지금 갱신'과 이 탭의
+  // '지금 실행'은 같은 실행이다(30분 안팎). 결과는 실행별로 쌓이고, 켜 둔 채널로 메일·문자가 나간다.
+
+  /** 실행 목록·진행 상태·마지막 시도·발송 채널 상태. */
+  report: () => fetch("/api/report").then((r) => j<DailyReportListResponse>(r)),
+
+  /** 실행 1건 상세. */
+  reportRun: (runId: string) =>
+    fetch(`/api/report/runs/${encodeURIComponent(runId)}`).then((r) => j<DailyReportRunDetail>(r)),
+
+  /** 지금 실행(202) — 이미 실행 중이거나 다른 AI 수집이 슬롯을 쥐고 있으면 409 → busy. */
+  runReport: async (): Promise<RefreshResult> => {
+    const res = await fetch("/api/report/run", { method: "POST" });
+    if (res.status === 409) return busyResult(res);
+    await j<{ started: boolean }>(res);
+    return { started: true, busy: false, collecting: true, reason: null };
+  },
+
+  /** 이 실행의 보고서를 지금 고른 채널로 보낸다(알림 스위치와 무관 — 사용자가 직접 누른 발송). */
+  sendReportRun: (runId: string, channels: ("email" | "imessage")[]) =>
+    fetch(`/api/report/runs/${encodeURIComponent(runId)}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ channels }),
+    }).then((r) => j<DailyReportSendResult>(r)),
 
   // ── 가동 중단 사후 보고 ──
   //

@@ -144,9 +144,39 @@ export function hasTodayNewsSnapshot(): boolean {
   return getNewsSnapshot()?.date === localDate();
 }
 
-/** 현재 뉴스 수집이 진행 중인지 (API가 '수집 중' 안내에 사용). 수동·정시 수집 모두 반영. */
+/** 세 모델 통합 보고서 실행(src/report/service.ts)이 뉴스를 수집하는 중인가. */
+let reportCollecting = false;
+
+/** 통합 보고서 실행이 시작·끝날 때 부른다 — 그동안 뉴스 탭이 '수집 중'으로 보인다. */
+export function markNewsCollecting(on: boolean): void {
+  reportCollecting = on;
+}
+
+/** 현재 뉴스 수집이 진행 중인지 (API가 '수집 중' 안내에 사용). 통합 보고서 실행 포함. */
 export function isNewsCollecting(): boolean {
-  return running;
+  return running || reportCollecting;
+}
+
+/**
+ * 세 모델 통합 보고서의 뉴스 결과를 탭 스냅샷으로 저장한다. 보호 규칙은 단일 모델 수집과 같다
+ * (decideNewsSnapshot — 빈 결과면 직전 성공본 유지 + 안내문, 시도 기록은 항상 남김).
+ */
+export function applyNewsReportSnapshot(fresh: NewsSnapshot, attemptedAt: string, trigger: string): NewsSnapshotDecision {
+  const decision = decideNewsSnapshot(getNewsSnapshot(), fresh, attemptedAt, trigger);
+  memo = decision.snapshot;
+  saveToDisk(decision.snapshot);
+  recordAttempt(decision.attempt);
+  if (decision.action === "keep") {
+    log.warn(`뉴스(통합 보고서) 결과 없음 → 기존 스냅샷 유지 [${trigger}] (원인: ${decision.attempt.error})`);
+  } else {
+    log.info(`뉴스 탭 갱신(통합 보고서) [${trigger}] ${fresh.date} (총 ${decision.attempt.total ?? 0}건)`);
+  }
+  return decision;
+}
+
+/** 통합 보고서가 뉴스 결과를 내지 못했을 때 — 스냅샷은 그대로 두고 실패한 시도만 남긴다. */
+export function recordNewsReportFailure(attemptedAt: string, trigger: string, error: string): void {
+  recordAttempt({ ok: false, at: attemptedAt, source: "error", trigger, total: 0, error });
 }
 
 /** refreshNews 한 회차의 처리 방침(순수 판정 — 디스크 부작용 없음). */

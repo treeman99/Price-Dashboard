@@ -54,9 +54,8 @@ import {
   catchupTarget,
   eventsCoveredToday,
   eventsCoveredOn,
-  newsCoveredAt,
-  youtubeCoveredAt,
 } from "../scheduler/scheduler.ts";
+import { reportCoveredAt } from "../report/service.ts";
 import { hasSnapshotForSlot } from "../stock/stock.ts";
 import { slotHandled } from "../stock/notify-ledger.ts";
 import { isMarketClosed } from "../stock/calendar.ts";
@@ -141,8 +140,8 @@ export interface MissedSlotDeps {
    * **스케줄러가 보충하는 것**(주간·월간 잡, 아래 SlotRule.catchupAtMs)만 이것으로 검증한다.
    */
   eventsCoveredOn(scheduled: Date): boolean;
-  newsCoveredAt(scheduled: Date): boolean;
-  youtubeCoveredAt(scheduled: Date): boolean;
+  /** 통합 보고서(뉴스·유튜브 공용 일정)가 그 예정 시각 이후 성공했는가 — scheduler 의 catch-up 과 같은 술어. */
+  reportCoveredAt(scheduled: Date): boolean;
   /** `stock.ts` 의 `snapshotForSlot(...) !== null`. 슬롯 기준(역할 기준 아님)이다. */
   hasStockSnapshotForSlot(market: StockMarket, date: string, slot: string): boolean;
   /** 원장에 '이 슬롯은 처리 완료'로 닫혀 있는지. 휴장 런도 여기서 닫힌다. */
@@ -163,8 +162,7 @@ const REAL_DEPS: MissedSlotDeps = {
   scheduledToday,
   eventsCoveredToday,
   eventsCoveredOn,
-  newsCoveredAt,
-  youtubeCoveredAt,
+  reportCoveredAt,
   hasStockSnapshotForSlot: hasSnapshotForSlot,
   slotHandled,
   isMarketClosed,
@@ -175,7 +173,7 @@ const REAL_DEPS: MissedSlotDeps = {
  * 기본값 위에 교체분을 얹는다.
  *
  * `{...REAL_DEPS, ...overrides}` 를 쓰지 않는 이유: 스프레드는 **명시적 `undefined` 도
- * 덮어쓴다.** 테스트가 "이 술어만 진짜 구현으로 두고 싶다"며 `newsCoveredAt: undefined` 를
+ * 덮어쓴다.** 테스트가 "이 술어만 진짜 구현으로 두고 싶다"며 `reportCoveredAt: undefined` 를
  * 넘기면 진짜 함수가 지워져 호출부에서 TypeError 가 나고, 그건 catch 에 삼켜져 **손실 0건**
  * 으로 조용히 둔갑한다. `undefined` 는 "기본값을 쓰라"로 읽는다.
  */
@@ -369,36 +367,20 @@ async function rulesForDay(
     }
   }
 
-  // ── 뉴스 / 유튜브: 스냅샷 updatedAt 이 예정 시각을 넘겼는지로 판정 ──
-  //   두 술어 모두 `source !== "llm"` 인 폴백/빈 스냅샷을 커버로 치지 않는다. 그래서
-  //   "LLM 이 실패해 빈 스냅샷만 남은 날"이 손실로 정확히 잡힌다(테스트 4번의 계약).
-  const news = jobOf(schedule.news);
-  if (due(news)) {
-    const target = catchupAtMs(news);
-    for (const t of news.times) {
+  // ── 통합 보고서(뉴스·유튜브): 그 예정 시각 이후 끝난 **성공** 실행이 있는지로 판정 ──
+  //   세 모델이 모두 건너뛴 실행은 커버로 치지 않는다(스케줄러 catch-up 과 같은 reportCoveredAt).
+  const report = jobOf(schedule.report);
+  if (due(report)) {
+    const target = catchupAtMs(report);
+    for (const t of report.times) {
       rules.push({
-        tab: "news",
+        tab: "report",
         hhmm: t,
         slotLabel: t,
-        coveredToday: (scheduled) => deps.newsCoveredAt(scheduled),
+        coveredToday: (scheduled) => deps.reportCoveredAt(scheduled),
         provenRan: never,
         catchupAtMs: target,
-        coveredAt: (scheduled) => deps.newsCoveredAt(scheduled),
-      });
-    }
-  }
-  const youtube = jobOf(schedule.youtube);
-  if (due(youtube)) {
-    const target = catchupAtMs(youtube);
-    for (const t of youtube.times) {
-      rules.push({
-        tab: "youtube",
-        hhmm: t,
-        slotLabel: t,
-        coveredToday: (scheduled) => deps.youtubeCoveredAt(scheduled),
-        provenRan: never,
-        catchupAtMs: target,
-        coveredAt: (scheduled) => deps.youtubeCoveredAt(scheduled),
+        coveredAt: (scheduled) => deps.reportCoveredAt(scheduled),
       });
     }
   }

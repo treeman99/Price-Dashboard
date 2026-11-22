@@ -20,8 +20,7 @@ import type {
 /** 스케줄을 갖는 잡 전체(순회 순서 = 화면 기본 정렬 순서). */
 export const SCHEDULE_JOB_IDS: readonly ScheduleJobId[] = [
   "events",
-  "news",
-  "youtube",
+  "report",
   "stockKr",
   "stockUs",
   "stockPulse",
@@ -31,8 +30,7 @@ export const SCHEDULE_JOB_IDS: readonly ScheduleJobId[] = [
 
 export const SCHEDULE_JOB_LABEL: Record<ScheduleJobId, string> = {
   events: "팝업·전시",
-  news: "뉴스",
-  youtube: "유튜브 소식",
+  report: "뉴스·유튜브 통합 보고서",
   stockKr: "증시(한국)",
   stockUs: "증시(미국)",
   stockPulse: "증시 펄스",
@@ -58,8 +56,12 @@ const MULTI_SLOT_RULES: JobScheduleRules = {
  */
 export const SCHEDULE_RULES: Record<ScheduleJobId, JobScheduleRules> = {
   events: MULTI_SLOT_RULES,
-  news: MULTI_SLOT_RULES,
-  youtube: MULTI_SLOT_RULES,
+  report: {
+    ...MULTI_SLOT_RULES,
+    // 세 모델이 동시에 뉴스·유튜브를 모두 조사하는 30분 안팎의 작업이라 '매시간'은 의미가 없다.
+    maxTimes: 6,
+    note: "세 모델(Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon)이 뉴스·유튜브를 함께 조사해 두 탭을 갱신하고, 켜 두면 보고서를 메일·문자로 보냅니다. 한 번에 30분 안팎 걸립니다.",
+  },
   stockKr: {
     ...MULTI_SLOT_RULES,
     note: "결산·프리뷰 역할은 시각으로 정해집니다(이른 시각=결산, 늦은 시각=프리뷰). 지난 날의 브리핑은 보충하지 않습니다.",

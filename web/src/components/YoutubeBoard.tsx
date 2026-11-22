@@ -324,6 +324,12 @@ function VideoRow({
               </span>
             </>
           )}
+          {video.foundBy && video.foundBy.length > 0 && (
+            <>
+              <MetaDot />
+              <span title="세 모델 통합 보고서에서 이 영상을 찾은 모델">{video.foundBy.join(", ")}</span>
+            </>
+          )}
         </p>
         <Summary text={video.summary} />
         {/* 동작 — 행마다 같은 자리(맨 아래)에 오도록 mt-auto */}
@@ -918,11 +924,13 @@ export function YoutubeBoard() {
           </>
         }
       >
-        <ScheduleControl tab="youtube" />
+        <ScheduleControl tab="youtube" label="통합 보고서" />
         <MetaDot />
         {/* 조사 범위는 툴팁으로 둔다. '보고 돌아오면 자동 본영상 체크'는 '영상 보기' 링크의 툴팁에 이미 있다. */}
         <Meta>
-          <span title="AI·LLM/신제품 리뷰 전문 조사">최근 {freshDays}일 이내 영상</span>
+          <span title="AI·LLM/신제품 리뷰 전문 조사 — Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon 통합">
+            최근 {freshDays}일 이내 영상 · 세 모델 통합
+          </span>
         </Meta>
         {updated && (
           <>
@@ -946,7 +954,8 @@ export function YoutubeBoard() {
 
       {collecting && (
         <Notice tone="info" progress>
-          유튜브 소식을 수집하는 중입니다… 카테고리가 많으면 수 분~수십 분 걸릴 수 있고, 완료되면 자동으로 반영됩니다.
+          세 모델(Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon)이 뉴스·유튜브를 함께 조사하는 중입니다… 30분 안팎 걸리고,
+          완료되면 자동으로 반영됩니다.
         </Notice>
       )}
 

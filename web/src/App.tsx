@@ -7,6 +7,8 @@ import { Notice } from "@/components/ui/page";
 import { EventsBoard } from "@/components/EventsBoard";
 import { NewsBoard } from "@/components/NewsBoard";
 import { YoutubeBoard } from "@/components/YoutubeBoard";
+import { ReportBoard } from "@/components/ReportBoard";
+import { MailAuthBanner } from "@/components/MailAuthBanner";
 import { StockBoard } from "@/components/StockBoard";
 import { HoldingsBoard } from "@/components/HoldingsBoard";
 import { LottoBoard } from "@/components/LottoBoard";
@@ -54,6 +56,8 @@ const TABS: TabDef[] = [
   { id: FRONT_TAB_ID, label: "Overview", color: "#1b1a17", content: null },
   { id: "news", label: "뉴스", color: "#d97706", content: <NewsBoard /> },
   { id: "youtube", label: "유튜브 소식", color: "#dc2626", content: <YoutubeBoard /> },
+  // 세 모델 통합 뉴스·유튜브 보고서(2026-11-22). 뉴스·유튜브 탭을 갱신하는 같은 실행의 기록·본문·발송.
+  { id: "report", label: "보고서", color: "#4f46e5", content: <ReportBoard /> },
   { id: "skills", label: "스킬 랭킹", color: "#2563eb", content: <SkillsBoard /> },
   { id: "stock", label: "증시", color: "#059669", content: <StockBoard /> },
   { id: "events", label: "팝업·전시", color: "#db2777", content: <EventsBoard /> },
@@ -371,6 +375,12 @@ export default function App() {
           </Notice>
         )}
         {err && <Notice tone="error">{err}</Notice>}
+        {/*
+          보고서 메일(Google) 연결 배너 — 메일 연결이 끊기면 사용자가 눌러야 복구되는 유일한 배너라
+          가동 중단 배너보다 앞에 둔다. 평상시(정상 연결)에는 접힌 회색 한 줄만 남고, 상태를 못 읽으면
+          아무것도 그리지 않는다. (2026-11-22 세 모델 통합 보고서 메일용으로 되살림)
+        */}
+        <MailAuthBanner />
         {/*
           가동 중단 배너 — 기존 전역 배너 두 개(파란 안내 · 빨간 오류) 아래, 탭 내용 바로 위.
           새 탭을 만들지 않는 이유는 명세 §6.5 그대로다: 절전·정전은 여러 탭을 동시에 죽이는데

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -168,6 +169,41 @@ export interface AppConfig {
   /** 팝업/전시 큐레이션 시 insane-engine 으로 실제 페이지 날짜 검증 on/off. 대시보드 운영 설정(events.verifyDates)의 .env 기본값. */
   eventsVerifyDates: boolean;
   anthropicApiKey: string;
+  /**
+   * 메일·문자 발송 자격(.env). 2026-11-22 **세 모델 통합 보고서 전용**으로 되살렸다 — 증시·팝업/전시·스킬·펄스·
+   * 가동 중단 알림은 다시 보내지 않는다. 실제 발송 여부는 대시보드 '보고서' 탭 스위치(report.notifyEmail /
+   * report.notifyImessage, 기본 꺼짐)와 이 전역 스위치의 AND 다.
+   */
+  notify: {
+    email: boolean;
+    gmailAddress: string;
+    /**
+     * Google OAuth2 클라이언트 ID(GOOGLE_CLIENT_ID). Gmail API `messages.send` 로 메일을 보내기 위한 자격증명.
+     * 앱 비밀번호와 달리 끊기면 invalid_grant 로 명시적으로 알려 주므로, 그 신호를 iMessage 경고와 대시보드
+     * 재연결 배너로 잇는다(목표는 무중단이 아니라 빠른 인지와 원클릭 복구).
+     */
+    googleClientId: string;
+    /** Google OAuth2 클라이언트 시크릿(GOOGLE_CLIENT_SECRET). 로그에 절대 찍지 말 것. */
+    googleClientSecret: string;
+    /** iMessage 전역 스위치(macOS Messages.app osascript 발송). 기본 off. */
+    imessage: boolean;
+    /** iMessage 수신자(본인 전화번호 E.164 또는 Apple ID 이메일). */
+    imessageTo: string;
+  };
+  /**
+   * 세 모델 통합 보고서 수집기(Orca IT News 봇 홈에 배포된 번들)와 그 출력 폴더.
+   * price 스케줄러가 보고서 일정마다 수집기를 자식 프로세스로 실행하고 결과를 읽는다.
+   */
+  dailyReport: {
+    /** 출력 루트(runs/·state/·latest.json). DAILY_NEWS_DIR, 기본 ~/.orca/bots/it-news/daily-news */
+    dir: string;
+    /** 수집기 진입 파일. DAILY_REPORT_COLLECTOR, 기본 <dir>/collector/daily-report.mjs */
+    collector: string;
+    /** 수집기 1회 실행 상한(분). 넘으면 종료시킨다. DAILY_REPORT_TIMEOUT_MIN, 기본 75 */
+    timeoutMin: number;
+  };
+  /** 보고서 기본 실행 시각(REPORT_COLLECT_TIMES, 기본 09:00,17:00). 대시보드에서 바꾼 값이 우선한다. */
+  reportCollectTimes: string[];
 }
 
 export const config: AppConfig = {
@@ -249,6 +285,28 @@ export const config: AppConfig = {
   },
   eventsVerifyDates: bool(process.env.EVENTS_VERIFY_DATES, true),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY?.trim() || "",
+  notify: {
+    email: bool(process.env.NOTIFY_EMAIL, false),
+    gmailAddress: process.env.GMAIL_ADDRESS?.trim() || "",
+    googleClientId: process.env.GOOGLE_CLIENT_ID?.trim() || "",
+    googleClientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() || "",
+    imessage: bool(process.env.NOTIFY_IMESSAGE, false),
+    imessageTo: process.env.IMESSAGE_TO?.trim() || "",
+  },
+  dailyReport: (() => {
+    const dir = path.resolve(
+      process.env.DAILY_NEWS_DIR?.trim() || path.join(os.homedir(), ".orca", "bots", "it-news", "daily-news")
+    );
+    return {
+      dir,
+      collector: path.resolve(process.env.DAILY_REPORT_COLLECTOR?.trim() || path.join(dir, "collector", "daily-report.mjs")),
+      timeoutMin: Math.max(10, int(process.env.DAILY_REPORT_TIMEOUT_MIN, 75)),
+    };
+  })(),
+  reportCollectTimes: parseCollectTimes(
+    process.env.REPORT_COLLECT_TIMES?.trim() || "09:00,17:00",
+    "REPORT_COLLECT_TIMES"
+  ),
 };
 
 export const REPO_ROOT = repoRoot;
@@ -287,6 +345,7 @@ export function validateConfig(): { warnings: string[] } {
   config.stockKrCollectTimes.forEach((t) => parseCollectTime(t));
   config.stockUsCollectTimes.forEach((t) => parseCollectTime(t));
   config.stockPulseTimes.forEach((t) => parseCollectTime(t));
+  config.reportCollectTimes.forEach((t) => parseCollectTime(t));
 
   // 네이버 키는 이제 **팝업/전시 탭 전용**이다(webkr/blog 검색). 가격 수집이 쓰던 쇼핑 검색
   // API 는 2026-07-31 종료돼 그 경로 자체가 사라졌다.
@@ -301,7 +360,19 @@ export function validateConfig(): { warnings: string[] } {
     );
   }
 
-  // 메일·문자 알림(NOTIFY_EMAIL·GMAIL_ADDRESS·GOOGLE_CLIENT_*·NOTIFY_IMESSAGE·IMESSAGE_TO)은
-  // 2026-11-22 발송 기능 제거와 함께 없앴다. .env 에 값이 남아 있어도 읽지 않는다.
+  // 메일·문자는 2026-11-22 세 모델 통합 보고서 전용으로 되살렸다. 다른 탭 알림은 보내지 않는다.
+  // 클라이언트가 있어도 **아직 연결 안 된** 상태(리프레시 토큰 없음)는 런타임 상태라 여기서 판정하지
+  // 않는다 — 대시보드 배너와 발송 실패 시 iMessage 경고가 그 역할을 맡는다.
+  if (config.notify.email) {
+    if (!config.notify.gmailAddress) {
+      warnings.push("NOTIFY_EMAIL=true 이지만 GMAIL_ADDRESS 미설정 → 보고서 메일을 건너뜁니다.");
+    }
+    if (!config.notify.googleClientId || !config.notify.googleClientSecret) {
+      warnings.push(
+        "NOTIFY_EMAIL=true 이지만 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET 미설정 → 보고서 메일을 건너뜁니다. " +
+          "Google Cloud Console 에서 OAuth 클라이언트를 발급한 뒤 대시보드에서 계정을 연결하세요."
+      );
+    }
+  }
   return { warnings };
 }

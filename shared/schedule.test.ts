@@ -176,7 +176,7 @@ test("expandInterval — 잘못된 입력은 throw", () => {
 const NOW = d(2026, 10, 25, 12, 0);
 
 test("normalize — 시각 정규화(zero-pad·중복 제거·정렬), v1 배열은 매일로", () => {
-  assert.deepEqual(normalizeJobSchedule(["17:00", "8:00", "08:00"], "news", NOW), {
+  assert.deepEqual(normalizeJobSchedule(["17:00", "8:00", "08:00"], "events", NOW), {
     enabled: true,
     repeat: { kind: "daily" },
     times: ["08:00", "17:00"],
@@ -192,22 +192,22 @@ test("normalize — 격주 기준일이 비면 저장 시점 날짜로 채운다
   const r = normalizeJobSchedule({ enabled: true, repeat: { kind: "weekly", days: [1], intervalWeeks: 2 }, times: ["09:00"] }, "skills", NOW);
   assert.deepEqual(r.repeat, { kind: "weekly", days: [1], intervalWeeks: 2, anchorDate: "2026-10-25" });
   assert.throws(
-    () => normalizeJobSchedule({ enabled: true, repeat: { kind: "weekly", days: [1], intervalWeeks: 2, anchorDate: "2026-13-01" }, times: ["09:00"] }, "news", NOW),
+    () => normalizeJobSchedule({ enabled: true, repeat: { kind: "weekly", days: [1], intervalWeeks: 2, anchorDate: "2026-13-01" }, times: ["09:00"] }, "events", NOW),
     /기준 날짜/
   );
 });
 
 test("normalize — 매월 날짜는 정렬하되 말일(-1)은 맨 뒤", () => {
-  const r = normalizeJobSchedule({ enabled: true, repeat: { kind: "monthly", dates: [-1, 15, 1, 15] }, times: ["09:00"] }, "news", NOW);
+  const r = normalizeJobSchedule({ enabled: true, repeat: { kind: "monthly", dates: [-1, 15, 1, 15] }, times: ["09:00"] }, "events", NOW);
   assert.deepEqual(r.repeat, { kind: "monthly", dates: [1, 15, -1] });
 });
 
 test("normalize 거부 — 잘못된 HH:mm·빈 시각·maxTimes 초과", () => {
-  assert.throws(() => normalizeJobSchedule(["24:00"], "news", NOW), /뉴스: 시각 형식 오류: "24:00"/);
-  assert.throws(() => normalizeJobSchedule(["8시"], "news", NOW), /시각 형식 오류/);
-  assert.throws(() => normalizeJobSchedule([], "news", NOW), /최소 1개/);
+  assert.throws(() => normalizeJobSchedule(["24:00"], "events", NOW), /팝업·전시: 시각 형식 오류: "24:00"/);
+  assert.throws(() => normalizeJobSchedule(["8시"], "events", NOW), /시각 형식 오류/);
+  assert.throws(() => normalizeJobSchedule([], "events", NOW), /최소 1개/);
   const many = expandInterval("00:00", "23:30", 30); // 48개
-  assert.throws(() => normalizeJobSchedule(many, "news", NOW), /최대 24개/);
+  assert.throws(() => normalizeJobSchedule(many, "events", NOW), /최대 24개/);
   assert.equal(normalizeJobSchedule(many, "stockPulse", NOW).times.length, 48, "펄스는 48개까지");
   assert.throws(
     () => normalizeJobSchedule({ enabled: true, repeat: { kind: "weekly", days: [1], intervalWeeks: 1 }, times: ["09:00", "10:00"] }, "skills", NOW),
@@ -217,19 +217,19 @@ test("normalize 거부 — 잘못된 HH:mm·빈 시각·maxTimes 초과", () => 
 
 test("normalize 거부 — 빈 요일·요일 개수 초과·간격 초과·허용 안 된 반복", () => {
   const w = (days: number[], intervalWeeks = 1) => ({ enabled: true, repeat: { kind: "weekly", days, intervalWeeks }, times: ["09:00"] });
-  assert.throws(() => normalizeJobSchedule(w([]), "news", NOW), /요일을 1개 이상/);
-  assert.throws(() => normalizeJobSchedule(w([7]), "news", NOW), /요일 값 오류/);
+  assert.throws(() => normalizeJobSchedule(w([]), "events", NOW), /요일을 1개 이상/);
+  assert.throws(() => normalizeJobSchedule(w([7]), "events", NOW), /요일 값 오류/);
   assert.throws(() => normalizeJobSchedule(w([1, 2]), "lotto", NOW), /요일은 최대 1개/);
-  assert.throws(() => normalizeJobSchedule(w([1], 5), "news", NOW), /1~4/);
+  assert.throws(() => normalizeJobSchedule(w([1], 5), "events", NOW), /1~4/);
   assert.throws(() => normalizeJobSchedule(w([0], 2), "lotto", NOW), /매주 반복만/);
   assert.throws(() => normalizeJobSchedule(["09:00"], "skills", NOW), /'매일' 반복은 쓸 수 없습니다/);
   assert.throws(() => normalizeJobSchedule({ enabled: true, repeat: { kind: "monthly", dates: [1] }, times: ["10:00"] }, "lotto", NOW), /'매월'/);
-  assert.throws(() => normalizeJobSchedule({ enabled: true, repeat: { kind: "monthly", dates: [] }, times: ["10:00"] }, "news", NOW), /날짜를 1개 이상/);
-  assert.throws(() => normalizeJobSchedule({ enabled: true, repeat: { kind: "monthly", dates: [0] }, times: ["10:00"] }, "news", NOW), /날짜 값 오류/);
+  assert.throws(() => normalizeJobSchedule({ enabled: true, repeat: { kind: "monthly", dates: [] }, times: ["10:00"] }, "events", NOW), /날짜를 1개 이상/);
+  assert.throws(() => normalizeJobSchedule({ enabled: true, repeat: { kind: "monthly", dates: [0] }, times: ["10:00"] }, "events", NOW), /날짜 값 오류/);
   assert.throws(() => normalizeJobSchedule({ enabled: true, repeat: { kind: "monthly", dates: [1, 15] }, times: ["10:00"] }, "skills", NOW), /날짜는 최대 1개/);
-  assert.throws(() => normalizeJobSchedule({ enabled: "yes", repeat: { kind: "daily" }, times: ["10:00"] }, "news", NOW), /enabled/);
-  assert.throws(() => normalizeJobSchedule({ enabled: true, repeat: { kind: "hourly" }, times: ["10:00"] }, "news", NOW), /알 수 없는 반복/);
-  assert.throws(() => normalizeJobSchedule("08:00", "news", NOW), /형식이 올바르지/);
+  assert.throws(() => normalizeJobSchedule({ enabled: "yes", repeat: { kind: "daily" }, times: ["10:00"] }, "events", NOW), /enabled/);
+  assert.throws(() => normalizeJobSchedule({ enabled: true, repeat: { kind: "hourly" }, times: ["10:00"] }, "events", NOW), /알 수 없는 반복/);
+  assert.throws(() => normalizeJobSchedule("08:00", "events", NOW), /형식이 올바르지/);
 });
 
 test("normalize 거부 — 로또 토요일 20:00~24:00 금지 구간", () => {
@@ -250,7 +250,7 @@ test("scheduleBlackoutAt — 실행 시점 가드가 같은 구간 정의를 쓴
   assert.match(scheduleBlackoutAt("lotto", d(2026, 10, 31, 20, 0)) ?? "", /추첨/);
   assert.match(scheduleBlackoutAt("lotto", d(2026, 10, 31, 23, 59)) ?? "", /추첨/);
   assert.equal(scheduleBlackoutAt("lotto", d(2026, 11, 1, 0, 0)), null, "자정부터는 열린다");
-  assert.equal(scheduleBlackoutAt("news", d(2026, 10, 31, 21, 0)), null, "로또 외 잡엔 금지 구간이 없다");
+  assert.equal(scheduleBlackoutAt("events", d(2026, 10, 31, 21, 0)), null, "로또 외 잡엔 금지 구간이 없다");
   assert.ok(SCHEDULE_RULES.lotto.blackout?.length === 1);
 });
 

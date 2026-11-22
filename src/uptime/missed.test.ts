@@ -20,7 +20,7 @@
  * 스텁으로 덮으면 "내가 만든 가짜가 내 기대대로 동작한다"만 검증하게 된다. 그래서 이 기능의
  * 신뢰도를 실제로 결정하는 두 술어는 **진짜 구현을 통과시킨다**:
  *   · `isMarketClosed`  (1·2·3·6번) — 주말·공휴일 판정 자체가 검증 대상이다
- *   · `newsCoveredAt`   (4번)       — `source:"empty"` 를 커버로 치지 않는다는 계약
+ *   · `reportCoveredAt` (4번)       — 성공 기록이 없으면 커버로 치지 않는다는 계약
  * 나머지(스냅샷 유무·증시 원장·로또 상태)는 각자 자기 모듈의 테스트가 이미 못박고 있고,
  * 여기서 검증할 것은 "그 술어를 올바른 인자로 부르고 결과를 올바르게 해석하는가"다.
  */
@@ -32,29 +32,19 @@ import os from "node:os";
 import path from "node:path";
 import { countEvaluatedMissed, severityFor, type MissedSlot } from "../../shared/uptime.ts";
 import type { MissedScheduleInput, MissedSlotDeps } from "./missed.ts"; // 타입 전용 import 는 런타임에 지워진다
-import type { JobSchedule, ScheduleSettings } from "../../shared/types.ts";
+import type { JobSchedule } from "../../shared/types.ts";
 
 // ── ★ 반드시 대상 모듈 로드 **전에** ─────────────────────────────────────────
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "uptime-missed-"));
 process.env.DB_PATH = path.join(TMP_DIR, "price.db");
 
-// 4번 테스트용 뉴스 스냅샷을 미리 깔아 둔다. `getNewsSnapshot()` 은 첫 호출에서 디스크를
-// 읽어 메모리에 캐시하므로, 모듈 로드 전에 파일이 있어야 한다.
+// 4번 테스트용: 통합 보고서 출력 폴더를 비어 있는 임시 경로로 돌린다(실제 봇 홈의 latest.json 을 읽지 않게).
+// 시도 기록(daily-report-attempt.json)도 없으므로 진짜 reportCoveredAt 은 '커버 아님'이어야 한다.
+process.env.DAILY_NEWS_DIR = path.join(TMP_DIR, "daily-news");
 const REAL_TODAY = (() => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 })();
-fs.writeFileSync(
-  path.join(TMP_DIR, "news-latest.json"),
-  JSON.stringify({
-    date: REAL_TODAY,
-    // ★ 계약의 핵심: LLM 큐레이션이 실패하면 뉴스는 이 폴백을 오늘 날짜로 저장한다.
-    //   날짜만 보는 게이트는 이걸 '성공'으로 오인해 그날 뉴스를 통째로 포기했다.
-    source: "empty",
-    updatedAt: `${REAL_TODAY}T23:59:00.000Z`,
-    items: [],
-  })
-);
 
 const { describeMissedSlots, MAX_SCAN_DAYS } = await import("./missed.ts");
 
@@ -65,10 +55,9 @@ const SUNDAY = "2026-08-02";
 /** 평일 대조군. 2026-08-05 는 수요일이고 한국 공휴일이 아니다(광복절은 8/15). */
 const WEDNESDAY = "2026-08-05";
 
-const FULL_SCHEDULE: ScheduleSettings = {
+const FULL_SCHEDULE: MissedScheduleInput = {
   events: ["10:00"],
-  news: ["08:00"],
-  youtube: ["09:00"],
+  report: ["08:00"],
   stockKr: ["08:00"],
   stockUs: ["17:00"],
   // 펄스 시각은 다른 탭과 절대 겹치지 않게 둔다 — 5번 테스트가 "결과가 비어 있음"으로
@@ -97,8 +86,7 @@ function baseDeps(today: string, over: Partial<MissedSlotDeps> = {}): Partial<Mi
     pastTime: () => true,
     scheduledToday: (hhmm: string) => at(today, hhmm),
     eventsCoveredToday: () => false,
-    newsCoveredAt: () => false,
-    youtubeCoveredAt: () => false,
+    reportCoveredAt: () => false,
     hasStockSnapshotForSlot: () => false,
     slotHandled: () => false,
     lottoLastCycleAt: () => null,
@@ -126,9 +114,9 @@ test("일요일 공백에 한국장 08:00 이 들어 있어도 손실로 보고�
 
   assert.equal(only(r, "stockKr").length, 0, "일요일 한국장은 휴장이라 손실이 될 수 없다");
   assert.equal(only(r, "stockUs").length, 0, "미국장도 같다");
-  // 대조군: 같은 구간의 뉴스·유튜브·팝업은 정상적으로 손실로 잡혀야 한다.
+  // 대조군: 같은 구간의 통합 보고서·팝업은 정상적으로 손실로 잡혀야 한다.
   // (이게 없으면 "전부 걸러져서 0건"인 상태와 구분되지 않는다.)
-  assert.deepEqual(tabsOf(r), ["news", "youtube", "events"]);
+  assert.deepEqual(tabsOf(r), ["report", "events"]);
   assert.ok(r.every((m) => m.evaluated), "오늘 날짜 슬롯은 전부 검증된 상태여야 한다");
 });
 
@@ -181,34 +169,34 @@ test("평일 한국장 슬롯 스냅샷이 이미 있으면 손실이 아니다"
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// 4. 뉴스 커버 계약 — `source:"empty"` 는 커버가 아니다 (진짜 술어를 통과시킨다)
+// 4. 통합 보고서 커버 계약 — 성공 기록이 없으면 커버가 아니다 (진짜 술어를 통과시킨다)
 // ────────────────────────────────────────────────────────────────────────────
 
-test("뉴스: 빈 스냅샷(source=empty)은 커버로 치지 않는다", async () => {
-  // ★ `newsCoveredAt` 을 스텁하지 않는다. 이 계약이 깨지면(예: 날짜만 보는 게이트로 회귀)
-  //   LLM 이 실패한 날의 손실이 통째로 사라져 사후 보고가 "아무 문제 없었습니다"가 된다.
-  //   진짜 술어는 실제 '오늘'을 보므로, 이 테스트만 REAL_TODAY 로 돈다.
+test("통합 보고서: 성공한 실행 기록이 없으면 커버로 치지 않는다", async () => {
+  // ★ `reportCoveredAt` 을 스텁하지 않는다. 이 계약이 깨지면 보고서가 한 번도 돌지 않은 날의 손실이
+  //   통째로 사라져 사후 보고가 "아무 문제 없었습니다"가 된다.
   const r = await describeMissedSlots(
     at(REAL_TODAY, "07:00"),
     at(REAL_TODAY, "09:00"),
     baseDeps(REAL_TODAY, {
       schedule: () => ({ ...FULL_SCHEDULE, stockKr: [], stockUs: [] }),
-      newsCoveredAt: undefined, // 진짜 구현 사용
+      reportCoveredAt: undefined, // 진짜 구현 사용
     })
   );
 
-  const news = only(r, "news");
-  assert.equal(news.length, 1, "빈 스냅샷은 커버가 아니므로 08:00 뉴스는 손실이다");
-  assert.equal(news[0].evaluated, true);
+  const report = only(r, "report");
+  assert.equal(report.length, 1, "성공 기록이 없으므로 08:00 통합 보고서는 손실이다");
+  assert.equal(report[0].evaluated, true);
+  assert.equal(report[0].label, "뉴스·유튜브 통합 보고서");
 });
 
-test("뉴스: 커버된 슬롯은 목록에서 사라진다(= store 가 복구로 읽는 신호)", async () => {
+test("통합 보고서: 커버된 슬롯은 목록에서 사라진다(= store 가 복구로 읽는 신호)", async () => {
   const r = await describeMissedSlots(
     at(WEDNESDAY, "07:00"),
     at(WEDNESDAY, "09:00"),
-    baseDeps(WEDNESDAY, { newsCoveredAt: () => true })
+    baseDeps(WEDNESDAY, { reportCoveredAt: () => true })
   );
-  assert.equal(only(r, "news").length, 0);
+  assert.equal(only(r, "report").length, 0);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -273,8 +261,7 @@ test("자정을 넘는 공백: 어제 슬롯은 evaluated:false + 안내 문구,
       // 어제 23:00 과 오늘 08:00, 두 슬롯만 남긴다.
       schedule: () => ({
         events: [],
-        news: ["08:00", "23:00"],
-        youtube: [],
+        report: ["08:00", "23:00"],
         stockKr: [],
         stockUs: [],
         stockPulse: [],
@@ -308,8 +295,7 @@ test("자정을 넘는 공백: 어제 증시 슬롯도 원장이 닫혀 있으�
   const gapEnd = at(WEDNESDAY, "07:00");
   const schedule = () => ({
     events: [],
-    news: [],
-    youtube: [],
+    report: [],
     stockKr: ["08:00"],
     stockUs: [],
     stockPulse: [],
@@ -372,7 +358,7 @@ test("휴장 판정이 실패하면 휴장으로 접어 거짓 손실을 만들�
     })
   );
   assert.equal(only(r, "stockKr").length, 0, "모를 때는 조용한 편이 낫다(fail-open)");
-  assert.equal(only(r, "news").length, 1, "다른 탭 판정까지 죽으면 안 된다");
+  assert.equal(only(r, "report").length, 1, "다른 탭 판정까지 죽으면 안 된다");
 });
 
 test("시계가 뒤로 점프해 gapEnd 가 미래여도 아직 오지 않은 슬롯을 손실로 세지 않는다", async () => {
@@ -382,11 +368,11 @@ test("시계가 뒤로 점프해 gapEnd 가 미래여도 아직 오지 않은 �
     at(WEDNESDAY, "23:00"),
     baseDeps(WEDNESDAY, {
       schedule: () => ({ ...FULL_SCHEDULE, stockKr: [], stockUs: [] }),
-      // 아직 08:30 이다 → 09:00 유튜브·10:00 팝업은 아직 오지 않았다.
+      // 아직 08:30 이다 → 10:00 팝업은 아직 오지 않았다.
       pastTime: (hhmm) => hhmm < "08:30",
     })
   );
-  assert.deepEqual(tabsOf(r), ["news"]);
+  assert.deepEqual(tabsOf(r), ["report"]);
 });
 
 
@@ -403,36 +389,36 @@ const TUESDAY = "2026-08-04";
 test("v2: 꺼진 잡은 공백 안에 시각이 있어도 누락으로 세지 않는다", async () => {
   const schedule = (): MissedScheduleInput => ({
     ...FULL_SCHEDULE,
-    news: { enabled: false, repeat: { kind: "daily" }, times: ["08:00"] },
+    report: { enabled: false, repeat: { kind: "daily" }, times: ["08:00"] },
   });
   const r = await describeMissedSlots(
     at(WEDNESDAY, "07:00"),
     at(WEDNESDAY, "09:00"),
     baseDeps(WEDNESDAY, { schedule })
   );
-  assert.equal(only(r, "news").length, 0, "꺼짐은 '놓친 것'이 아니라 '돌 예정이 없던 것'이다");
+  assert.equal(only(r, "report").length, 0, "꺼짐은 '놓친 것'이 아니라 '돌 예정이 없던 것'이다");
   assert.equal(only(r, "stockKr").length, 1, "대조군: 켜진 잡은 그대로 잡힌다");
 });
 
 test("v2: 실행일이 아닌 날(월요일 전용 잡의 수요일)은 누락으로 세지 않는다", async () => {
-  const schedule = (): MissedScheduleInput => ({ news: weeklyJob([1], ["08:00"]) });
+  const schedule = (): MissedScheduleInput => ({ report: weeklyJob([1], ["08:00"]) });
   const wed = await describeMissedSlots(
     at(WEDNESDAY, "07:00"),
     at(WEDNESDAY, "09:00"),
     baseDeps(WEDNESDAY, { schedule })
   );
-  assert.equal(only(wed, "news").length, 0);
+  assert.equal(only(wed, "report").length, 0);
   const mon = await describeMissedSlots(at(MONDAY, "07:00"), at(MONDAY, "09:00"), baseDeps(MONDAY, { schedule }));
-  assert.equal(only(mon, "news").length, 1, "실행일(월요일)에는 손실로 잡힌다");
-  assert.equal(only(mon, "news")[0].evaluated, true);
+  assert.equal(only(mon, "report").length, 1, "실행일(월요일)에는 손실로 잡힌다");
+  assert.equal(only(mon, "report")[0].evaluated, true);
 });
 
 test("v2: 스케줄러가 날을 넘겨 보충하는 주간 슬롯은 지난 날짜여도 검증한다", async () => {
-  // 월요일 전용 뉴스. 월 07:00 ~ 화 09:00 잠들어 있었다 → 화요일은 비실행일이라 스케줄러가
+  // 월요일 전용 보고서. 월 07:00 ~ 화 09:00 잠들어 있었다 → 화요일은 비실행일이라 스케줄러가
   // 월요일 08:00 을 보충한다(계약 §1.3). '지난 날짜라 보충 대상이 아닙니다'는 거짓이 된다.
-  const schedule = (): MissedScheduleInput => ({ news: weeklyJob([1], ["08:00"]) });
+  const schedule = (): MissedScheduleInput => ({ report: weeklyJob([1], ["08:00"]) });
   const r = await describeMissedSlots(at(MONDAY, "07:00"), at(TUESDAY, "09:00"), baseDeps(TUESDAY, { schedule }));
-  const news = only(r, "news");
+  const news = only(r, "report");
   assert.equal(news.length, 1);
   assert.equal(news[0].date, MONDAY);
   assert.equal(news[0].evaluated, true, "보충 대상이므로 검증된 손실이다");
@@ -442,13 +428,13 @@ test("v2: 스케줄러가 날을 넘겨 보충하는 주간 슬롯은 지난 날
   const recovered = await describeMissedSlots(
     at(MONDAY, "07:00"),
     at(TUESDAY, "09:00"),
-    baseDeps(TUESDAY, { schedule, newsCoveredAt: (s) => s.getTime() === at(MONDAY, "08:00").getTime() })
+    baseDeps(TUESDAY, { schedule, reportCoveredAt: (s) => s.getTime() === at(MONDAY, "08:00").getTime() })
   );
-  assert.equal(only(recovered, "news").length, 0);
+  assert.equal(only(recovered, "report").length, 0);
 });
 
 test("v2: 매일 잡의 어제 슬롯은 여전히 '보충 대상 아님'(기존 동작)", async () => {
-  const schedule = (): MissedScheduleInput => ({ news: { enabled: true, repeat: { kind: "daily" }, times: ["23:00"] } });
+  const schedule = (): MissedScheduleInput => ({ report: { enabled: true, repeat: { kind: "daily" }, times: ["23:00"] } });
   const r = await describeMissedSlots(at(TUESDAY, "22:00"), at(WEDNESDAY, "09:00"), baseDeps(WEDNESDAY, { schedule }));
   assert.equal(r.length, 1);
   assert.equal(r[0].evaluated, false);

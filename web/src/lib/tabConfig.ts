@@ -19,7 +19,7 @@ import { mondayOf } from "../../../shared/schedule";
  */
 
 /** App.tsx 의 탭 id 와 같다. */
-export type ConfigTabId = "news" | "youtube" | "skills" | "stock" | "events" | "holdings" | "lotto";
+export type ConfigTabId = "report" | "news" | "youtube" | "skills" | "stock" | "events" | "holdings" | "lotto";
 
 export type SettingField =
   /** 숫자. 범위·단위는 응답의 numberRules[path] 가 정본이다. */
@@ -32,21 +32,44 @@ export interface TabConfigDef {
   label: string;
   /** 이 탭의 스케줄 잡(증시는 시장별 브리핑 2개). */
   jobs: ScheduleJobId[];
-  /** 운영 설정 필드(TabSettings 의 점 경로). (메일·문자 알림 스위치는 2026-11-22 제거) */
+  /** 운영 설정 필드(TabSettings 의 점 경로). (탭별 메일·문자 알림은 없다 — 발송은 통합 보고서 스위치만) */
   fields: SettingField[];
 }
 
 const TIMEOUT_HINT = "AI 실행 1회가 이보다 길면 중단합니다. 다음 실행부터 적용됩니다.";
 
+// 뉴스·유튜브는 각자 일정이 없다 — 세 모델 통합 보고서 일정(report)이 두 탭을 함께 갱신한다.
+const MODEL_TIMEOUT_HINT = "세 모델 각각의 뉴스·유튜브 조사 1회가 이보다 길면 그 모델을 건너뜁니다. 다음 실행부터 적용됩니다.";
+
 export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
+  report: {
+    label: "통합 보고서",
+    jobs: ["report"],
+    fields: [
+      {
+        kind: "boolean",
+        path: "report.notifyEmail",
+        label: "메일로 받기",
+        hint: "보고서 전문을 Gmail 로 보냅니다(.env 메일 설정·Google 계정 연결 필요). 새 항목이 없는 회차는 보내지 않습니다.",
+      },
+      {
+        kind: "boolean",
+        path: "report.notifyImessage",
+        label: "문자로 받기",
+        hint: "핵심 요약·모델별 상태·대시보드 링크를 iMessage 로 보냅니다(.env 수신자 필요).",
+      },
+      { kind: "number", path: "timeouts.newsMin", label: "뉴스 조사 최대 대기", hint: MODEL_TIMEOUT_HINT },
+      { kind: "number", path: "timeouts.youtubeMin", label: "유튜브 조사 최대 대기", hint: MODEL_TIMEOUT_HINT },
+    ],
+  },
   news: {
     label: "뉴스",
-    jobs: ["news"],
-    fields: [{ kind: "number", path: "timeouts.newsMin", label: "수집 최대 대기", hint: TIMEOUT_HINT }],
+    jobs: ["report"],
+    fields: [{ kind: "number", path: "timeouts.newsMin", label: "수집 최대 대기", hint: MODEL_TIMEOUT_HINT }],
   },
   youtube: {
     label: "유튜브 소식",
-    jobs: ["youtube"],
+    jobs: ["report"],
     fields: [
       { kind: "number", path: "youtube.freshDays", label: "최근 영상 기준", hint: "이 기간 안에 게시된 영상만 채택합니다." },
       {
@@ -55,7 +78,7 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
         label: "본영상 제외 기간",
         hint: "'본영상' 체크한 영상을 이 기간 동안 수집에서 뺍니다.",
       },
-      { kind: "number", path: "timeouts.youtubeMin", label: "수집 최대 대기", hint: TIMEOUT_HINT },
+      { kind: "number", path: "timeouts.youtubeMin", label: "수집 최대 대기", hint: MODEL_TIMEOUT_HINT },
     ],
   },
   skills: {
@@ -132,8 +155,8 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
  */
 export const MANUAL_RUN_LABEL: Partial<Record<ScheduleJobId, string>> = {
   events: "지금 갱신",
-  news: "지금 갱신",
-  youtube: "지금 갱신",
+  // 보고서 탭의 '지금 실행'과 뉴스·유튜브 탭의 '지금 갱신'은 같은 실행이다.
+  report: "지금 실행·지금 갱신",
   stockKr: "지금 갱신",
   stockUs: "지금 갱신",
   stockPulse: "지금 실행", // 보유 주식 탭

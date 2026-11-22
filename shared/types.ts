@@ -68,11 +68,15 @@ export interface JobSchedule {
   times: string[];
 }
 
-/** 스케줄을 갖는 잡. 증시는 시장별 브리핑 2개 + 시간당 펄스 1개다. */
+/**
+ * 스케줄을 갖는 잡. 증시는 시장별 브리핑 2개 + 시간당 펄스 1개다.
+ *
+ * 뉴스·유튜브는 2026-11-22 부터 각자 일정이 없다 — 세 모델 통합 보고서(report) 한 일정이 둘 다 수집해
+ * 두 탭을 함께 갱신한다. 예전 schedule.json 에 남은 news·youtube 값은 읽지 않지만 지우지도 않는다.
+ */
 export type ScheduleJobId =
   | "events"
-  | "news"
-  | "youtube"
+  | "report"
   | "stockKr"
   | "stockUs"
   | "stockPulse"
@@ -115,8 +119,15 @@ export interface ScheduleResponse {
 // 저장: data/tab-settings.json(바꾼 필드만 sparse override) 위에 .env(config.ts) 기본값을 병합.
 // 저장 즉시 반영된다(재시작 불필요). 비밀값·경로·포트는 여기 넣지 않는다.
 
-// 메일·문자 알림 채널 설정(notify)은 2026-11-22 발송 기능 제거와 함께 없앴다.
+// 탭별 메일·문자 알림(notify)은 2026-11-22 제거했다. 발송은 세 모델 통합 보고서(report)만 한다.
 export interface TabSettings {
+  /** 세 모델 통합 뉴스·유튜브 보고서. */
+  report: {
+    /** 보고서를 메일(Gmail API)로 받는다. 기본 꺼짐 — .env NOTIFY_EMAIL·계정 연결도 갖춰져야 실제로 나간다. */
+    notifyEmail: boolean;
+    /** 보고서 요약을 문자(iMessage)로 받는다. 기본 꺼짐 — .env NOTIFY_IMESSAGE·IMESSAGE_TO 도 필요. */
+    notifyImessage: boolean;
+  };
   youtube: {
     /** 최근 N일 이내 게시 영상만 채택(YOUTUBE_FRESH_DAYS). */
     freshDays: number;
