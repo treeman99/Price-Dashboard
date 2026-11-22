@@ -192,9 +192,19 @@ export async function resolveChannelId(query: string): Promise<string | null> {
 
 /** channelId 의 RSS 최근 업로드(최신 15개). 실패 시 빈 배열. */
 export async function fetchChannelUploads(channelId: string): Promise<RssVideo[]> {
+  return (await fetchChannelUploadsDetailed(channelId)).videos;
+}
+
+/**
+ * fetchChannelUploads 와 같지만 **실패와 '업로드 없음'을 구분**해 돌려준다. 일일 보고서는 원자료
+ * 출처별 성공·실패를 기록하고, 실패한 채널 구간을 성공으로 처리하지 않아야 한다.
+ */
+export async function fetchChannelUploadsDetailed(
+  channelId: string
+): Promise<{ ok: boolean; videos: RssVideo[] }> {
   const xml = await fetchText(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`);
-  if (!xml) return [];
-  return parseRssEntries(xml);
+  if (!xml) return { ok: false, videos: [] };
+  return { ok: true, videos: parseRssEntries(xml) };
 }
 
 /**

@@ -453,7 +453,11 @@ export const CHANNEL_DISCOVERY_TIMEOUT_MS = 240_000;
  * 서버가 그 이름을 channelId→RSS 로 실검증한다(채널명은 LLM, 최신 영상·게시일은 RSS 진실).
  * 실패하면 빈 맵(추천 채널만으로 진행).
  */
-async function discoverChannels(defs: YoutubeCategoryDef[]): Promise<Record<string, string[]>> {
+async function discoverChannels(
+  defs: YoutubeCategoryDef[],
+  model: string = getAgentModel(),
+  strictModel = false
+): Promise<Record<string, string[]>> {
   if (!defs.length) return {};
   const catList = defs
     .map(
@@ -478,12 +482,13 @@ ${catList}
         permissionMode: "bypassPermissions",
         settingSources: [],
         maxTurns: 1,
-        model: getAgentModel(),
+        model,
         systemPrompt:
           "너는 유튜브 채널 생태계에 정통한 전문가다. 실존하는 채널만 정확히 나열하고 지정된 JSON 하나만 출력한다.",
       },
       CHANNEL_DISCOVERY_TIMEOUT_MS, // 근거는 상수 선언부 주석
-      "유튜브 채널 발굴"
+      strictModel ? `유튜브 채널 발굴(${model})` : "유튜브 채널 발굴",
+      { strictModel }
     );
     const parsed = extractJson(text) as any;
     const ch = parsed?.channels ?? {};
@@ -509,8 +514,28 @@ ${catList}
  * 추천/발굴 채널의 최근 업로드는 서버가 RSS 로 직접 확보(harvestFreshUploads)해 큐레이션에 시딩하고,
  * LLM 이 빠뜨린 것은 후단에서 폴백 병합한다 — 검색이 못 찾는 '채널 최신 업로드'를 확실히 노출하기 위함.
  */
-export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
+export interface CurateYoutubeOptions {
+  /** 실행 모델. 미지정이면 대시보드에서 고른 모델(getAgentModel). */
+  model?: string;
+  /** true 면 지정 모델만 쓰고(대체 금지) 실패를 빈 스냅샷으로 삼키지 않고 던진다. */
+  strict?: boolean;
+  /**
+   * 호출부가 미리 받은 **추천 채널** RSS 신선 업로드(카테고리 key → 영상). 주면 추천 채널은 다시
+   * 받지 않고 이것을 시드로 쓴다 — 일일 보고서가 세 모델에 같은 공용 원자료를 주려고 쓴다.
+   * 모델별 채널 발굴분은 각 모델의 독립 조사라 여기서 받지 않고 실행마다 따로 받는다.
+   */
+  sharedSeeds?: Map<string, RssVideo[]>;
+  /**
+   * false 면 LLM 이 고르지 않은 시드를 결과에 덧붙이지 않는다(기본 true — 대시보드는 '창 안 영상은
+   * 무조건 노출'). 보고서는 '그 모델이 실제로 고른 항목'만 모델 결과로 집계해야 해서 끈다.
+   */
+  seedFallback?: boolean;
+}
+
+export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {}): Promise<YoutubeSnapshot> {
   const today = date;
+  const model = opts.model ?? getAgentModel();
+  const strict = opts.strict === true;
   // 실행 시작 시점에 한 번 읽는다(대시보드 저장 즉시 다음 수집부터 반영 + 한 실행 안에서는 일관).
   const freshDays = getTabSettings().youtube.freshDays;
   const cutoff = localDateDaysAgo(freshDays);
@@ -545,11 +570,17 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
   try {
     // ── RSS 하베스트: 추천 채널 + 발굴 채널의 창 안 업로드를 '확정 신선 후보'로 서버가 직접 확보 ──
     // (검색/페이지 파싱이 못 찾는 '채널 최신 업로드'를 RSS 로 확보 → 프롬프트 시딩 + 폴백 병합)
-    const discovered = await discoverChannels(promptDefs);
+    const discovered = await discoverChannels(promptDefs, model, strict);
     const seedByCat = new Map<string, RssVideo[]>();
     for (const meta of promptDefs) {
-      const queries = [...(meta.recommendedChannels ?? []), ...(discovered[meta.key] ?? [])];
-      const fresh = queries.length ? await harvestFreshUploads(queries, cutoff, today) : [];
+      const shared = opts.sharedSeeds?.get(meta.key);
+      const queries = shared
+        ? [...(discovered[meta.key] ?? [])]
+        : [...(meta.recommendedChannels ?? []), ...(discovered[meta.key] ?? [])];
+      const harvested = queries.length ? await harvestFreshUploads(queries, cutoff, today) : [];
+      const fresh = shared
+        ? [...shared, ...harvested.filter((v) => !shared.some((x) => x.videoId === v.videoId))]
+        : harvested;
       // 차단 채널/본영상/제외 영상은 시드 단계에서 미리 제외(모순된 시딩 방지). 나머지 필터는 후단 파이프라인에서.
       // 차단은 이 카테고리(meta.key)에 적용되는 것만(전역 + 이 카테고리) — 다른 카테고리 차단은 여기서 무시.
       // 제외 영상을 시드로 다시 주입하면 "반드시 채택하라"(시드)와 "다시 넣지 마라"(제외)가 충돌해
@@ -573,7 +604,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
-        model: getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
+        model, // 대시보드에서 고른 수집·큐레이션 공통 모델(보고서는 모델별 지정)
         // 카테고리당 갈래별 검색(최소 4회+)을 보장하되 과도한 탐색(=느린 수집)을 막기 위해 상한을 둔다.
         maxTurns: 120,
         systemPrompt:
@@ -588,9 +619,13 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
       // (2026-07-26 05:18Z, 도구 86회). 그런 런은 더 기다려도 건질 게 없으므로 20분에서 끊고
       // catch-up 에 넘기는 편이 낫다. 앞단의 채널 발굴·RSS 하베스트까지 합쳐도 20분이면 넉넉하다.
       tabTimeoutMs("youtubeMin"),
-      "유튜브 큐레이션"
+      opts.model ? `유튜브 큐레이션(${opts.model})` : "유튜브 큐레이션",
+      { strictModel: strict }
     );
-    if (!finalText) return emptySnapshot(today, "유튜브 큐레이션 결과가 비어 있습니다.");
+    if (!finalText) {
+      if (strict) throw new Error("유튜브 큐레이션 결과가 비어 있습니다.");
+      return emptySnapshot(today, "유튜브 큐레이션 결과가 비어 있습니다.");
+    }
 
     const p = extractJson(finalText) as any;
     const catsIn = p?.categories ?? {};
@@ -625,7 +660,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
         // 확정 신선 후보(RSS) 중 LLM이 빠뜨린 것을 폴백 병합 → '창 안 영상은 무조건 노출'.
         // 한 채널이 카테고리를 도배하지 않도록 채널당 3개로 제한.
         const perChannel = new Map<string, number>();
-        const seedVids: YoutubeVideo[] = (seedByCat.get(meta.key) ?? [])
+        const seedVids: YoutubeVideo[] = (opts.seedFallback === false ? [] : seedByCat.get(meta.key) ?? [])
           .filter((v) => !llmUsedIds.has(v.videoId) && !seen.has(v.videoId))
           .filter((v) => {
             const n = perChannel.get(v.channel) ?? 0;
@@ -678,6 +713,7 @@ export async function curateYoutube(date: string): Promise<YoutubeSnapshot> {
     return snapshot;
   } catch (e) {
     log.warn(`유튜브 큐레이션 실패: ${(e as Error).message}`);
+    if (strict) throw e;
     return emptySnapshot(today, `유튜브 큐레이션 실패: ${(e as Error).message}`);
   }
 }

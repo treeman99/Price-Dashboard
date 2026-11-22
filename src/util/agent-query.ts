@@ -1,6 +1,8 @@
 import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "./log.ts";
 import { isCodexModel, isCodexUnavailableError, runCodexQueryText } from "./codex-query.ts";
+import { isAntigravityModel, runAntigravityQueryText } from "./antigravity-query.ts";
+import { briefToolInput, emitQueryTrace } from "./agent-trace.ts";
 import {
   createDeadline,
   formatDeadlineBudget,
@@ -50,6 +52,12 @@ export interface AgentQueryDeps {
     timeoutMs: number,
     label: string
   ) => Promise<string>;
+  runAntigravity: (
+    prompt: string,
+    options: Omit<Options, "abortController">,
+    timeoutMs: number,
+    label: string
+  ) => Promise<string>;
   recordFallback: (fromModel: string, reason: string) => boolean;
   clearFallback: () => boolean;
   sdkQuery: (params: { prompt: string; options: Options }) => AsyncIterable<SDKMessage>;
@@ -58,6 +66,7 @@ export interface AgentQueryDeps {
 const defaultDeps: AgentQueryDeps = {
   runCodex: runCodexQueryText,
   runClaude: runClaudeAgentQueryText,
+  runAntigravity: runAntigravityQueryText,
   sdkQuery: query,
   recordFallback: recordCodexFallback,
   clearFallback: clearCodexFallback,
@@ -135,12 +144,26 @@ export function isFailureSignal(text: string): boolean {
  * 벽시계 기준이던 시절, 덮개를 닫아 둔 하룻밤 사이 전 탭이 0턴 상태로 동시에 타임아웃했다
  * (2026-08-02). deadline.ts 참고.
  */
+export interface AgentQueryExtra {
+  /**
+   * true 면 **요청 모델만** 쓴다: Codex 를 못 써도 대체 모델(Opus)로 넘어가지 않고 오류를 그대로
+   * 던지며, model.json 의 대체 이력도 건드리지 않는다. 일일 보고서처럼 "지정 모델을 다른 모델로
+   * 바꾸지 않는다"가 계약인 호출부가 쓴다. 대시보드의 평소 수집은 기본값(false)으로 기존 대체를 유지한다.
+   */
+  strictModel?: boolean;
+}
+
 export async function runAgentQueryText(
   prompt: string,
   options: Omit<Options, "abortController">,
   timeoutMs: number,
-  label = "agent"
+  label = "agent",
+  extra: AgentQueryExtra = {}
 ): Promise<string> {
+  if (isAntigravityModel(options.model)) {
+    // Gemini 는 대체 경로가 없다 — 실패는 그대로 호출부의 실패다.
+    return validateFinalText(await deps.runAntigravity(prompt, options, timeoutMs, label), label);
+  }
   if (!isCodexModel(options.model)) {
     return deps.runClaude(prompt, options, timeoutMs, label);
   }
@@ -152,13 +175,13 @@ export async function runAgentQueryText(
     // 가용성 문제(로그인 초기화·CLI 없음·한도·시간 초과)만 대체로 넘긴다.
     // 나머지(프롬프트 오류·파싱 실패 등)는 진짜 실패라 그대로 올린다 — 그것까지 대체로 넘기면
     // Codex 경로의 버그가 Opus 실행에 묻혀 영원히 드러나지 않는다.
-    if (!isCodexUnavailableError(e)) throw e;
+    if (extra.strictModel || !isCodexUnavailableError(e)) throw e;
     return runOnFallbackModel(prompt, options, label, e);
   }
   // 여기까지 왔다 = Codex 가 살아서 답했다. 대체 상태 해제는 오직 이 성공에만 걸어 둔다.
   // (대체 모델이 성공한 것으로는 풀지 않는다. Codex 는 여전히 죽어 있고, 화면의 '임시 대체'
   //  배지는 그 사실을 설명하는 유일한 근거다.)
-  deps.clearFallback();
+  if (!extra.strictModel) deps.clearFallback();
   return validateFinalText(finalText, label);
 }
 
@@ -233,6 +256,20 @@ async function runClaudeAgentQueryText(
   // "일을 오래 한 것"과 "맥이 자느라 시계만 흐른 것"을 구분할 수 있다.
   let turns = 0;
   let toolCalls = 0;
+  let initModel: string | null = null;
+  const traceTools: { name: string; input: string }[] = [];
+  const startedAt = Date.now();
+  const trace = (ok: boolean, error?: string) =>
+    emitQueryTrace({
+      runner: "claude",
+      requestedModel: String(options.model ?? ""),
+      actualModel: initModel,
+      label,
+      tools: traceTools,
+      durationMs: Date.now() - startedAt,
+      ok,
+      ...(error ? { error: preview(error, 300) } : {}),
+    });
   let nonSuccessSubtype: string | null = null;
   // is_error:true 로 끝난 success 결과의 본문(= 오류 문구). 아래 catch 의 '결과 살리기' 분기가
   // 이것을 결과로 착각하지 않도록 finalText 와 따로 든다.
@@ -246,13 +283,23 @@ async function runClaudeAgentQueryText(
     5 * 60 * 1000
   );
 
+  // 근거 수집(agent-trace): 성공·실패 모두 한 번씩 남긴다. 문맥 밖이면 아무 일도 하지 않는다.
+  try {
   try {
     for await (const msg of q) {
+      if (msg.type === "system" && (msg as { subtype?: string }).subtype === "init") {
+        const m = (msg as { model?: unknown }).model;
+        if (typeof m === "string") initModel = m;
+      }
       if (msg.type === "assistant") {
         turns += 1;
         const content = (msg as { message?: { content?: unknown } }).message?.content;
         if (Array.isArray(content)) {
-          toolCalls += content.filter((c) => (c as { type?: string })?.type === "tool_use").length;
+          for (const c of content as { type?: string; name?: string; input?: unknown }[]) {
+            if (c?.type !== "tool_use") continue;
+            toolCalls += 1;
+            traceTools.push({ name: String(c.name ?? "tool"), input: briefToolInput(c.input) });
+          }
         }
       }
       if (msg.type === "result") {
@@ -319,7 +366,13 @@ async function runClaudeAgentQueryText(
   // 통과시키면 호출부는 "성공했는데 JSON 이 없네" 로 오해해 빈 결과를 정상 저장한다 — 조용한
   // 실패라 며칠간 아무도 모른다. 여기서 실패로 승격시켜 호출부의 저하 경로(빈 스냅샷 + notes)를
   // 타게 한다.
-  return validateFinalText(finalText, label);
+  const validated = validateFinalText(finalText, label);
+  trace(true);
+  return validated;
+  } catch (e) {
+    trace(false, (e as Error).message);
+    throw e;
+  }
 }
 
 /**

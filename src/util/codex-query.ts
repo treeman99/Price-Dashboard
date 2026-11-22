@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { log } from "./log.ts";
+import { briefToolInput, emitQueryTrace } from "./agent-trace.ts";
 import {
   createDeadline,
   formatDeadlineBudget,
@@ -74,6 +75,8 @@ export interface CodexUsage {
 
 export interface ParsedCodexOutput {
   finalText: string;
+  /** web_search 항목의 검색어(근거 기록용, 최대 60개). */
+  searchQueries?: string[];
   usage: CodexUsage | null;
   webSearches: number;
   commands: number;
@@ -312,6 +315,7 @@ export function parseCodexJsonl(text: string): ParsedCodexOutput {
   let webSearches = 0;
   let commands = 0;
   const errors: string[] = [];
+  const searchQueries: string[] = [];
 
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -333,6 +337,8 @@ export function parseCodexJsonl(text: string): ParsedCodexOutput {
         finalText = item.text;
       } else if (item?.type === "web_search") {
         webSearches += 1;
+        const q = item.query ?? item.action?.query ?? item.action ?? null;
+        if (q != null && searchQueries.length < 60) searchQueries.push(briefToolInput(q, 200));
       } else if (item?.type === "command_execution") {
         commands += 1;
       }
@@ -346,7 +352,7 @@ export function parseCodexJsonl(text: string): ParsedCodexOutput {
     }
   }
 
-  return { finalText, usage, webSearches, commands, errors };
+  return { finalText, usage, webSearches, commands, errors, searchQueries };
 }
 
 export interface RunCapturedOptions {
@@ -693,6 +699,20 @@ export async function runCodexQueryText(
   const heartbeat = setInterval(() => {
     log.info(`${label}: Codex 진행 중 — ${formatDeadlineBudget(timeoutMs, deadline)}`);
   }, 5 * 60_000);
+  const startedAt = Date.now();
+  let traceTools: { name: string; input: string }[] = [];
+  const trace = (ok: boolean, error?: string) =>
+    emitQueryTrace({
+      runner: "codex",
+      requestedModel: model,
+      // Codex CLI 는 --model 로 고정 실행하고 모르는 모델이면 400 으로 실패한다(대체 없음).
+      actualModel: ok ? model : null,
+      label,
+      tools: traceTools,
+      durationMs: Date.now() - startedAt,
+      ok,
+      ...(error ? { error: errorPreview(error, 300) } : {}),
+    });
 
   try {
     log.info(`${label}: Codex 시작 — ${model}, 추론 medium, 웹검색 ${allowWebSearch ? "live" : "끔"}`);
@@ -703,6 +723,7 @@ export async function runCodexQueryText(
       { label, deadline }
     );
     const parsed = parseCodexJsonl(result.stdout);
+    traceTools = (parsed.searchQueries ?? []).map((q) => ({ name: "web_search", input: q }));
     // 한도 판단은 **실패한 실행의 원문**에만 적용한다(정규식 주석 참고). 오류 이벤트 → stderr →
     // stdout 순으로 근거를 모은다: 앞쪽일수록 오류 전용 채널이라 오탐이 적다.
     const failureText = [parsed.errors.join("\n"), result.stderr, result.stdout]
@@ -733,12 +754,16 @@ export async function runCodexQueryText(
       ? `입력 ${parsed.usage.inputTokens}, 캐시 ${parsed.usage.cachedInputTokens}, ` +
         `출력 ${parsed.usage.outputTokens}, 추론 ${parsed.usage.reasoningOutputTokens} 토큰`
       : "토큰 사용량 미제공";
+    trace(true);
     log.info(
       `${label}: Codex 완료 — 유효 ${Math.round(deadline.elapsedMs() / 1000)}초` +
         `(벽시계 ${Math.round(deadline.wallElapsedMs() / 1000)}초), ` +
         `웹검색 ${parsed.webSearches}회, 명령 ${parsed.commands}회, ${usage}, 결과 ${parsed.finalText.length}자`
     );
     return parsed.finalText;
+  } catch (e) {
+    trace(false, (e as Error).message);
+    throw e;
   } finally {
     clearInterval(heartbeat);
     deadline.dispose();
