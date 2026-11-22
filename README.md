@@ -168,17 +168,21 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | `ANTHROPIC_API_KEY` | 선택 | Opus 5.5 큐레이션용. Codex 선택 시에는 불필요 |
 | `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`(**대시보드 설정에서도 변경 가능, 대시보드 값 우선**). 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
-| `EVENTS_COLLECT_TIME` · `NEWS_COLLECT_TIMES` · `YOUTUBE_COLLECT_TIMES` · `STOCK_KR/US_COLLECT_TIMES` · `STOCK_PULSE_TIMES` | 기본 10:00 · 08:00,17:00 · 08:30 · 08:00 / 18:00 · 장중 매시 | 탭별 자동 수집 시각(로컬). **대시보드 설정에서도 변경 가능(대시보드 값 우선)** — 화면에서는 요일·격주·매월까지 |
+| `EVENTS_COLLECT_TIME` · `REPORT_COLLECT_TIMES` · `STOCK_KR/US_COLLECT_TIMES` · `STOCK_PULSE_TIMES` | 기본 10:00 · 09:00,17:00 · 08:00 / 18:00 · 장중 매시 | 탭별 자동 수집 시각(로컬). `REPORT_COLLECT_TIMES` 는 뉴스·유튜브를 함께 갱신하는 세 모델 통합 보고서 일정. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** — 화면에서는 요일·격주·매월까지 |
+| `NOTIFY_EMAIL` · `GMAIL_ADDRESS` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `NOTIFY_IMESSAGE` · `IMESSAGE_TO` | 선택 | 통합 보고서 메일(Gmail API OAuth)·문자(iMessage) 전역 스위치·자격. 실제 발송은 대시보드 '보고서' 탭의 '메일로 받기'·'문자로 받기'(기본 꺼짐)와 AND |
+| `DAILY_NEWS_DIR` · `DAILY_REPORT_COLLECTOR` · `DAILY_REPORT_TIMEOUT_MIN` | 기본 봇 홈 · `<DIR>/collector/daily-report.mjs` · 75 | 통합 보고서 수집기 위치·출력 폴더·1회 실행 상한(분) |
 | `YOUTUBE_FRESH_DAYS` / `YOUTUBE_WATCHED_EXCLUDE_DAYS` | 기본 7(권장 3) / 7 | 유튜브 신선도(최근 N일 게시만) / '본영상' 제외 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `EVENTS_NEW_GAP_DAYS` / `EVENTS_NEW_SHOW_DAYS` | 기본 7 / 3 | 팝업·전시 '신규' 판정 공백 / 배지 유지 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `STOCK_PULSE_THRESHOLD` · `_PER_SYMBOL_CAP` · `_DAILY_CAP` · `_MACRO_CAP` · `_DEDUP_HOURS` · `_QUIET_START` · `_QUIET_END` | 기본 important · 3 · 10 · 2 · 24 · 23 · 7 | 펄스 판정 문턱·하루 상한·중복 억제·조용 시간(판정은 원장에 기록만 하고 발송하지 않는다). **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `HISTORY_RETENTION_DAYS` | 기본 90 | 증시 시계열·펄스 원장 보존 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `NEWS_TIMEOUT_MS` · `YOUTUBE_TIMEOUT_MS` · `EVENTS_TIMEOUT_MS` · `STOCK_BRIEF_TIMEOUT_MS` · `STOCK_PULSE_TIMEOUT_MS` · `SKILLS_SUMMARY_TIMEOUT_MS` · `SKILLS_SUMMARY_BUDGET_MS` | 기본 20 · 20 · 20 · 15 · 10 · 5 · 20분 | 탭별 LLM 1회 최대 대기(ms). **대시보드 설정에서도 변경 가능(대시보드 값 우선, 분 단위, 다음 실행부터)** |
 
-> **메일·문자 알림 제거(2026-11-22)**: 이메일(Gmail API)·iMessage 발송 기능과 `NOTIFY_EMAIL` · `GMAIL_ADDRESS` ·
-> `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `NOTIFY_IMESSAGE` · `IMESSAGE_TO` 설정은 없어졌다(.env 에 남아 있어도 읽지 않는다).
-> 뉴스·유튜브 요약은 Orca IT News 봇의 일일 보고서(매일 09:00·17:00)로 받는다 — 수집기는 `src/report/`,
-> 실행은 `npm run daily:report`(운영 배포는 `npm run daily:report:bundle`, 운영 가이드는 봇 홈의 `daily-news-runbook.md`).
+> **세 모델 통합 뉴스·유튜브 보고서(2026-11-22)**: 뉴스·유튜브 탭은 각자 단일 모델로 수집하지 않는다. price 스케줄러가
+> '통합 보고서' 일정(기본 09:00·17:00, 대시보드에서 변경)마다 Orca IT News 봇 홈에 배포된 수집기를 직접 실행해
+> 세 모델(Claude Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon)로 뉴스·유튜브를 함께 취합하고, 통합 결과로 두 탭을 갱신한다
+> (스킵·본영상·차단 그대로, 전부 실패하면 기존 목록 유지). 실행 기록·모델별 상태·본문은 '보고서' 탭에서 보고,
+> 켜 두면 메일·문자로도 받는다(보고서만 — 다른 탭 알림은 없다). 수집기 코드는 `src/report/`, 직접 실행은
+> `npm run daily:report`, 운영 배포는 `npm run daily:report:bundle`, 운영 가이드는 봇 홈의 `daily-news-runbook.md`.
 >
 > **대시보드 값 우선**: 위 표에서 '대시보드 설정에서도 변경 가능' 항목은 탭별 '자동 수집·설정' 버튼
 > 또는 헤더 '설정'에서 바꿀 수 있고, 저장한 값(`data/tab-settings.json`, 스케줄은 `data/schedule.json`)이
@@ -186,7 +190,8 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 > 나머지는 계속 `.env` 를 따른다 — '기본값으로 되돌리기'는 그 항목을 다시 `.env` 로 돌린다.
 > 비밀값·경로·포트는 `.env` 에서만 바꾼다.
 >
-> **AI 에이전트 선택**: 대시보드 상단에서 `Codex 6.1 Sol`(기본) · `Opus 5.5` 중 고른다.
+> **AI 에이전트 선택**: 대시보드 상단에서 `Codex 6.1 Sol`(기본) · `Opus 5.5` 중 고른다(팝업·전시·증시·스킬 랭킹 등에 적용 —
+> 뉴스·유튜브는 이 선택과 무관하게 세 모델 통합 보고서가 고정 모델로 수집한다).
 > Codex는 `codex login status`가 `Logged in using ChatGPT`일 때만 실행하며,
 > `OPENAI_API_KEY`/`CODEX_API_KEY`를 전달하거나 API 종량 과금으로 자동 전환하지 않는다.
 >
