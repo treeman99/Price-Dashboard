@@ -224,7 +224,7 @@ export default function App() {
   const bannerVisible = bannerEvent != null && (historyOpen || ackedDay !== localDay());
 
   /**
-   * [확인했어요] — 서버에 `ackedAt` 을 남기고 아직 안 보낸 알림을 취소한다.
+   * [확인했어요] — 서버에 `ackedAt` 을 남긴다(가동 중단 문자 알림은 2026-11-22 제거).
    *
    * 서버 응답이 갱신된 `view` 를 함께 주므로 배지 숫자는 왕복 없이 즉시 맞는다.
    *
@@ -345,7 +345,7 @@ export default function App() {
             />
             {/* 수집·큐레이션 AI 모델 선택은 특정 탭이 아닌 전역 설정 → 헤더에 배치 */}
             <ModelControl />
-            {/* 전 탭 자동 수집 스케줄·운영 설정·알림 한눈에 보기(+ 탭에 속하지 않는 가동 중단 알림) */}
+            {/* 전 탭 자동 수집 스케줄·운영 설정 한눈에 보기 */}
             <SettingsOverview tabs={TABS} />
             {serviceInstalled && (
               <Button

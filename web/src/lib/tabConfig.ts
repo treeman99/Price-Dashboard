@@ -25,7 +25,7 @@ export type SettingField =
   /** 숫자. 범위·단위는 응답의 numberRules[path] 가 정본이다. */
   | { kind: "number"; path: string; label: string; hint?: string }
   | { kind: "boolean"; path: string; label: string; hint?: string }
-  /** 펄스 알림 문턱(긴급/중요/참고). */
+  /** 펄스 판정 문턱(긴급/중요/참고). */
   | { kind: "severity"; path: string; label: string; hint?: string };
 
 export interface TabConfigDef {
@@ -108,13 +108,13 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
     label: "보유 주식",
     jobs: ["stockPulse"],
     fields: [
-      { kind: "number", path: "stockPulse.perSymbolCap", label: "종목당 하루 상한", hint: "종목 1개당 하루 최대 알림 건수." },
-      { kind: "number", path: "stockPulse.dailyCap", label: "하루 전체 상한", hint: "종목 알림을 합친 하루 최대 건수." },
+      { kind: "number", path: "stockPulse.perSymbolCap", label: "종목당 하루 상한", hint: "종목 1개당 하루 최대 '문턱 이상' 판정 건수(넘으면 억제로 기록)." },
+      { kind: "number", path: "stockPulse.dailyCap", label: "하루 전체 상한", hint: "종목 판정을 합친 하루 최대 건수." },
       { kind: "number", path: "stockPulse.macroCap", label: "거시·섹터 상한", hint: "종목 상한과 별도로 하루 이만큼." },
-      { kind: "number", path: "stockPulse.dedupHours", label: "중복 차단 시간", hint: "같은 이슈는 이 시간 동안 다시 보내지 않습니다(강도가 오르면 예외)." },
-      { kind: "severity", path: "stockPulse.threshold", label: "알림 문턱", hint: "이 강도 미만은 기록만 남기고 보내지 않습니다." },
-      { kind: "number", path: "stockPulse.quietStartHour", label: "조용 시간 시작", hint: "이 시각부터는 긴급만 즉시 보냅니다." },
-      { kind: "number", path: "stockPulse.quietEndHour", label: "조용 시간 끝", hint: "보류한 알림을 이 시각에 묶어서 보냅니다." },
+      { kind: "number", path: "stockPulse.dedupHours", label: "중복 차단 시간", hint: "같은 이슈는 이 시간 동안 다시 올리지 않습니다(강도가 오르면 예외)." },
+      { kind: "severity", path: "stockPulse.threshold", label: "판정 문턱", hint: "이 강도 이상만 '문턱 이상' 판정으로 기록합니다(문자 발송은 제거됨)." },
+      { kind: "number", path: "stockPulse.quietStartHour", label: "조용 시간 시작", hint: "예전 야간 문자 보류 구간입니다. 문자 발송이 제거되어 지금은 판정 기록에 영향이 없습니다." },
+      { kind: "number", path: "stockPulse.quietEndHour", label: "조용 시간 끝", hint: "예전 야간 문자 보류 구간의 끝입니다(지금은 판정 기록에 영향 없음)." },
       { kind: "number", path: "timeouts.stockPulseMin", label: "취합 최대 대기", hint: TIMEOUT_HINT },
     ],
   },

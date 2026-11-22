@@ -57,7 +57,7 @@ export function SettingsOverview({ tabs }: { tabs: OverviewTab[] }) {
         <button
           type="button"
           className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-foreground/15 px-2.5 text-[13px] text-muted-foreground transition-colors hover:border-foreground/40 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          title="전 탭 자동 수집·알림 설정"
+          title="전 탭 자동 수집·운영 설정"
         >
           <SlidersHorizontal className="h-3.5 w-3.5" />
           <span className="font-medium text-foreground">설정</span>
@@ -97,7 +97,7 @@ export function SettingsOverview({ tabs }: { tabs: OverviewTab[] }) {
             <DialogHeader className="pr-6">
               <DialogTitle>설정</DialogTitle>
               <DialogDescription className="text-sm text-muted-foreground">
-                탭마다 언제 자동으로 돌고 무엇을 알리는지 한눈에 봅니다. 편집은 각 탭 툴바의 &lsquo;자동 수집&rsquo;과 같습니다.
+                탭마다 언제 자동으로 도는지 한눈에 봅니다. 편집은 각 탭 툴바의 &lsquo;자동 수집&rsquo;과 같습니다.
               </DialogDescription>
             </DialogHeader>
 

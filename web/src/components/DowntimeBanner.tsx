@@ -194,7 +194,7 @@ export function DowntimeBanner({ event, onAck, acking, onOpenHistory }: Downtime
             onClick={onAck}
             disabled={acking}
             className="bg-card"
-            title="이 기록을 확인 처리합니다. 아직 안 보낸 알림도 함께 취소됩니다."
+            title="이 기록을 확인 처리합니다."
           >
             {acking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
             확인했어요

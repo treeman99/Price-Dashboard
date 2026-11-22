@@ -35,7 +35,7 @@ interface Seed {
 }
 
 /**
- * 탭 하나의 '자동 수집·설정' 편집 본문(스케줄 잡들 + 운영 설정 + 알림) + 저장/취소.
+ * 탭 하나의 '자동 수집·설정' 편집 본문(스케줄 잡들 + 운영 설정) + 저장/취소.
  * 탭 툴바 다이얼로그와 상단 '설정' 전체 보기의 편집 화면이 **같은 이 컴포넌트**를 쓴다.
  */
 export function TabConfigPanel({
@@ -271,7 +271,7 @@ export function TabConfigPanel({
         )}
       </section>
 
-      {/* ── 운영 설정 + 알림 ── */}
+      {/* ── 운영 설정 ── */}
       {hasSettings && (
         <section className="border-t-2 border-foreground pt-3">
           <div className="flex items-center gap-2">
