@@ -11,7 +11,14 @@ import os from "node:os";
 import path from "node:path";
 import type { NewsSnapshot, YoutubeSnapshot } from "../../shared/types.ts";
 import { UsageLimitError } from "../util/codex-query.ts";
-import { AntigravityError, isAntigravityLimitText, parseAgyStream, buildAgySettings } from "../util/antigravity-query.ts";
+import {
+  AGY_TOOL_BUDGET_MAX,
+  AntigravityError,
+  buildAgyPrompt,
+  buildAgySettings,
+  isAntigravityLimitText,
+  parseAgyStream,
+} from "../util/antigravity-query.ts";
 import {
   applyEditorGroups,
   canonicalUrl,
@@ -512,4 +519,14 @@ test("실행 잠금과 실행 ID: 동시 실행은 막고(살아 있는 pid), �
   const ids = new Set(Array.from({ length: 50 }, () => newRunId(new Date("2026-11-22T00:00:00Z"))));
   assert.equal(ids.size, 50);
   assert.match([...ids][0], /^20261122T000000Z-[0-9a-f]{4}$/);
+});
+
+test("agy 프롬프트: Claude 의 maxTurns 대신 도구 호출 예산(상한 80)과 시간 제한을 명시한다", () => {
+  const yt = buildAgyPrompt("작업", { maxTurns: 120, tools: ["WebSearch"] }, true, 20 * 60_000);
+  assert.match(yt, new RegExp(`최대 ${AGY_TOOL_BUDGET_MAX}회까지만`));
+  assert.match(yt, /약 20분 안에/);
+  const news = buildAgyPrompt("작업", { maxTurns: 40 }, true);
+  assert.match(news, /최대 40회까지만/);
+  const noWeb = buildAgyPrompt("작업", { maxTurns: 1 }, false);
+  assert.doesNotMatch(noWeb, /도구 호출\(검색·열람\)/);
 });
