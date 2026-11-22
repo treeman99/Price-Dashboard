@@ -29,7 +29,7 @@ import {
   EmptyLine,
   LoadingState,
 } from "@/components/ui/page";
-import { NotifyMeta, ScheduleControl } from "@/components/ScheduleControl";
+import { ScheduleControl } from "@/components/ScheduleControl";
 import { CategoryDialog, type CategoryDialogState } from "@/components/CategoryDialog";
 import { SnapshotNotice, snapshotHealth } from "@/components/SnapshotNotice";
 import { NewTag } from "@/components/NewTag";
@@ -358,7 +358,6 @@ export function NewsBoard() {
         <MetaDot />
         <Meta>최근 24시간 뉴스</Meta>
         <MetaDot />
-        <NotifyMeta notify="news" suffix="(지금 갱신 포함)" fallback="수집 시 이메일 발송(지금 갱신 포함)" />
         {updated && (
           <>
             <MetaDot />

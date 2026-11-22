@@ -19,8 +19,7 @@ import {
   isYoutubeCollecting,
 } from "../youtube/youtube.ts";
 import { refreshStock, snapshotForSlot, isStockCollecting } from "../stock/stock.ts";
-import { runPulse, flushPulseQueue } from "../stock/pulse.ts";
-import { isQuietHour } from "../stock/pulse-gate.ts";
+import { runPulse } from "../stock/pulse.ts";
 import { getTabSettings } from "../settings/tab-settings.ts";
 import { describeSlotRoles } from "../stock/slot-role.ts";
 import { slotHandled, slotNeedsCatchup } from "../stock/notify-ledger.ts";
@@ -469,7 +468,7 @@ function attemptSucceededSince(attempt: { ok: boolean; at: string } | null, sinc
 
 // ── 팝업/전시 이벤트 스케줄 ──
 let eventsRunning = false;
-async function safeRefreshEvents(trigger: string, notify: boolean) {
+async function safeRefreshEvents(trigger: string) {
   if (eventsRunning) {
     log.warn(`이벤트 수집 진행 중 → ${trigger} 건너뜀`);
     return;
@@ -488,7 +487,7 @@ async function safeRefreshEvents(trigger: string, notify: boolean) {
         return;
       }
       outcome = "attempted";
-      await refreshEvents({ trigger, notify });
+      await refreshEvents({ trigger });
     });
   } catch (e) {
     log.error(`이벤트 수집 오류 [${trigger}]: ${(e as Error).message}`);
@@ -551,12 +550,12 @@ async function checkEventsCatchup() {
   });
   if (!d.run) return;
   log.info(`팝업/전시 ${slotLabel(d.slot)} 갱신 누락 감지 → catch-up 실행`);
-  await safeRefreshEvents("catchup", true);
+  await safeRefreshEvents("catchup");
 }
 
 // ── 데일리 뉴스 다이제스트 스케줄 ──
 let newsRunning = false;
-async function safeRefreshNews(trigger: string, notify: boolean) {
+async function safeRefreshNews(trigger: string) {
   if (newsRunning) {
     log.warn(`뉴스 수집 진행 중 → ${trigger} 건너뜀`);
     return;
@@ -577,7 +576,7 @@ async function safeRefreshNews(trigger: string, notify: boolean) {
         return;
       }
       outcome = "attempted";
-      await refreshNews({ trigger, notify });
+      await refreshNews({ trigger });
     });
   } catch (e) {
     log.error(`뉴스 수집 오류 [${trigger}]: ${(e as Error).message}`);
@@ -635,7 +634,7 @@ async function checkNewsCatchup() {
   });
   if (!d.run) return;
   log.info(`${slotLabel(d.slot)} 뉴스 다이제스트 갱신 누락 감지 → catch-up 실행`);
-  await safeRefreshNews("catchup", true);
+  await safeRefreshNews("catchup");
 }
 
 // ── 유튜브 소식 스케줄 ──
@@ -644,7 +643,7 @@ async function checkNewsCatchup() {
 // 뉴스·팝업/전시도 같은 실패 모양을 가지므로, 3벌 복붙 대신 위쪽 createBackoff 로 공통화했다.
 let youtubeRunning = false;
 
-async function safeRefreshYoutube(trigger: string, notify: boolean) {
+async function safeRefreshYoutube(trigger: string) {
   if (youtubeRunning) {
     log.warn(`유튜브 수집 진행 중 → ${trigger} 건너뜀`);
     return;
@@ -662,7 +661,7 @@ async function safeRefreshYoutube(trigger: string, notify: boolean) {
         return;
       }
       outcome = "attempted";
-      await refreshYoutube({ trigger, notify });
+      await refreshYoutube({ trigger });
     });
   } catch (e) {
     log.error(`유튜브 수집 오류 [${trigger}]: ${(e as Error).message}`);
@@ -708,7 +707,7 @@ async function checkYoutubeCatchup() {
   });
   if (!d.run) return;
   log.info(`${slotLabel(d.slot)} 유튜브 소식 갱신 누락 감지 → catch-up 실행`);
-  await safeRefreshYoutube("catchup", true);
+  await safeRefreshYoutube("catchup");
 }
 
 // ── 증시 브리핑 스케줄 (한국장 08:00 / 미국장 18:00) ──
@@ -721,7 +720,6 @@ const stockRunning: Record<StockMarket, boolean> = { kr: false, us: false };
 async function safeRefreshStock(
   market: StockMarket,
   trigger: string,
-  notify: boolean,
   slot?: string
 ) {
   if (stockRunning[market]) {
@@ -737,7 +735,7 @@ async function safeRefreshStock(
         log.warn(`증시(${market}) 수집이 이미 진행 중(수동 갱신 등) → ${trigger} 건너뜀`);
         return;
       }
-      await refreshStock({ market, trigger, notify, slot });
+      await refreshStock({ market, trigger, slot });
     });
   } catch (e) {
     log.error(`증시(${market}) 수집 오류 [${trigger}]: ${(e as Error).message}`);
@@ -798,7 +796,7 @@ async function checkStockCatchup(market: StockMarket) {
       // (원장이 아예 없는 날 — 서버가 죽어 그날 런이 0건 — 은 slotHandled 가 false 라 그대로 발화한다.)
       if (slotHandled(today(), market, t)) continue;
       log.info(`오늘(${today()}) ${t} 증시(${market}) 브리핑 누락 감지 → catch-up 실행`);
-      await safeRefreshStock(market, "catchup", true, t);
+      await safeRefreshStock(market, "catchup", t);
       return;
     }
     // 신선도 비교도 **이 슬롯을 커버하는 스냅샷** 기준이어야 한다. 세 파일 중 '가장 최신'을
@@ -811,7 +809,7 @@ async function checkStockCatchup(market: StockMarket) {
     // 두 경우 모두 예전 게이트로는 영구 누락이었다(slotNeedsCatchup 주석 참고).
     if (slotNeedsCatchup(today(), market, t)) {
       log.info(`오늘(${today()}) ${t} 증시(${market}) 알림 원장 미기록 → catch-up 실행`);
-      await safeRefreshStock(market, "catchup", true, t);
+      await safeRefreshStock(market, "catchup", t);
       return;
     }
 
@@ -821,7 +819,7 @@ async function checkStockCatchup(market: StockMarket) {
       scheduled.setHours(hour, minute, 0, 0);
       if (snapshotTime < scheduled) {
         log.info(`오늘(${today()}) ${t} 증시(${market}) 갱신 누락 감지 → catch-up 실행`);
-        await safeRefreshStock(market, "catchup", true, t);
+        await safeRefreshStock(market, "catchup", t);
         return;
       }
     }
@@ -837,25 +835,10 @@ async function checkStockCatchup(market: StockMarket) {
 // 동시 실행 방지·백오프는 runPulse 안에 있으므로 여기서는 래핑만 한다.
 async function safeRunPulse(slot: string, trigger: string) {
   try {
-    await runPulse({ slot, trigger, notify: true });
+    await runPulse({ slot, trigger });
   } catch (e) {
     // runPulse 는 throw 하지 않도록 만들었지만, 계약이 깨져도 스케줄러는 죽지 않아야 한다.
     log.error(`펄스 실행 오류 [${trigger}] ${slot}: ${(e as Error).message}`);
-  }
-}
-
-/**
- * 야간 보류분 묶음 발송. 조용 시간 종료 시각(기본 07:00) 정각 1회.
- *
- * 펄스 정시와 **분리된 별도 cron** 인 이유: 07:00 은 기본 펄스 시각 목록에 없다
- * (06~08시는 비워 둔 구간이다). 펄스 실행에 얹으면 사용자가 시간대를 바꿨을 때
- * 보류분이 영영 안 나가는 조합이 생긴다.
- */
-async function safeFlushPulseQueue(trigger: string) {
-  try {
-    await flushPulseQueue(trigger);
-  } catch (e) {
-    log.error(`펄스 보류 플러시 오류 [${trigger}]: ${(e as Error).message}`);
   }
 }
 
@@ -931,7 +914,7 @@ async function safeCatchUpLottoCycle() {
  */
 let skillsRunning = false;
 
-async function safeRunSkills(trigger: string, notify: boolean) {
+async function safeRunSkills(trigger: string) {
   if (skillsRunning) {
     log.warn(`스킬 랭킹 실행 대기/진행 중 → ${trigger} 건너뜀`);
     return;
@@ -952,7 +935,7 @@ async function safeRunSkills(trigger: string, notify: boolean) {
         return;
       }
       outcome = "attempted";
-      await refreshSkills({ trigger, notify });
+      await refreshSkills({ trigger });
     });
   } catch (e) {
     log.error(`스킬 랭킹 오류 [${trigger}]: ${(e as Error).message}`);
@@ -988,7 +971,7 @@ async function safeCatchUpSkills() {
     log.info(
       `스킬 랭킹 ${slotLabel(target)} 회차 갱신 누락 감지 → catch-up 실행 (${describeSchedule(job)})`
     );
-    await safeRunSkills("catchup", true);
+    await safeRunSkills("catchup");
   } catch (e) {
     log.error(`스킬 랭킹 보충 점검 오류: ${(e as Error).message}`);
   }
@@ -1071,11 +1054,11 @@ function scheduleGroup(
  */
 function registerCrons() {
   const s = getSchedule();
-  scheduleGroup("events", s.events, "팝업/전시", () => void safeRefreshEvents("schedule", true));
-  scheduleGroup("news", s.news, "뉴스 다이제스트", () => void safeRefreshNews("schedule", true));
-  scheduleGroup("youtube", s.youtube, "유튜브 소식", () => void safeRefreshYoutube("schedule", true));
-  scheduleGroup("stock-kr", s.stockKr, "증시(한국장)", (t) => void safeRefreshStock("kr", "schedule", true, t));
-  scheduleGroup("stock-us", s.stockUs, "증시(미국장)", (t) => void safeRefreshStock("us", "schedule", true, t));
+  scheduleGroup("events", s.events, "팝업/전시", () => void safeRefreshEvents("schedule"));
+  scheduleGroup("news", s.news, "뉴스 다이제스트", () => void safeRefreshNews("schedule"));
+  scheduleGroup("youtube", s.youtube, "유튜브 소식", () => void safeRefreshYoutube("schedule"));
+  scheduleGroup("stock-kr", s.stockKr, "증시(한국장)", (t) => void safeRefreshStock("kr", "schedule", t));
+  scheduleGroup("stock-us", s.stockUs, "증시(미국장)", (t) => void safeRefreshStock("us", "schedule", t));
   // 역할 분리 구성을 남긴다. '슬롯을 하나로 줄이거나 같은 밴드에 몰아넣으면 분리가 조용히
   // 꺼진다'는 비자명 동작의 유일한 가시화 수단이라 옵션이 아니다(slot-role.ts 참고).
   log.info(describeSlotRoles("us", s.stockUs.times));
@@ -1087,17 +1070,6 @@ function registerCrons() {
   if (s.stockPulse.enabled) {
     log.info(`스케줄러: 증시 펄스 ${s.stockPulse.times.length}회 — ${describeSchedule(s.stockPulse)}`);
   }
-
-  // 야간 보류분 묶음 발송(조용 시간 종료 정각). 시각은 **등록 시점의** 운영 설정 값이다 —
-  // quietEndHour 를 바꾸면 운영 설정 저장이 rescheduleAll() 을 불러 이 cron 을 다시 건다(계약 §2).
-  // 펄스를 꺼도 이 cron 은 남긴다: 이미 보류된 알림은 '아침에 보내겠다'고 약속한 것이다.
-  const flushAt = `${String(getTabSettings().stockPulse.quietEndHour).padStart(2, "0")}:00`;
-  tasks.push(
-    cron.schedule(cronExpr(flushAt), () => void safeFlushPulseQueue("schedule"), {
-      name: "dp-stock-pulse-flush",
-    })
-  );
-  log.info(`스케줄러: 증시 펄스 야간 보류 묶음 발송 매일 ${flushAt}`);
 
   // 보존 정책. 예전에는 가격 수집이 끝날 때마다 pruneOldData 를 불렀는데, 가격 탭을 제거하면서
   // (2026-08-01) 그 유일한 호출자가 사라졌다 — 그대로 뒀다면 증시 시계열과 펄스 원장이 영원히
@@ -1118,7 +1090,7 @@ function registerCrons() {
   scheduleGroup("lotto-cycle", s.lotto, "로또 주간 사이클", () => void safeRunLottoCycle("schedule"));
 
   // 스킬 랭킹 회차(주 단위 이상). 수집 → 스냅샷 저장 → 차분·랭킹 → 요약 → 알림까지 한 번에.
-  scheduleGroup("skills-cycle", s.skills, "스킬 랭킹 회차", () => void safeRunSkills("schedule", true));
+  scheduleGroup("skills-cycle", s.skills, "스킬 랭킹 회차", () => void safeRunSkills("schedule"));
 }
 
 /**
@@ -1266,17 +1238,6 @@ export function startScheduler() {
 
   // 기동 직후 1회 + 30분마다 누락 점검 (잠자기 복귀 대응)
   void runCatchupSweep("기동");
-  // 펄스 자체는 catch-up 하지 않지만(위 주석) **보류 큐는 다르다.** 큐에 있는 건 이미 판정이
-  // 끝나 "아침에 보내겠다"고 약속한 알림이라, 07:00 에 서버가 꺼져 있었다면 반드시 보충해야
-  // 한다. 그러지 않으면 밤사이 판정이 디스크에 영원히 갇힌다.
-  // 조용 시간 중이면 건너뛴다 — 지금 보내면 그게 바로 새벽 문자다. 조용 시간은 호출 시점의
-  // 운영 설정 값이다(계약 §2).
-  // (LLM 큐를 타지 않는다: 발송뿐이라 짧고, 스윕 뒤로 줄 세울 이유가 없다.)
-  const { quietStartHour, quietEndHour } = getTabSettings().stockPulse;
-  if (!isQuietHour(new Date().getHours(), quietStartHour, quietEndHour)) {
-    void safeFlushPulseQueue("startup");
-  }
-
   let lastTickAt = Date.now();
   setInterval(() => {
     const now = Date.now();

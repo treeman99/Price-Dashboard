@@ -30,7 +30,6 @@
 
 import path from "node:path";
 import { log } from "../util/log.ts";
-import { uptimeIMessageEnabled } from "./notify.ts";
 import {
   MIN_GAP_MS,
   REEVAL_DELAYS_MS,
@@ -71,12 +70,9 @@ import {
   type DowntimeNarrator,
   getDowntimeEvent,
   getDowntimeView as loadDowntimeView,
-  listDowntimeEvents,
-  markDowntimeNotified,
   patchDowntimeEvent,
   recordDowntimeEvent,
 } from "./store.ts";
-import { notifyDowntimeEvent } from "./notify.ts";
 
 // ────────────────────────────────────────────────────────────────────────────
 // 0. 문구 주입 (store.ts 가 요구한 계약 그대로)
@@ -84,18 +80,14 @@ import { notifyDowntimeEvent } from "./notify.ts";
 
 /**
  * `store.ts` 는 `narrate.ts` 를 **하드 임포트하지 않는다.** 이유는 그 파일 주석에 적힌 대로
- * 두 가지다: (1) 문구 규칙이 두 파일로 복제되는 것을 막고, (2) `renderJournalEntry` 의 두
- * 번째 인자가 `uptimeIMessageEnabled()`(`./notify.ts` — 전역 iMessage 설정 AND 대시보드 '가동 중단
- * 알림' 스위치)를 요구해서 하드 임포트하면 저장 계층이 알림 계층까지 끌고 온다. 그 배선을
- * **합성 루트인 이 파일이** 담당한다.
+ * 문구 규칙이 두 파일로 복제되는 것을 막기 위해서다. 그 배선을 **합성 루트인 이 파일이** 담당한다.
  *
- * `uptimeIMessageEnabled()` 를 매번 부르는 이유: 대시보드에서 알림 스위치를 바꾸면 재시작 없이
- * 다음 사건의 일지 "알림:" 줄이 따라오게 하기 위해서다(발송 게이트·60초 스윕 해제와 같은 판정이라
- * 셋이 갈라지지 않는다). 비용은 작은 설정 파일(data/tab-settings.json) 한 번 읽기다.
+ * 메일·문자 알림 기능은 2026-11-22 제거됐다. 일지 "알림:" 줄은 발송 경로가 없음을 적는다
+ * (renderJournalEntry 의 두 번째 인자 false).
  */
 const narrator: DowntimeNarrator = {
   narrate: (e) => narrate(e),
-  journalEntry: (e) => renderJournalEntry(e, uptimeIMessageEnabled()),
+  journalEntry: (e) => renderJournalEntry(e, false),
   journalHeader: () => DOWNTIME_JOURNAL_HEADER,
   splitEntries: (t) => splitJournalEntries(t),
 };
@@ -302,8 +294,8 @@ async function handleGap(input: GapInput): Promise<void> {
   //    (2026-08-02 적대적 검증에서 3시간 사건 + 5분 파편에 두 번 찍히는 것을 실측).
   if (!merged) emitStdout(event);
 
-  // ── 5) 알림(§7) · 재평가(§8.5) ─────────────────────────────────────────────
-  await notifyOne(event);
+  // ── 5) 재평가(§8.5) ─────────────────────────────────────────────────────────
+  // (알림 §7 은 메일·문자 발송 기능 제거와 함께 없앴다 — 사건은 원장·일지·stdout·대시보드 배너로 남는다.)
   if (!merged) scheduleReevaluations(event.id);
 }
 
@@ -328,78 +320,6 @@ function emitStdout(event: DowntimeEvent): void {
       `가동 공백 ${event.gapMinutes}분 (${event.cause}/${event.severity}) — ` +
         `문구 생성 실패(${(e as Error).message}). 자세히: ${JOURNAL_PATH}`
     );
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// 3. 알림 (§7) — 발송은 notify.ts, **저장은 이 파일**
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * `notify.ts` 는 원장을 쓰지 않는다(`store → notify → store` 순환 임포트를 피하려고 일부러
- * 그렇게 뒀다). 대신 `ev.notified` 를 제자리 갱신하고 `changed` 로 신호한다 — **그 신호를
- * 받아 디스크에 남기는 것이 이 함수의 존재 이유다.**
- *
- * 저장하지 않으면 조용시간 보류표(`queuedUntil`)가 디스크에 남지 않아, 재기동 한 번으로
- * "새벽 3시에 깨어나 07:00 에 보내기로 한" 약속 자체가 증발한다.
- */
-async function notifyOne(event: DowntimeEvent): Promise<void> {
-  try {
-    const r = await notifyDowntimeEvent(event);
-    if (r.changed) markDowntimeNotified(event.id, event.notified, narrator);
-    // 아직 못 보낸 사건이 남았으면 60초 스윕을 켠다(조용시간 해제·복구 유예 만료 대기).
-    if (r.outcome === "queued" || r.outcome === "waiting") armNotifySweep();
-  } catch (e) {
-    log.error(`가동 중단 알림 처리 실패 (사건 ${event.id}): ${(e as Error).message}`);
-  }
-}
-
-/**
- * 보류된 알림을 풀어 주는 60초 스윕.
- *
- * ## 왜 `setTimeout(다음 07:00)` 이 아니라 반복 스윕인가 (notify.ts 의 요구 사항)
- * 조용시간 보류의 전형적인 시나리오가 "10시간 자다가 새벽 3시에 잠깐 깨어남" 이다. 그런데
- * **타이머는 절전 중에 발화하지 않는다** — 이 기능이 존재하는 이유가 바로 그 사실이다(§1).
- * 07:00 을 겨냥한 타이머는 정확히 필요한 상황에서 늦게 깨어난다. 주기 스윕은 깨어난 직후
- * 첫 틱에서 조용시간이 끝났는지 다시 물어보므로 그 함정에 빠지지 않는다.
- *
- * ## 평시 비용 0 — 필요할 때만 타이머를 켠다
- * 보낼 것이 없으면 인터벌 자체를 **끈다.** 무사고 상태에서 원장 파일(≤150KB)을 1분마다
- * 읽는 것은 아무것도 사지 못하는 비용이다. 다시 필요해지면 `armNotifySweep()` 이 켠다.
- */
-let notifySweepTimer: ReturnType<typeof setInterval> | null = null;
-
-function armNotifySweep(): void {
-  if (notifySweepTimer !== null) return;
-  notifySweepTimer = setInterval(() => void queue(runNotifySweep), 60_000);
-  // 진단용 타이머가 프로세스 종료를 가로막는 순간, 이 기능은 자기가 진단하려던 것보다 큰
-  // 사고가 된다(`beacon.ts` 가 같은 이유로 같은 처리를 한다).
-  notifySweepTimer.unref?.();
-}
-
-function disarmNotifySweep(): void {
-  if (notifySweepTimer === null) return;
-  clearInterval(notifySweepTimer);
-  notifySweepTimer = null;
-}
-
-async function runNotifySweep(): Promise<void> {
-  // 설정 자체가 없으면 아무리 돌려도 보낼 수 없다. 스윕을 끄고 조용히 물러난다
-  // (일지·stdout·원장에는 이미 남아 있으므로 기록 요구는 배신하지 않는다).
-  if (!uptimeIMessageEnabled()) {
-    disarmNotifySweep();
-    return;
-  }
-  const pending = listDowntimeEvents().filter(
-    (e) => e.severity === "사고" && !e.notified.imessage && e.ackedAt == null
-  );
-  if (pending.length === 0) {
-    disarmNotifySweep();
-    return;
-  }
-  for (const ev of pending) {
-    const r = await notifyDowntimeEvent(ev);
-    if (r.changed) markDowntimeNotified(ev.id, ev.notified, narrator);
   }
 }
 
@@ -502,10 +422,6 @@ async function reevaluate(eventId: string, round: number): Promise<void> {
     narrator
   );
   if (!patched) return;
-
-  // §7-6 복구 유예가 이 시점에 풀릴 수 있다("재평가 2회차" 또는 "recoveryState !== 복구중").
-  // 최종 상태로 1통만 나가게 하려고 사건 생성 직후가 아니라 여기서 다시 태운다.
-  await notifyOne(patched);
 
   if (round >= REEVAL_DELAYS_MS.length) reevalArmed.delete(eventId);
 }
@@ -615,7 +531,7 @@ export async function startUptimeWatch(): Promise<void> {
     // ── 재기동 시 남아 있는 보류 알림 이어받기 ──────────────────────────────
     // 조용시간에 보류된 문자는 `queuedUntil` 로 원장에만 남아 있다. 프로세스가 다시 뜨면
     // 메모리의 스윕 상태는 사라지므로 여기서 한 번 켜 준다(보낼 게 없으면 첫 스윕이 끈다).
-    armNotifySweep();
+    // 외부 알림 제거: 감시는 대시보드 기록만 유지한다.
 
     // ── T1. 하트비트 (주 경로) ─────────────────────────────────────────────
     startUptimeBeacon({
@@ -669,8 +585,4 @@ export function getDowntimeView(): DowntimeView {
 /** 단위 테스트 전용 훅 — 프로덕션 코드에서 import 하지 말 것. (scheduler.ts __testing 과 같은 관례) */
 export const __testing = {
   narrator,
-  runNotifySweep,
-  armNotifySweep,
-  disarmNotifySweep,
-  isNotifySweepArmed: () => notifySweepTimer !== null,
 };

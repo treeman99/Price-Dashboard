@@ -497,7 +497,6 @@ export const api = {
       j<{
         running: boolean;
         lastRun: PulseRunResult | null;
-        notifyEnabled: boolean;
         schedule: string[];
         recent: Array<{
           id: number;

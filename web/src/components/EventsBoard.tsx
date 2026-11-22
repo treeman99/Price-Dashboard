@@ -21,7 +21,7 @@ import {
   LoadingState,
   type TagTone,
 } from "@/components/ui/page";
-import { NotifyMeta, ScheduleControl } from "@/components/ScheduleControl";
+import { ScheduleControl } from "@/components/ScheduleControl";
 import { SnapshotNotice, localDay, snapshotHealth } from "@/components/SnapshotNotice";
 import { formatWhen } from "@/lib/tabConfig";
 import { eventsVisibleItems, exhibitionItemId, festivalItemId, popupItemId } from "@/lib/feed";
@@ -381,7 +381,6 @@ export function EventsBoard() {
       >
         <ScheduleControl tab="events" />
         <MetaDot />
-        <NotifyMeta notify="events" verb="갱신 시" fallback="갱신 시 이메일 발송" />
         {updated && (
           <>
             <MetaDot />

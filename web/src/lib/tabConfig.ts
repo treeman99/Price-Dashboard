@@ -1,8 +1,6 @@
 import type {
   DeepPartial,
   JobSchedule,
-  NotifyChannel,
-  NotifyTabId,
   NumberRule,
   ScheduleConfig,
   ScheduleJobId,
@@ -34,9 +32,7 @@ export interface TabConfigDef {
   label: string;
   /** 이 탭의 스케줄 잡(증시는 시장별 브리핑 2개). */
   jobs: ScheduleJobId[];
-  /** 이 탭의 알림 주체. 로또는 알림이 없다. */
-  notify: NotifyTabId | null;
-  /** 운영 설정 필드(TabSettings 의 점 경로). 알림 스위치는 notify 로 따로 그린다. */
+  /** 운영 설정 필드(TabSettings 의 점 경로). (메일·문자 알림 스위치는 2026-11-22 제거) */
   fields: SettingField[];
 }
 
@@ -46,13 +42,11 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
   news: {
     label: "뉴스",
     jobs: ["news"],
-    notify: "news",
     fields: [{ kind: "number", path: "timeouts.newsMin", label: "수집 최대 대기", hint: TIMEOUT_HINT }],
   },
   youtube: {
     label: "유튜브 소식",
     jobs: ["youtube"],
-    notify: "youtube",
     fields: [
       { kind: "number", path: "youtube.freshDays", label: "최근 영상 기준", hint: "이 기간 안에 게시된 영상만 채택합니다." },
       {
@@ -67,7 +61,6 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
   skills: {
     label: "스킬 랭킹",
     jobs: ["skills"],
-    notify: "skills",
     fields: [
       { kind: "number", path: "timeouts.skillsSummaryMin", label: "요약 배치 최대 대기", hint: TIMEOUT_HINT },
       {
@@ -81,7 +74,6 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
   stock: {
     label: "증시",
     jobs: ["stockKr", "stockUs"],
-    notify: "stock",
     fields: [
       { kind: "number", path: "timeouts.stockBriefMin", label: "브리핑 최대 대기", hint: TIMEOUT_HINT },
       {
@@ -95,7 +87,6 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
   events: {
     label: "팝업·전시",
     jobs: ["events"],
-    notify: "events",
     fields: [
       {
         kind: "number",
@@ -116,7 +107,6 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
   holdings: {
     label: "보유 주식",
     jobs: ["stockPulse"],
-    notify: "stockPulse",
     fields: [
       { kind: "number", path: "stockPulse.perSymbolCap", label: "종목당 하루 상한", hint: "종목 1개당 하루 최대 알림 건수." },
       { kind: "number", path: "stockPulse.dailyCap", label: "하루 전체 상한", hint: "종목 알림을 합친 하루 최대 건수." },
@@ -131,14 +121,8 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
   lotto: {
     label: "로또",
     jobs: ["lotto"],
-    notify: null,
     fields: [],
   },
-};
-
-export const CHANNEL_LABEL: Record<NotifyChannel, string> = {
-  email: "이메일",
-  imessage: "iMessage",
 };
 
 /**
@@ -216,14 +200,12 @@ export function buildSchedulePatch(
 
 /**
  * 탭 하나의 운영 설정 초안에서 **바뀐 필드만** 담은 PUT /api/settings 본문(DeepPartial).
- * 알림은 그 탭에 실제로 있는 채널(channels)만 본다 — 없는 채널은 서버가 어차피 무시한다.
  * 바뀐 게 없으면 null.
  */
 export function buildSettingsPatch(
   original: TabSettings,
   draft: TabSettings,
-  def: Pick<TabConfigDef, "fields" | "notify">,
-  channels: NotifyChannel[]
+  def: Pick<TabConfigDef, "fields">
 ): DeepPartial<TabSettings> | null {
   let patch: DeepPartial<TabSettings> = {};
   let changed = false;
@@ -232,16 +214,6 @@ export function buildSettingsPatch(
     if (!sameValue(v, getAtPath(original, f.path))) {
       patch = setAtPath(patch, f.path, v);
       changed = true;
-    }
-  }
-  if (def.notify) {
-    for (const ch of channels) {
-      const path = `notify.${def.notify}.${ch}`;
-      const v = getAtPath(draft, path);
-      if (!sameValue(v, getAtPath(original, path))) {
-        patch = setAtPath(patch, path, v);
-        changed = true;
-      }
     }
   }
   return changed ? patch : null;

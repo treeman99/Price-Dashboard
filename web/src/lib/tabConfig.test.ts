@@ -22,15 +22,6 @@ import {
 /** 계약(shared/types.ts TabSettings) 모양 그대로의 고정 값. */
 function settingsFixture() {
   return {
-    notify: {
-      events: { email: true, imessage: true },
-      news: { email: true, imessage: true },
-      youtube: { email: true, imessage: true },
-      stock: { email: true, imessage: true },
-      stockPulse: { email: false, imessage: true },
-      skills: { email: true, imessage: true },
-      uptime: { email: false, imessage: true },
-    },
     youtube: { freshDays: 7, watchedExcludeDays: 7 },
     events: { newGapDays: 7, newShowDays: 3, verifyDates: true },
     stockPulse: {
@@ -61,14 +52,14 @@ test("TAB_CONFIG 의 모든 필드 경로가 TabSettings 에 실제로 있다(�
     for (const f of def.fields) {
       assert.notEqual(getAtPath(s, f.path), undefined, `${tab}: ${f.path}`);
     }
-    if (def.notify) assert.ok(getAtPath(s, `notify.${def.notify}`), `${tab}: notify.${def.notify}`);
   }
 });
 
-test("탭 ↔ 잡 매핑: 증시는 시장별 브리핑 2개, 로또는 운영 설정·알림 없음", () => {
+test("탭 ↔ 잡 매핑: 증시는 시장별 브리핑 2개, 로또는 운영 설정 없음", () => {
   assert.deepEqual(TAB_CONFIG.stock.jobs, ["stockKr", "stockUs"]);
   assert.deepEqual(TAB_CONFIG.holdings.jobs, ["stockPulse"]);
-  assert.equal(TAB_CONFIG.lotto.notify, null);
+  // 메일·문자 알림 제거(2026-11-22): 어느 탭에도 알림 주체가 없다.
+  for (const def of Object.values(TAB_CONFIG)) assert.equal("notify" in def, false);
   assert.equal(TAB_CONFIG.lotto.fields.length, 0);
   // 8개 잡이 빠짐없이 어느 한 탭에 속한다.
   const all = Object.values(TAB_CONFIG).flatMap((d) => d.jobs).sort();
@@ -96,22 +87,19 @@ test("setAtPath 는 원본을 바꾸지 않고 중간 객체를 만든다", () =
 test("buildSettingsPatch: 바꾼 필드만 DeepPartial 로, 없으면 null", () => {
   const orig = settingsFixture();
   const def = TAB_CONFIG.holdings;
-  assert.equal(buildSettingsPatch(orig as never, orig as never, def, ["imessage"]), null);
+  assert.equal(buildSettingsPatch(orig as never, orig as never, def), null);
 
   let draft = setAtPath(orig, "stockPulse.dailyCap", 12);
   draft = setAtPath(draft, "stockPulse.threshold", "urgent");
-  draft = setAtPath(draft, "notify.stockPulse.imessage", false);
-  assert.deepEqual(buildSettingsPatch(orig as never, draft as never, def, ["imessage"]), {
+  assert.deepEqual(buildSettingsPatch(orig as never, draft as never, def), {
     stockPulse: { dailyCap: 12, threshold: "urgent" },
-    notify: { stockPulse: { imessage: false } },
   });
 });
 
-test("buildSettingsPatch: 그 탭에 없는 채널·다른 탭 필드는 본문에 넣지 않는다", () => {
+test("buildSettingsPatch: 다른 탭 필드는 본문에 넣지 않는다", () => {
   const orig = settingsFixture();
-  let draft = setAtPath(orig, "notify.stockPulse.email", true); // 펄스엔 이메일 채널이 없다
-  draft = setAtPath(draft, "timeouts.newsMin", 30); // 뉴스 탭 필드
-  assert.equal(buildSettingsPatch(orig as never, draft as never, TAB_CONFIG.holdings, ["imessage"]), null);
+  const draft = setAtPath(orig, "timeouts.newsMin", 30); // 뉴스 탭 필드
+  assert.equal(buildSettingsPatch(orig as never, draft as never, TAB_CONFIG.holdings), null);
 });
 
 test("buildSchedulePatch: 바뀐 잡만, 키 순서는 무시", () => {

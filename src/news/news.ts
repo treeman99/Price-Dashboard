@@ -4,7 +4,6 @@ import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
 import { curateNews } from "./curate.ts";
-import { sendNewsEmail, sendNewsIMessage } from "../notify/news-email.ts";
 import { loadCategories } from "./categories.ts";
 import type { NewsSnapshot } from "../../shared/types.ts";
 
@@ -221,7 +220,7 @@ function staleNote(kept: NewsSnapshot, fresh: NewsSnapshot, attemptedAt: string)
  * 이력은 저장하지 않고 최신 스냅샷만 덮어쓴다. 단 실패한 회차는 덮어쓰지 않는다(decideNewsSnapshot).
  */
 export async function refreshNews(
-  opts: { trigger: string; notify?: boolean } = { trigger: "manual" }
+  opts: { trigger: string } = { trigger: "manual" }
 ): Promise<NewsSnapshot> {
   if (running) {
     log.warn(`뉴스 수집 진행 중 → ${opts.trigger} 중복 방지`);
@@ -252,14 +251,7 @@ export async function refreshNews(
 
     const total = decision.attempt.total ?? 0;
     // 기사가 0건이면 이메일을 보내지 않는다(빈 다이제스트 방지).
-    if (opts.notify && decision.notify) {
-      await sendNewsEmail(decision.snapshot).catch((e) =>
-        log.warn(`뉴스 이메일 발송 예외: ${(e as Error).message}`)
-      );
-      await sendNewsIMessage(decision.snapshot); // 자체 게이트·자체 catch(throw 안 함)
-    } else if (opts.notify) {
-      log.info("뉴스 0건 → 이메일 발송 생략");
-    }
+    // 보고서는 Orca IT News에서 전달한다.
     log.info(
       `뉴스 수집 완료 [${opts.trigger}] ${date} (총 ${total}건, source=${decision.snapshot.source})`
     );

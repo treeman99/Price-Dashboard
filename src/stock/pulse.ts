@@ -7,27 +7,17 @@ import { decide, isQuietHour, prioritize, type GateCounts } from "./pulse-gate.t
 import { gatePulseLanguage } from "./language-gate.ts";
 import { fetchSavetickerNews } from "./saveticker.ts";
 import { summarizeHoldings } from "./holdings.ts";
-import {
-  countPulseSentToday,
-  insertPulseAlert,
-  listQueuedPulseAlerts,
-  markPulseAlertsFailed,
-  markPulseAlertsMuted,
-  markPulseAlertsSent,
-  recentPulseAlerts,
-} from "../db/repo.ts";
-import {
-  isPulseNotifyEnabled,
-  isPulseTextEnabled,
-  pulseThreshold,
-  PULSE_CAPS,
-  sendPulseDigest,
-  sendPulseIMessage,
-} from "../notify/pulse-imessage.ts";
+import { countPulseSentToday, insertPulseAlert, recentPulseAlerts } from "../db/repo.ts";
+import { pulseThreshold, PULSE_CAPS } from "./pulse-policy.ts";
 import type { PulseRunResult, StockHoldingSummary } from "../../shared/types.ts";
 
 /**
- * 시간당 펄스 오케스트레이션: 보유 조회 → 속보 수집 → 에이전트 판정 → 게이트 → 문자.
+ * 시간당 펄스 오케스트레이션: 보유 조회 → 속보 수집 → 에이전트 판정 → 게이트 → 원장 기록.
+ *
+ * 2026-11-22: 메일·문자 발송 기능을 제거했다. 예전에는 게이트를 통과한 판정을 iMessage 로 보내고
+ * 야간분은 큐에 보류했다가 아침에 묶어 보냈지만, 지금은 **어떤 판정도 발송하지 않는다.** 발송 대상이던
+ * 판정은 'muted'(판정만 기록)로 원장에 남아 일일 브리핑의 '지난 24시간 펄스 요약'을 계속 채운다.
+ * 실행 on/off 의 정본은 대시보드 스케줄(stockPulse enabled)이다.
  *
  * ## 설계 원칙
  * 1. **catch-up 하지 않는다.** 지나간 시각의 '실시간' 취합은 보충할 가치가 없고, 보충하면
@@ -85,8 +75,6 @@ export interface RunPulseOptions {
   /** 귀속 슬롯("HH:mm"). 정시 실행은 cron 이 아는 값을 넘긴다. */
   slot: string;
   trigger: string;
-  /** false 면 판정만 하고 문자를 보내지 않는다(수동 점검용). */
-  notify?: boolean;
   /** true 면 백오프 게이트를 무시한다(사용자가 직접 누른 실행). */
   force?: boolean;
 }
@@ -121,14 +109,6 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
     log.info(`펄스 백오프 중 → ${opts.slot} 건너뜀`);
     return { ...base, error: "백오프 중" };
   }
-  // 출력 채널이 문자 하나뿐이다. **환경에** 문자 설정이 없으면 매시간 LLM 을 돌릴 이유가 없다
-  // (isPulseNotifyEnabled 주석). 대시보드 탭 알림만 꺼진 경우는 여기서 막지 않는다 — 실행은 하고
-  // 문자만 끈다(아래 5단계 'muted'). 실행 on/off 의 정본은 스케줄 enabled 다.
-  if (!isPulseNotifyEnabled()) {
-    log.info(`iMessage 미설정 → 펄스(${opts.slot}) 건너뜀 (NOTIFY_IMESSAGE/IMESSAGE_TO 확인)`);
-    return { ...base, error: "iMessage 미설정" };
-  }
-
   running = true;
   try {
     // ── 1. 보유 종목 (없으면 실행할 이유가 없다) ──
@@ -178,20 +158,12 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
     // 외국 문자 검사. 게이트·원장·발송이 전부 이 뒤라서 나가는 문구는 모두 여기를 지난다.
     await gatePulseLanguage(parsed, opts.slot);
 
-    // ── 5. 게이트 → 발송 ──
+    // ── 5. 게이트 → 원장 기록(발송 없음) ──
     const counts: GateCounts = countPulseSentToday(date);
     const caps = PULSE_CAPS();
     const threshold = pulseThreshold();
     const quiet = isQuietHour(startedAt.getHours(), policy.quietStartHour, policy.quietEndHour);
-    const sendable = opts.notify !== false;
-    // 대시보드에서 펄스 문자를 껐는가. 실행 시작 시점에 한 번 읽는다(한 실행 안에서는 일관).
-    const textOn = isPulseTextEnabled();
-    if (sendable && !textOn) {
-      log.info(`펄스 문자 꺼짐(대시보드) → 판정만 기록 (${opts.slot})`);
-    }
 
-    let sent = 0;
-    let queued = 0;
     let suppressed = 0;
     let muted = 0;
 
@@ -213,72 +185,21 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
         dedupHours: policy.dedupHours,
       });
 
-      if (decision.status === "sent" && sendable && textOn) {
-        const ok = await sendPulseIMessage(candidate.impact);
-        const rec = insertPulseAlert({
-          fingerprint: candidate.fingerprint,
-          date,
-          slot: opts.slot,
-          impact: candidate.impact,
-          status: ok ? "sent" : "failed",
-          sentAt: ok ? new Date().toISOString() : null,
-        });
-        if (ok) {
-          sent++;
-          // 같은 실행 안에서 상한·중복이 즉시 반영돼야 한다. 반영하지 않으면 한 번의 펄스가
-          // 상한을 무시하고 판정 전부를 발송한다(counts 는 실행 시작 시점의 스냅샷이므로).
-          bump(counts, candidate.impact.symbol);
-          recent.unshift(rec);
-        }
-        continue;
-      }
-
-      // notify=false(수동 점검·드라이런)면 **어떤 판정도 발송 경로에 올리지 않는다.**
-      //
-      // ⚠️ 'sent' 만 'below' 로 바꾸면 부족하다. 야간 드라이런에서 'queued' 가 그대로 기록되면
-      //    07:00 플러시가 그것들을 **진짜로 발송한다** — 사용자는 보내지 말라고 했는데 몇 시간
-      //    뒤에 문자가 오는, 가장 나쁜 종류의 위반이다. 큐잉도 함께 막는다.
-      // 'below' 로 기록하는 이유: 이 상태는 중복 판정(recentPulseAlerts)과 상한 집계에서
-      //    모두 제외되므로, 드라이런이 이후의 진짜 발송을 가로막지 않는다.
-      //
-      // 대시보드에서 문자를 끈 상태(textOn=false)도 같은 이유로 발송·큐잉을 모두 막되, 문턱 미달과
-      // 구분되게 'muted' 로 남긴다. ⚠️ 큐에 넣지 않는 게 핵심이다 — 넣으면 다시 켜는 순간 밀린 문자가
-      // 한꺼번에 나간다. muted 도 sent|queued 집계에서 빠지므로 다시 켰을 때 그날 상한이 이미 찬
-      // 상태가 되지 않고, 이미 알린 사건이 아니라서 중복 차단에도 걸리지 않는다.
-      // 판정 자체는 원장에 남으므로 일일 브리핑의 '지난 24시간 펄스 요약'은 계속 채워진다.
+      // 예전 발송·보류 대상('sent'·'queued')은 전부 'muted' 로 남긴다. muted 는 상한·중복 집계에서
+      // 빠지므로 판정이 이후 판정을 가로막지 않고, 큐에도 들어가지 않아 나중에 몰아 보낼 것이 없다.
       const wouldReach = decision.status === "sent" || decision.status === "queued";
-      const status = !wouldReach
-        ? decision.status
-        : !sendable
-          ? "below"
-          : !textOn
-            ? "muted"
-            : decision.status;
-      const rec = insertPulseAlert({
+      const status = wouldReach ? "muted" : decision.status;
+      insertPulseAlert({
         fingerprint: candidate.fingerprint,
         date,
         slot: opts.slot,
         impact: candidate.impact,
         status,
       });
-      if (status === "queued") {
-        queued++;
-        // 보류분도 예산을 쓴다 — 07:00 에 반드시 나가기 때문이다(countPulseSentToday 주석).
-        bump(counts, candidate.impact.symbol);
-        recent.unshift(rec);
-      } else {
-        suppressed++;
-        if (status === "muted") muted++;
-      }
-      // 드라이런이면 사유가 게이트 판정("발송")과 어긋나 보인다 — 그대로 찍으면
-      // "[below] … — 발송" 이라는 자기모순 로그가 남아 나중에 원인 추적을 방해한다.
-      const why =
-        status === "muted"
-          ? `펄스 문자 꺼짐(대시보드) — 판정만 기록 (게이트: ${decision.reason})`
-          : !sendable && decision.status === "sent"
-            ? "드라이런(notify=false) — 발송 없이 기록만"
-            : decision.reason;
-      log.info(`펄스 판정 보류/억제 [${status}] ${candidate.impact.symbol ?? "macro"} — ${why}`);
+      suppressed++;
+      if (status === "muted") muted++;
+      const why = status === "muted" ? `발송 기능 제거 — 판정만 기록 (게이트: ${decision.reason})` : decision.reason;
+      log.info(`펄스 판정 기록 [${status}] ${candidate.impact.symbol ?? "macro"} — ${why}`);
     }
 
     const finishedAt = new Date();
@@ -287,8 +208,8 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
       finishedAt: finishedAt.toISOString(),
       ok: true,
       impacts: parsed.impacts.length,
-      sent,
-      queued,
+      sent: 0,
+      queued: 0,
       suppressed,
       error: null,
     };
@@ -296,8 +217,7 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
     noteOutcome(true);
     log.info(
       `펄스 완료 [${opts.trigger}] ${opts.slot} — 판정 ${parsed.impacts.length} / ` +
-        `발송 ${sent} / 보류 ${queued} / 억제 ${suppressed}` +
-        `${muted ? `(문자 꺼짐 ${muted})` : ""}` +
+        `기록 ${suppressed}(발송 대상이던 판정 ${muted})` +
         `${quiet ? " (야간 모드)" : ""} · 속보 ${breaking.length}건 참조`
     );
     return result;
@@ -316,46 +236,4 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
   } finally {
     running = false;
   }
-}
-
-/** 상한 카운터 증가. 심볼이 null 이면 거시 예산. */
-function bump(counts: GateCounts, symbol: string | null): void {
-  if (symbol) {
-    counts.bySymbol[symbol] = (counts.bySymbol[symbol] ?? 0) + 1;
-    counts.total += 1;
-  } else {
-    counts.macro += 1;
-  }
-}
-
-/**
- * 야간 보류분 묶음 발송(기본 07:00).
- *
- * 실패한 건은 'failed' 로 표시해 **큐에서 뺀다.** 남겨두면 매일 아침 같은 실패를 재시도하며
- * 며칠 지난 뉴스를 계속 보내려 든다 — 알림 피로의 가장 나쁜 형태다.
- *
- * 대시보드에서 펄스 문자를 꺼 둔 상태면 보류분을 **보내지 않고 'muted' 로 정리한다.** 큐에 남겨
- * 두면 다시 켜는 순간(다음 플러시) 며칠치 문자가 한꺼번에 나간다. muted 는 상한 집계에서 빠지므로
- * 보류하며 써 둔 그날 예산도 돌아온다.
- */
-export async function flushPulseQueue(trigger: string): Promise<number> {
-  const queued = listQueuedPulseAlerts();
-  if (!queued.length) return 0;
-  if (!isPulseNotifyEnabled()) {
-    log.warn(`펄스 묶음 발송 불가(iMessage 미설정) — 보류 ${queued.length}건 유지`);
-    return 0;
-  }
-  if (!isPulseTextEnabled()) {
-    markPulseAlertsMuted(queued.map((q) => q.id));
-    log.info(
-      `펄스 문자 꺼짐(대시보드) → 야간 보류 ${queued.length}건 발송 없이 정리(muted) [${trigger}]`
-    );
-    return 0;
-  }
-  const ok = await sendPulseDigest(queued);
-  const ids = queued.map((q) => q.id);
-  if (ok) markPulseAlertsSent(ids);
-  else markPulseAlertsFailed(ids);
-  log.info(`펄스 야간 보류 플러시 [${trigger}] ${queued.length}건 → ${ok ? "발송" : "실패"}`);
-  return ok ? queued.length : 0;
 }

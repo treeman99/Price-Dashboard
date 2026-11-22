@@ -982,9 +982,8 @@ export function narrateRecoveryLine(n: NarrationInput): string {
 /**
  * "알림" 줄(§6.1).
  *
- * @param imessageConfigured `uptimeIMessageEnabled()`(`src/uptime/notify.ts`) 결과 — 전역 iMessage 설정
- *        AND 대시보드 '가동 중단 알림' 스위치. 이 모듈은 순수 함수라 설정을 못 읽는다 — 호출부(index)가 넘겨 준다.
- *        "아직 안 보냄" 과 "보낼 수 없음(미설정 또는 꺼짐)" 은 사용자에게 완전히 다른 사실이다.
+ * @param imessageConfigured 발송 경로가 있는지. 메일·문자 알림 기능 제거(2026-11-22) 이후 호출부는 false 를
+ *        넘긴다 — 예전에 보낸 사건의 '발송 완료' 기록은 그대로 보여 준다.
  */
 export function narrateNotifyLine(
   notified: DowntimeNotifyState,
@@ -998,8 +997,8 @@ export function narrateNotifyLine(
       : "iMessage 발송 완료";
   }
   if (severity !== "사고") return "보내지 않음(사고 아님)";
-  // 전역 미설정과 대시보드에서 끈 경우를 이 함수는 구분하지 못한다(불리언 하나) — 둘 다 적는다.
-  if (!imessageConfigured) return "미설정 또는 꺼짐";
+  // 메일·문자 알림 기능은 2026-11-22 제거됐다 — 호출부(index)는 항상 false 를 넘긴다.
+  if (!imessageConfigured) return "보내지 않음(메일·문자 알림 기능 제거)";
   if (notified.queuedUntil) {
     const at = toMs(notified.queuedUntil);
     return Number.isFinite(at)
@@ -1193,93 +1192,6 @@ export function narrateStdout(
   // 4줄: 자세히 볼 곳. **절대경로.**
   lines.push(`   자세히: ${journalPath}`);
   return { level: "warn", text: lines.join("\n") };
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// 12. iMessage 본문 (§6.3)
-// ────────────────────────────────────────────────────────────────────────────
-
-/** cause → 문자 첫 줄의 "원인:" 값. 여기서도 "전원이 나갔다"를 함부로 쓰지 않는다. */
-function causePhraseForSms(n: NarrationInput): string {
-  switch (n.cause) {
-    case "sleep": {
-      const reasonKo = sleepReasonKorean(pickCoveringWindow(n)?.reason ?? null);
-      const paren = reasonKo ? ` (${reasonKo})` : "";
-      return `맥북 절전${paren} — 전원이 나간 것은 아닙니다`;
-    }
-    case "reboot-clean":
-      return "맥 정상 종료·재시작 — 사고가 아닙니다";
-    case "restart-intended":
-      return "서비스 재시작 (업데이트) — 맥은 계속 켜져 있었습니다";
-    case "app-gap":
-      return "수집 프로그램이 예기치 않게 종료됐다가 자동으로 복구됐습니다";
-    case "power-cut":
-      return "비정상 종료 (전원 차단이나 강제 종료)";
-    case "battery-dead":
-      return "배터리 방전으로 맥이 꺼졌습니다";
-    case "panic":
-      return "예기치 않은 재시작 (커널 패닉) — 전원이 끊긴 것은 아닙니다";
-    case "unknown":
-      return "원인 확인 불가 — 전원이 나갔다고 단정하지 않겠습니다";
-  }
-}
-
-export interface IMessageOptions {
-  /** ★ 일지 절대경로. 상대경로는 폰에서 열 수 없다(§6.3). */
-  journalPath: string;
-  /** 대시보드 주소. `http://localhost:${config.port}` 를 넘기라. */
-  dashboardUrl?: string;
-}
-
-/**
- * §6.3 iMessage 본문. `sendIMessage(text)` 에 그대로 넘긴다.
- *
- * 문자는 **몇 초 안에 훑고 끝**이라 일지보다 훨씬 짧게 간다. 대신 마지막 두 줄(일지
- * 절대경로 · 대시보드 주소)이 "더 알고 싶으면 여기" 로 이어지는 유일한 다리다.
- */
-export function narrateIMessage(n: NarrationInput, opts: IMessageOptions): string {
-  const startMs = toMs(n.gapStart);
-  const endMs = toMs(n.gapEnd);
-  const dur = durationPhrase(n);
-  const dashboard = opts.dashboardUrl ?? "http://localhost:7777";
-
-  const lines: string[] = [];
-  lines.push(dur ? `[대시보드] 수집이 ${dur} 멈췄습니다` : "[대시보드] 수집이 한동안 멈췄습니다");
-  lines.push("");
-  lines.push(`원인: ${causePhraseForSms(n)}`);
-  lines.push(
-    `구간: ${formatKstSlashDate(startMs)} ${formatKstHm(startMs)} → ${formatKstHm(endMs)}`
-  );
-
-  const done = n.missed.filter((m) => m.evaluated);
-  if (done.length > 0) {
-    lines.push(`못 돈 것: ${done.map((m) => `${m.label} ${m.slot}`).join(", ")}`);
-  }
-  lines.push(`지금: ${narrateRecoveryLine(n)}`);
-  lines.push("");
-  lines.push(`자세한 기록: ${opts.journalPath}`);
-  lines.push(`화면: ${dashboard}`);
-  return lines.join("\n");
-}
-
-/**
- * `narrateIMessage` 의 1인자 어댑터 — `src/uptime/notify.ts` 가 이 이름으로 부른다.
- *
- * ## 왜 옵션을 선택 인자로 뒀나 (모듈 간 계약)
- * `notify.ts` 는 `downtimeIMessageText(ev)` 로 부른다. 이 모듈은 **순수 함수**라
- * `config` 를 import 하지 않으므로(그러면 `dotenv` 가 문구 테스트의 임포트 그래프에
- * 끌려 들어온다) 경로·포트를 스스로 알 수 없다. 그래서 기본값은 저장소 구조에서 역산한
- * `DEFAULT_JOURNAL_PATH` 와 `http://localhost:7777`(config 기본 포트)이다.
- *
- * ★ 호출부 권장: `PORT` 나 `DB_PATH` 를 바꾼 환경이라면 두 번째 인자로
- *   `{ journalPath: resolveJournalPath(config.dbPath), dashboardUrl: \`http://localhost:${"$"}{config.port}\` }`
- *   를 넘겨라. 기본 설정에서는 넘기지 않아도 값이 동일하다.
- */
-export function downtimeIMessageText(n: NarrationInput, opts?: Partial<IMessageOptions>): string {
-  return narrateIMessage(n, {
-    journalPath: opts?.journalPath ?? DEFAULT_JOURNAL_PATH,
-    dashboardUrl: opts?.dashboardUrl,
-  });
 }
 
 /**

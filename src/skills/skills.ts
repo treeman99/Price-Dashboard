@@ -21,7 +21,6 @@ import {
 } from "./curate.ts";
 import { pruneDeadLinks, type PruneResult } from "./verify.ts";
 import { attachAccess, scanRepos, type RepoScan } from "./scan.ts";
-import { sendSkillsEmail, sendSkillsIMessage } from "../notify/skills-email.ts";
 import { getSchedule } from "../scheduler/schedule-store.ts";
 import { lastOccurrence, nextOccurrence } from "../../shared/schedule.ts";
 import type { JobSchedule } from "../../shared/types.ts";
@@ -247,28 +246,17 @@ export function skillsCoveredThisWeek(now: Date = new Date()): boolean {
  * 순위를 다시 매겨 보여주되 DB 에는 남기지 않는다.
  *
  * 이번 회차가 아직 비어 있으면(맥이 자서 놓쳤거나 첫 수집 전) 이 버튼이 곧 그 회차다 —
- * 스케줄러 보충이 했을 일을 그대로 하므로 기록하고, 자동 실행이 켜져 있으면 알림도 보낸다
- * (안 보내면 그 회차 알림이 영영 사라진다 — 보충은 이제 '커버됨'을 보고 건너뛴다).
- * 회차당 한 번뿐이라 눌러 댈 때마다 메일이 나가는 일은 없다.
+ * 스케줄러 보충이 했을 일을 그대로 하므로 기록한다. (메일·문자 알림은 2026-11-22 제거됐다.)
  */
-export function decideManualRun(
-  snap: SkillsSnapshot | null,
-  boundary: Date,
-  autoEnabled: boolean
-): { record: boolean; notify: boolean } {
-  if (snapshotCoversSince(snap, boundary)) return { record: false, notify: false };
-  return { record: true, notify: autoEnabled };
+export function decideManualRun(snap: SkillsSnapshot | null, boundary: Date): { record: boolean } {
+  return { record: !snapshotCoversSince(snap, boundary) };
 }
 
 /** '지금 갱신'(POST /api/skills/refresh). 판정은 실행 직전에 한다(decideManualRun). */
 export function refreshSkillsNow(now: Date = new Date()): Promise<SkillsSnapshot> {
   const job = getSchedule().skills;
-  const { record, notify } = decideManualRun(
-    getSkillsSnapshot(),
-    lastSkillsCycleBoundary(now, job),
-    job.enabled
-  );
-  return refreshSkills({ trigger: record ? "manual" : "manual:interim", notify, record });
+  const { record } = decideManualRun(getSkillsSnapshot(), lastSkillsCycleBoundary(now, job));
+  return refreshSkills({ trigger: record ? "manual" : "manual:interim", record });
 }
 
 // ── 스냅샷 보호 ──────────────────────────────────────────────────────────────
@@ -358,7 +346,7 @@ function emptySnapshot(date: string, source: "empty" | "error", note: string): S
  * 실패한 회차는 직전 스냅샷을 덮어쓰지 않는다(decideSkillsSnapshot).
  */
 export async function refreshSkills(
-  opts: { trigger: string; notify?: boolean; record?: boolean } = { trigger: "manual" }
+  opts: { trigger: string; record?: boolean } = { trigger: "manual" }
 ): Promise<SkillsSnapshot> {
   if (running) {
     log.warn(`스킬 수집 진행 중 → ${opts.trigger} 중복 방지`);
@@ -392,15 +380,7 @@ export async function refreshSkills(
       return decision.snapshot;
     }
 
-    if (opts.notify && decision.notify) {
-      await sendSkillsEmail(decision.snapshot).catch((e) =>
-        log.warn(`스킬 이메일 발송 예외: ${(e as Error).message}`)
-      );
-      await sendSkillsIMessage(decision.snapshot); // 자체 게이트·자체 catch(throw 안 함)
-    } else if (opts.notify) {
-      log.info("스킬 랭킹 0건 → 알림 발송 생략");
-    }
-
+    // 보고서는 Orca IT News에서 전달한다.
     log.info(
       `스킬 랭킹 ${interim ? "중간 점검(기록 안 함)" : "회차"} 완료 [${opts.trigger}] ${date} — 추적 ${decision.snapshot.trackedCount}건, ` +
         `총합 ${decision.snapshot.byStars.length}위 / 증가 ${decision.snapshot.byGrowth.length}위` +

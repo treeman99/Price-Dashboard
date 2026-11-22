@@ -168,33 +168,6 @@ export interface AppConfig {
   /** 팝업/전시 큐레이션 시 insane-engine 으로 실제 페이지 날짜 검증 on/off. 대시보드 운영 설정(events.verifyDates)의 .env 기본값. */
   eventsVerifyDates: boolean;
   anthropicApiKey: string;
-  notify: {
-    email: boolean;
-    gmailAddress: string;
-    /**
-     * Google OAuth2 클라이언트 ID(GOOGLE_CLIENT_ID). Gmail API `messages.send` 로 메일을
-     * 보내기 위한 자격증명이다. 2026-08-08 앱 비밀번호(SMTP)를 대체했다.
-     *
-     * **오해 주의**: OAuth 로 옮겼다고 비밀번호 변경에 안 끊기는 게 아니다. Google 문서는
-     * refresh token 무효화 조건에 "사용자가 비밀번호를 변경했고 **refresh token 이 Gmail
-     * scope 를 포함한** 경우"를 명시한다 — 우리가 딱 그 경우다.
-     *
-     * 그래도 옮긴 이유는 **끊김을 다루는 방식**이 달라서다. 앱 비밀번호는 폐기돼도 아무 신호가
-     * 없어 2026-08-05 사고 때 69건이 실패하도록 사흘간 아무도 몰랐다. OAuth 는 invalid_grant
-     * 로 명시적으로 알려주므로, 그 신호를 잡아 iMessage 경고와 대시보드 재연결 배너로 연결했다.
-     * 즉 목표는 무중단이 아니라 **빠른 인지와 원클릭 복구**다.
-     */
-    googleClientId: string;
-    /** Google OAuth2 클라이언트 시크릿(GOOGLE_CLIENT_SECRET). 로그에 절대 찍지 말 것. */
-    googleClientSecret: string;
-    /**
-     * iMessage 알림 사용 여부(macOS Messages.app osascript 발송). 기본 off.
-     * email 과 함께 **전역 스위치**다 — 대시보드 탭별 알림 스위치와 AND(`isTabNotifyEnabled`).
-     */
-    imessage: boolean;
-    /** iMessage 수신자(본인 전화번호 E.164 예: +8210… 또는 Apple ID 이메일). */
-    imessageTo: string;
-  };
 }
 
 export const config: AppConfig = {
@@ -276,14 +249,6 @@ export const config: AppConfig = {
   },
   eventsVerifyDates: bool(process.env.EVENTS_VERIFY_DATES, true),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY?.trim() || "",
-  notify: {
-    email: bool(process.env.NOTIFY_EMAIL, false),
-    gmailAddress: process.env.GMAIL_ADDRESS?.trim() || "",
-    googleClientId: process.env.GOOGLE_CLIENT_ID?.trim() || "",
-    googleClientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() || "",
-    imessage: bool(process.env.NOTIFY_IMESSAGE, false),
-    imessageTo: process.env.IMESSAGE_TO?.trim() || "",
-  },
 };
 
 export const REPO_ROOT = repoRoot;
@@ -336,24 +301,7 @@ export function validateConfig(): { warnings: string[] } {
     );
   }
 
-  // 발송은 2026-08-08 앱 비밀번호(SMTP)에서 OAuth2 + Gmail API 로 옮겼다. 계정 비밀번호를
-  // 바꾸면 앱 비밀번호가 통째로 폐기되는데, 그때 코드가 조용히 실패해 사흘간 아무도 몰랐다.
-  // 그래서 여기서 요구하는 것도 GMAIL_APP_PASSWORD 가 아니라 OAuth 클라이언트다.
-  //
-  // 다만 클라이언트가 있어도 **아직 연결 안 된** 상태가 따로 있다(리프레시 토큰 없음). 그건
-  // 기동 시점의 정적 설정이 아니라 런타임 상태라 여기서 판정하지 않는다 — 대시보드 배너와
-  // 발송 실패 시 iMessage 경고가 그 역할을 맡는다.
-  if (config.notify.email) {
-    if (!config.notify.gmailAddress) {
-      warnings.push("NOTIFY_EMAIL=true 이지만 GMAIL_ADDRESS 미설정 → 이메일 알림을 건너뜁니다.");
-    }
-    if (!config.notify.googleClientId || !config.notify.googleClientSecret) {
-      warnings.push(
-        "NOTIFY_EMAIL=true 이지만 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET 미설정 → 이메일 알림을 건너뜁니다. " +
-          "Google Cloud Console 에서 OAuth 클라이언트를 발급한 뒤 대시보드에서 계정을 연결하세요."
-      );
-    }
-  }
-
+  // 메일·문자 알림(NOTIFY_EMAIL·GMAIL_ADDRESS·GOOGLE_CLIENT_*·NOTIFY_IMESSAGE·IMESSAGE_TO)은
+  // 2026-11-22 발송 기능 제거와 함께 없앴다. .env 에 값이 남아 있어도 읽지 않는다.
   return { warnings };
 }

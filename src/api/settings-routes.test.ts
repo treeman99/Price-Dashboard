@@ -48,17 +48,17 @@ test("GET /settings — TabSettingsResponse 형태", async () => {
   const r = (await res.json()) as TabSettingsResponse;
   assert.deepEqual(r.settings, r.defaults);
   assert.deepEqual(r.numberRules["youtube.freshDays"], { min: 1, max: 30, unit: "일" });
-  assert.deepEqual(r.channels.stockPulse, ["imessage"]);
-  assert.equal(typeof r.globalChannels.email, "boolean");
-  assert.equal(typeof r.globalChannels.imessage, "boolean");
+  // 메일·문자 알림 제거(2026-11-22): 알림 채널 정보가 응답에 없다.
+  assert.equal("channels" in r, false);
+  assert.equal("globalChannels" in r, false);
+  assert.equal("notify" in r.settings, false);
 });
 
 test("PUT /settings — 부분 수정 저장·병합", async () => {
-  const res = await put({ youtube: { freshDays: 6 }, notify: { news: { email: false } } });
+  const res = await put({ youtube: { freshDays: 6 } });
   assert.equal(res.status, 200);
   const r = (await res.json()) as TabSettingsResponse;
   assert.equal(r.settings.youtube.freshDays, 6);
-  assert.equal(r.settings.notify.news.email, false);
   assert.equal(r.settings.youtube.watchedExcludeDays, r.defaults.youtube.watchedExcludeDays);
 
   const again = (await (await fetch(`${base}/settings`)).json()) as TabSettingsResponse;
@@ -66,7 +66,7 @@ test("PUT /settings — 부분 수정 저장·병합", async () => {
 });
 
 test("PUT /settings — 범위 밖·타입 오류는 400 {error}, 저장분은 그대로", async () => {
-  for (const body of [{ youtube: { freshDays: 0 } }, { stockPulse: { threshold: "high" } }, { nope: {} }, [1]]) {
+  for (const body of [{ youtube: { freshDays: 0 } }, { stockPulse: { threshold: "high" } }, { nope: {} }, { notify: { news: { email: true } } }, [1]]) {
     const res = await put(body);
     assert.equal(res.status, 400, JSON.stringify(body));
     const j = (await res.json()) as { error: string };

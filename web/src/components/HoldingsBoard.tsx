@@ -29,8 +29,7 @@ const COLS = 8;
 
 /**
  * ⚠️ 등락·손익 색은 **한국 증시 관례**다: 상승=빨강, 하락=파랑.
- * 쇼핑 관점(하락=좋음=초록)과 규칙이 정반대이므로 절대 섞지 말 것
- * (src/notify/stock-email.ts 상단 주석과 같은 경고다).
+ * 쇼핑 관점(하락=좋음=초록)과 규칙이 정반대이므로 절대 섞지 말 것.
  */
 function toneClass(pct: number | null): string {
   const t = changeTone(pct);
@@ -226,8 +225,8 @@ function PulseStatus() {
   }
 
   if (!state) return null;
-  const sent = state.recent.filter((r) => r.status === "sent").length;
-  const queued = state.recent.filter((r) => r.status === "queued").length;
+  // 문자 발송은 2026-11-22 제거됐다. 예전 발송 대상이던 판정은 'muted'(판정만 기록)로 남는다.
+  const notable = state.recent.filter((r) => r.status === "muted" || r.status === "sent").length;
 
   return (
     <div className="mb-8 bg-muted/50 px-3.5 py-2">
@@ -239,14 +238,8 @@ function PulseStatus() {
         <Meta>하루 {state.schedule.length}회</Meta>
         <MetaDot />
         <Meta>
-          지난 24시간 · 문자 발송 <strong>{sent}</strong>건
-          {queued > 0 && (
-            <>
-              {" "}
-              · 야간 보류 <strong>{queued}</strong>건
-            </>
-          )}{" "}
-          · 전체 판정 <strong>{state.recent.length}</strong>건
+          지난 24시간 · 문턱 이상 판정 <strong>{notable}</strong>건 · 전체 판정 <strong>{state.recent.length}</strong>건
+          (문자 발송 없음, 기록만)
         </Meta>
         <MetaDot />
         {/* '판정 0건'만 있으면 '조용해서 안심'인지 '안 돌았음'인지 모른다 — 마지막 실행과 결과를 말로 적는다.
@@ -287,13 +280,6 @@ function PulseStatus() {
           지금 실행
         </Button>
       </div>
-
-      {!state.notifyEnabled && (
-        <p className="mt-1.5 flex items-center gap-1 text-[12.5px] text-tone-warn">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          iMessage 알림이 꺼져 있어 펄스를 실행하지 않습니다. .env 의 NOTIFY_IMESSAGE / IMESSAGE_TO 를 확인하세요.
-        </p>
-      )}
 
       {/* 최근 헤드라인은 '동작 확인'용으로 몇 줄만. 피드가 아니다. */}
       {state.recent.length > 0 && (

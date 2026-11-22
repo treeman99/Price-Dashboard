@@ -2,13 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
-import { isMailConfigured } from "../notify/mailer.ts";
-import { isIMessageConfigured } from "../notify/imessage.ts";
 import { severityRank } from "../../shared/pulse.ts";
 import type {
   DeepPartial,
-  NotifyChannel,
-  NotifyTabId,
   NumberRule,
   PulseSeverity,
   TabSettings,
@@ -34,26 +30,6 @@ import type {
 const STORE_PATH = path.join(path.dirname(config.dbPath), "tab-settings.json");
 
 /**
- * 탭별로 **실제로 존재하는** 알림 채널. 추측이 아니라 발송 코드에서 확인한 목록이다:
- * - events·news·youtube·skills: `src/notify/<탭>-email.ts` 의 send<탭>Email + send<탭>IMessage
- * - stock(브리핑): `src/notify/stock-email.ts` sendStockEmail + sendStockIMessage(src/stock/stock.ts 가 둘 다 호출)
- * - stockPulse: 문자만(docs/stock-agent-v2.md §6 '채널' — 펄스 이메일은 보내지 않는다)
- * - uptime: 문자만(src/uptime/notify.ts — iMessage 게이트)
- */
-export const NOTIFY_CHANNELS: Record<NotifyTabId, NotifyChannel[]> = {
-  events: ["email", "imessage"],
-  news: ["email", "imessage"],
-  youtube: ["email", "imessage"],
-  stock: ["email", "imessage"],
-  stockPulse: ["imessage"],
-  skills: ["email", "imessage"],
-  uptime: ["imessage"],
-};
-
-const NOTIFY_TABS = Object.keys(NOTIFY_CHANNELS) as NotifyTabId[];
-const ALL_CHANNELS: NotifyChannel[] = ["email", "imessage"];
-
-/**
  * 숫자 필드 허용 범위(키 = 점 경로). 화면이 응답의 numberRules 로 입력을 제한하고, 서버가 같은 표로
  * 다시 검증한다. 모두 **정수**만 받는다. 범위 근거(각 값의 쓰임새·사고 기록):
  */
@@ -68,7 +44,7 @@ export const NUMBER_RULES: Record<string, NumberRule> = {
   "events.newShowDays": { min: 1, max: 30, unit: "일" },
   // 0 = 종목 알림 끔(config.ts 하한 0). 상한 10 = 전체 일일 상한 기본값 — 한 종목이 하루 예산을 다 쓰는 데까지만 의미가 있다.
   "stockPulse.perSymbolCap": { min: 0, max: 10, unit: "건" },
-  // 0 = 종목 알림 끔. 상한 30 = 인터뷰 확정값(10)의 3배 — 문자가 유일 채널이라 그 이상은 알림 피로로 채널을 통째로 끄게 된다(src/uptime/notify.ts 머리 주석).
+  // 0 = 종목 알림 끔. 상한 30 = 인터뷰 확정값(10)의 3배 — 그 이상은 판정 기록이 소음이 된다(문자 발송은 2026-11-22 제거, 판정만 기록).
   "stockPulse.dailyCap": { min: 0, max: 30, unit: "건" },
   // 0 = 거시·섹터 알림 끔. 상한 10: 종목 상한과 별도 예산이라(pulse-gate.ts decide) 종목 상한 상한과 맞춘다.
   "stockPulse.macroCap": { min: 0, max: 10, unit: "건" },
@@ -132,15 +108,8 @@ const SEVERITIES: PulseSeverity[] = ["urgent", "important", "info"];
  * @param clamped 넘기면 잘린 항목을 "키 원값→값" 으로 모은다.
  */
 function defaults(clamped?: string[]): TabSettings {
-  const notify = {} as TabSettings["notify"];
-  for (const tab of NOTIFY_TABS) {
-    // 현재 동작과 같게 '모두 켜짐' — 실제 on/off 는 전역 .env 스위치가 결정한다.
-    // 그 탭에 없는 채널은 false 로 고정(화면이 원값을 보여 줘도 오해가 없게).
-    notify[tab] = { email: NOTIFY_CHANNELS[tab].includes("email"), imessage: NOTIFY_CHANNELS[tab].includes("imessage") };
-  }
   const min = (ms: number) => ms / 60_000;
   const out: TabSettings = {
-    notify,
     youtube: {
       freshDays: config.youtubeFreshDays,
       watchedExcludeDays: config.youtubeWatchedExcludeDays,
@@ -245,16 +214,6 @@ function mergeOnto(def: TabSettings, stored: Record<string, unknown>): TabSettin
   for (const [section, defSection] of Object.entries(sections)) {
     const rawSection = stored[section];
     if (!isPlainObject(rawSection)) continue;
-    if (section === "notify") {
-      for (const tab of NOTIFY_TABS) {
-        const rawTab = rawSection[tab];
-        if (!isPlainObject(rawTab)) continue;
-        for (const ch of NOTIFY_CHANNELS[tab]) {
-          if (typeof rawTab[ch] === "boolean") out.notify[tab][ch] = rawTab[ch] as boolean;
-        }
-      }
-      continue;
-    }
     for (const field of Object.keys(defSection)) {
       defSection[field] = lenientLeaf(`${section}.${field}`, defSection[field], rawSection[field]);
     }
@@ -286,7 +245,7 @@ function strictLeaf(key: string, def: unknown, v: unknown): unknown {
 /**
  * 부분 수정 저장. 전달된 필드만 검증해 반영하고 최종(병합) 설정을 돌려준다.
  * 알 수 없는 항목·타입 오류·범위 밖 값은 throw(→ 400) — 조용히 버리면 화면은 저장된 줄 안다.
- * 예외: 탭에 없는 알림 채널(예: stockPulse.email)은 타입만 확인하고 무시한다(계약 §2).
+ * (메일·문자 알림 채널 notify 는 2026-11-22 제거 — 보내면 '알 수 없는 설정 항목'이다.)
  *
  * 저장은 **기본값과 다른 필드만**(sparse) 남긴다. 기본값과 같은 값을 보내면 저장분에서 빠져
  * 다시 .env 를 따른다 — 화면의 '기본값으로 되돌리기'가 별도 API 없이 이 경로로 된다.
@@ -302,22 +261,6 @@ export function saveTabSettings(patch: DeepPartial<TabSettings>): TabSettings {
     if (!Object.hasOwn(nextSections, section)) throw new Error(`알 수 없는 설정 항목: ${section}`);
     if (!isPlainObject(value)) throw new Error(`${section}: 객체여야 합니다.`);
 
-    if (section === "notify") {
-      for (const [tab, chans] of Object.entries(value)) {
-        if (!NOTIFY_TABS.includes(tab as NotifyTabId)) throw new Error(`알 수 없는 알림 탭: ${tab}`);
-        if (!isPlainObject(chans)) throw new Error(`notify.${tab}: 객체여야 합니다.`);
-        for (const [ch, on] of Object.entries(chans)) {
-          if (!ALL_CHANNELS.includes(ch as NotifyChannel)) {
-            throw new Error(`알 수 없는 알림 채널: notify.${tab}.${ch}`);
-          }
-          if (typeof on !== "boolean") throw new Error(`notify.${tab}.${ch}: true/false 여야 합니다.`);
-          if (!NOTIFY_CHANNELS[tab as NotifyTabId].includes(ch as NotifyChannel)) continue;
-          next.notify[tab as NotifyTabId][ch as NotifyChannel] = on;
-        }
-      }
-      continue;
-    }
-
     const target = nextSections[section];
     for (const [field, v] of Object.entries(value)) {
       if (!Object.hasOwn(target, field)) throw new Error(`알 수 없는 설정 항목: ${section}.${field}`);
@@ -325,7 +268,7 @@ export function saveTabSettings(patch: DeepPartial<TabSettings>): TabSettings {
     }
   }
 
-  writeStored(diffFromDefaults(next, def));
+  writeStored({ ...legacySections(readStored(), next), ...diffFromDefaults(next, def) });
   return getTabSettings();
 }
 
@@ -338,19 +281,20 @@ function diffFromDefaults(next: TabSettings, def: TabSettings): Record<string, u
     const diff: Record<string, unknown> = {};
     for (const [field, v] of Object.entries(n[section])) {
       const dv = d[section][field];
-      if (section === "notify") {
-        const tabDiff: Record<string, boolean> = {};
-        for (const ch of ALL_CHANNELS) {
-          const on = (v as Record<NotifyChannel, boolean>)[ch];
-          if (on !== (dv as Record<NotifyChannel, boolean>)[ch]) tabDiff[ch] = on;
-        }
-        if (Object.keys(tabDiff).length) diff[field] = tabDiff;
-      } else if (v !== dv) {
-        diff[field] = v;
-      }
+      if (v !== dv) diff[field] = v;
     }
     if (Object.keys(diff).length) out[section] = diff;
   }
+  return out;
+}
+
+/**
+ * 지금 스키마에 없는 저장 섹션(예: 제거된 notify)은 **그대로 보존**한다. 기능을 지웠다고 사용자의
+ * 기존 설정 파일 내용을 저장 한 번에 날리지 않는다(되돌릴 때 원래 값이 남아 있게).
+ */
+function legacySections(stored: Record<string, unknown>, known: TabSettings): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(stored)) if (!Object.hasOwn(known, k)) out[k] = v;
   return out;
 }
 
@@ -362,34 +306,13 @@ function writeStored(stored: Record<string, unknown>): void {
   fs.renameSync(tmp, STORE_PATH);
 }
 
-/** 전역 채널 상태(.env 스위치 + 수신자/자격증명). */
-function globalChannels(): Record<NotifyChannel, boolean> {
-  return { email: isMailConfigured(), imessage: isIMessageConfigured() };
-}
-
 /** GET/PUT /api/settings 응답. */
 export function getTabSettingsResponse(): TabSettingsResponse {
   return {
     settings: getTabSettings(),
     defaults: defaults(),
     numberRules: NUMBER_RULES,
-    channels: NOTIFY_CHANNELS,
-    globalChannels: globalChannels(),
   };
-}
-
-/**
- * 이 탭이 이 채널로 보내도 되는가 = 탭에 그 채널이 있고 AND 전역 .env 스위치(+수신자/자격증명)가
- * 켜져 있고 AND 탭 스위치가 켜져 있다. 전역이 꺼져 있으면 탭에서 켜도 나가지 않는다.
- *
- * 메일의 전역 판정은 `isMailConfigured()` 다 — '연결됨'까지는 요구하지 않는다(그 함수 주석:
- * 미연결을 여기서 접으면 조용히 건너뛰는 2026-08-05 실패 모드가 된다).
- */
-export function isTabNotifyEnabled(tab: NotifyTabId, channel: NotifyChannel): boolean {
-  if (!NOTIFY_CHANNELS[tab]?.includes(channel)) return false;
-  const globalOn = channel === "email" ? isMailConfigured() : isIMessageConfigured();
-  if (!globalOn) return false;
-  return getTabSettings().notify[tab][channel];
 }
 
 /** 탭 타임아웃(분) → ms. 소비처가 호출 시점에 부른다. */

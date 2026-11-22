@@ -5,7 +5,6 @@ import { getTabSettings } from "../settings/tab-settings.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
 import { curateYoutube } from "./curate.ts";
-import { sendYoutubeEmail, sendYoutubeIMessage } from "../notify/youtube-email.ts";
 import { loadCategories } from "./categories.ts";
 import { addReclass } from "./reclass.ts";
 import type { YoutubeSnapshot, YoutubeCategory, YoutubeVideo } from "../../shared/types.ts";
@@ -76,7 +75,7 @@ export function isYoutubeCollecting(): boolean {
  * 이력은 저장하지 않고 최신 스냅샷만 덮어쓴다.
  */
 export async function refreshYoutube(
-  opts: { trigger: string; notify?: boolean } = { trigger: "manual" }
+  opts: { trigger: string } = { trigger: "manual" }
 ): Promise<YoutubeSnapshot> {
   if (running) {
     log.warn(`유튜브 수집 진행 중 → ${opts.trigger} 중복 방지`);
@@ -106,14 +105,7 @@ export async function refreshYoutube(
 
     const total = snapshot.categories.reduce((a, c) => a + c.items.length, 0);
     // 영상이 0건이면 이메일을 보내지 않는다(빈 다이제스트 방지).
-    if (opts.notify && total > 0) {
-      await sendYoutubeEmail(snapshot).catch((e) =>
-        log.warn(`유튜브 이메일 발송 예외: ${(e as Error).message}`)
-      );
-      await sendYoutubeIMessage(snapshot); // 자체 게이트·자체 catch(throw 안 함)
-    } else if (opts.notify) {
-      log.info("유튜브 0건 → 이메일 발송 생략");
-    }
+    // 보고서는 Orca IT News에서 전달한다.
     log.info(`유튜브 수집 완료 [${opts.trigger}] ${date} (총 ${total}건, source=${snapshot.source})`);
     // 여기까지 왔어도 source=empty 면(이전 스냅샷이 없어 빈 결과를 그대로 저장한 경우) 실패다.
     lastAttempt =

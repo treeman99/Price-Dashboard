@@ -7,7 +7,6 @@ import { Notice, Segmented } from "@/components/ui/page";
 import { ScheduleEditor, finalizeJob } from "@/components/ScheduleEditor";
 import { api } from "@/lib/api";
 import {
-  CHANNEL_LABEL,
   TAB_CONFIG,
   buildSchedulePatch,
   buildSettingsPatch,
@@ -84,14 +83,12 @@ export function TabConfigPanel({
     }
   }, [settings, seed.settings, def.fields]);
 
-  const hasSettings = def.fields.length > 0 || def.notify != null;
-  const channels = def.notify && settings ? settings.channels[def.notify] ?? [] : [];
+  const hasSettings = def.fields.length > 0;
 
   function resetSettings() {
     if (!settings || !draft) return;
     let next = draft;
     for (const f of def.fields) next = setAtPath(next, f.path, getAtPath(settings.defaults, f.path));
-    if (def.notify) next = setAtPath(next, `notify.${def.notify}`, settings.defaults.notify[def.notify]);
     setDraft(next);
     setNums(
       Object.fromEntries(
@@ -137,7 +134,7 @@ export function TabConfigPanel({
         }
         next = setAtPath(next, f.path, r.value);
       }
-      settingsPatch = buildSettingsPatch(seed.settings, next, def, channels);
+      settingsPatch = buildSettingsPatch(seed.settings, next, def);
     }
 
     if (!schedPatch && !settingsPatch) {
@@ -305,33 +302,6 @@ export function TabConfigPanel({
             )
           ) : (
             <ul className="divide-y">
-              {def.notify && channels.length > 0 && (
-                <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-2.5">
-                  <div className="min-w-0 flex-1 basis-40">
-                    <p className="text-sm font-medium">알림</p>
-                    <p className="text-[12.5px] text-muted-foreground">켜도 .env 전역 스위치가 꺼져 있으면 나가지 않습니다.</p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                    {channels.map((ch) => {
-                      const global = settings.globalChannels[ch];
-                      const notify = def.notify!;
-                      const on = draft.notify[notify][ch];
-                      return (
-                        <label key={ch} className="inline-flex items-center gap-2 text-[13px]">
-                          <Switch
-                            checked={global && on}
-                            disabled={!global}
-                            onCheckedChange={(c) => setDraft(setAtPath(draft, `notify.${notify}.${ch}`, c))}
-                            aria-label={`${CHANNEL_LABEL[ch]} 알림`}
-                          />
-                          <span>{CHANNEL_LABEL[ch]}</span>
-                          {!global && <span className="text-[12px] text-muted-foreground">전역에서 꺼짐(.env)</span>}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </li>
-              )}
               {def.fields.map(renderField)}
             </ul>
           )}

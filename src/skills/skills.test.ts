@@ -303,18 +303,17 @@ test("경계는 스케줄을 따른다 — 기본(파일 없음)은 매주 월 0
 // 2026-09-14(월) 09:00 회차. prevOk 는 9/7 회차, freshOk 는 9/14 09:06 에 끝난 회차다.
 const BOUNDARY_0914 = new Date("2026-09-14T09:00:00.000Z");
 
-test("이번 회차가 이미 기록돼 있으면 중간 점검 — DB 에 남기지 않고 알림도 없다", () => {
-  assert.deepEqual(decideManualRun(freshOk(), BOUNDARY_0914, true), { record: false, notify: false });
+test("이번 회차가 이미 기록돼 있으면 중간 점검 — DB 에 남기지 않는다", () => {
+  assert.deepEqual(decideManualRun(freshOk(), BOUNDARY_0914), { record: false });
 });
 
-test("이번 회차가 비어 있으면 버튼이 곧 그 회차 — 기록하고, 자동 실행이 켜져 있을 때만 알린다", () => {
-  assert.deepEqual(decideManualRun(prevOk(), BOUNDARY_0914, true), { record: true, notify: true });
-  assert.deepEqual(decideManualRun(prevOk(), BOUNDARY_0914, false), { record: true, notify: false });
-  assert.deepEqual(decideManualRun(null, BOUNDARY_0914, true), { record: true, notify: true });
+test("이번 회차가 비어 있으면 버튼이 곧 그 회차 — 기록한다", () => {
+  assert.deepEqual(decideManualRun(prevOk(), BOUNDARY_0914), { record: true });
+  assert.deepEqual(decideManualRun(null, BOUNDARY_0914), { record: true });
 });
 
 test("실패 스냅샷은 회차를 커버하지 않는다 — 다음 버튼은 정식 회차로 돈다", () => {
-  assert.equal(decideManualRun(freshError(), BOUNDARY_0914, true).record, true);
+  assert.equal(decideManualRun(freshError(), BOUNDARY_0914).record, true);
 });
 
 test("★ 중간 점검은 점검 시각이 아니라 딛고 선 회차 시각으로 커버를 판정한다", () => {
@@ -324,7 +323,7 @@ test("★ 중간 점검은 점검 시각이 아니라 딛고 선 회차 시각�
     interim: { cycleUpdatedAt: prevOk().updatedAt },
   });
   assert.equal(snapshotCoversSince(interim, BOUNDARY_0914), false, "보충이 막히면 그 주 기록이 빠진다");
-  assert.equal(decideManualRun(interim, BOUNDARY_0914, true).record, true);
+  assert.equal(decideManualRun(interim, BOUNDARY_0914).record, true);
 
   // 9/14 회차 위에서 한 점검은 그 회차를 계속 커버한다(보충이 같은 회차를 또 돌지 않게).
   const afterCycle = freshOk({
@@ -332,5 +331,5 @@ test("★ 중간 점검은 점검 시각이 아니라 딛고 선 회차 시각�
     interim: { cycleUpdatedAt: freshOk().updatedAt },
   });
   assert.equal(snapshotCoversSince(afterCycle, BOUNDARY_0914), true);
-  assert.equal(decideManualRun(afterCycle, BOUNDARY_0914, true).record, false);
+  assert.equal(decideManualRun(afterCycle, BOUNDARY_0914).record, false);
 });

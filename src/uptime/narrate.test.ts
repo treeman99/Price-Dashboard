@@ -3,12 +3,10 @@ import { test } from "node:test";
 import {
   DOWNTIME_JOURNAL_HEADER,
   REASON_PREFIX,
-  downtimeIMessageText,
   formatDurationKorean,
   formatKoreanClock,
   journalHeader,
   narrate,
-  narrateIMessage,
   narrateMissedSummary,
   narrateNotifyLine,
   narrateRecoveryLine,
@@ -556,7 +554,7 @@ test("지금 상태: recoveryState 4종 문장 (§8.5)", () => {
   assert.equal(withState("복구중", []), "정상입니다. 확인하실 것 없습니다.");
 });
 
-test("알림 줄: 발송 완료 / 조용시간 대기 / 사고 아님 / 미설정 또는 꺼짐", () => {
+test("알림 줄: 발송 완료(과거 기록) / 조용시간 대기 / 사고 아님 / 발송 기능 제거", () => {
   assert.equal(
     narrateNotifyLine({ imessage: true, at: "2026-08-02T11:15:00+09:00", queuedUntil: null }, "사고"),
     "iMessage 발송 완료 11:15"
@@ -574,7 +572,7 @@ test("알림 줄: 발송 완료 / 조용시간 대기 / 사고 아님 / 미설�
   );
   assert.equal(
     narrateNotifyLine({ imessage: false, at: null, queuedUntil: null }, "사고", false),
-    "미설정 또는 꺼짐"
+    "보내지 않음(메일·문자 알림 기능 제거)"
   );
 });
 
@@ -684,58 +682,6 @@ test("stdout: 프로세스가 죽은 사건에는 LLM 알리바이를 붙이지 
   });
   const { text } = narrateStdout(n, JOURNAL);
   assert.ok(!text.includes("LLM 장애"), text);
-});
-
-// ────────────────────────────────────────────────────────────────────────────
-// 11. iMessage (§6.3)
-// ────────────────────────────────────────────────────────────────────────────
-
-test("iMessage: 원인·구간·못 돈 것·절대경로·대시보드 주소가 모두 들어간다", () => {
-  const text = narrateIMessage(sleepIncident(), {
-    journalPath: JOURNAL,
-    dashboardUrl: "http://localhost:7777",
-  });
-
-  assert.match(text, /^\[대시보드\] 수집이 10시간 45분 멈췄습니다\n\n/u);
-  assert.match(text, /원인: 맥북 절전 \(덮개 닫힘\) — 전원이 나간 것은 아닙니다/u);
-  assert.match(text, /구간: 8\/2 00:29 → 11:15/u);
-  assert.match(text, /못 돈 것: 뉴스 08:00, 유튜브 소식 09:00, 팝업·전시 10:00/u);
-  assert.match(text, /지금: 깨어난 직후 누락 점검이 자동으로 시작됐습니다/u);
-  assert.ok(text.includes(`자세한 기록: ${JOURNAL}`), text);
-  assert.ok(text.includes("화면: http://localhost:7777"), text);
-  // ★ 상대경로는 폰에서 열 수 없다 — 절대경로가 아니면 알림이 도달해도 정보엔 도달 못 한다.
-  assert.match(text, /자세한 기록: \//u);
-});
-
-test("iMessage: unknown 은 문자에서도 전원 차단을 단정하지 않는다", () => {
-  const n = input({
-    cause: "unknown",
-    confidence: "불명",
-    severity: "기록만",
-    evidence: evidence({ bootChanged: true, shutdownLogParsed: false, sameProcess: false, currentPid: 4242 }),
-  });
-  const text = narrateIMessage(n, { journalPath: JOURNAL });
-  assert.match(text, /원인: 원인 확인 불가 — 전원이 나갔다고 단정하지 않겠습니다/u);
-  assert.ok(text.includes("화면: http://localhost:7777"), "대시보드 주소 기본값");
-});
-
-// ────────────────────────────────────────────────────────────────────────────
-// 12. 경로 헬퍼
-// ────────────────────────────────────────────────────────────────────────────
-
-test("downtimeIMessageText: 인자 하나로 불러도 절대경로·대시보드 주소가 채워진다 (notify.ts 계약)", () => {
-  // notify.ts 는 `downtimeIMessageText(ev)` 로 부른다. narrate 는 config 를 못 읽으므로
-  // 저장소 구조에서 역산한 기본 경로가 들어가야 한다 — 여기서 비면 문자가 정보에 도달 못 한다.
-  const text = downtimeIMessageText(sleepIncident());
-  assert.match(text, /자세한 기록: \/.*\/data\/downtime\.log$/mu);
-  assert.ok(text.includes("화면: http://localhost:7777"), text);
-  // 두 번째 인자로 덮어쓸 수 있어야 한다(DB_PATH/PORT 를 바꾼 환경).
-  const custom = downtimeIMessageText(sleepIncident(), {
-    journalPath: "/tmp/x/downtime.log",
-    dashboardUrl: "http://localhost:8123",
-  });
-  assert.ok(custom.includes("자세한 기록: /tmp/x/downtime.log"), custom);
-  assert.ok(custom.includes("화면: http://localhost:8123"), custom);
 });
 
 test("journalHeader(): store.ts 의 DowntimeNarrator.journalHeader 에 그대로 꽂힌다", () => {

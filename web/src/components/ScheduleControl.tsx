@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, Clock, Settings2 } from "lucide-react";
+import { Clock, Settings2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -8,13 +8,12 @@ import {
   DialogDescription,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Meta } from "@/components/ui/page";
 import { TabConfigPanel } from "@/components/TabConfigPanel";
 import { cn } from "@/lib/utils";
-import { CHANNEL_LABEL, TAB_CONFIG, compactHourlyTimes, formatWhen, type ConfigTabId } from "@/lib/tabConfig";
+import { TAB_CONFIG, compactHourlyTimes, formatWhen, type ConfigTabId } from "@/lib/tabConfig";
 import { reloadTabConfig, useTabConfig } from "@/lib/tabConfigStore";
 import { describeRepeat, describeSchedule, nextOccurrence } from "@shared/schedule";
-import type { JobSchedule, NotifyTabId, ScheduleJobId, TabSettingsResponse } from "@shared/types";
+import type { JobSchedule, ScheduleJobId } from "@shared/types";
 
 /**
  * 스케줄 한 줄 요약 + 다음 실행 표기. 꺼짐이면 next 는 null.
@@ -31,12 +30,6 @@ export function jobSummary(job: JobSchedule, now: Date): { text: string; full: s
   };
 }
 
-/** 탭 알림이 실제로 나가는 채널(탭 스위치 AND 전역 스위치). */
-export function activeChannels(settings: TabSettingsResponse, notify: NotifyTabId) {
-  return (settings.channels[notify] ?? []).filter(
-    (ch) => settings.settings.notify[notify]?.[ch] && settings.globalChannels[ch]
-  );
-}
 
 /** 탭 '자동 수집·설정' 다이얼로그 제목. */
 export function tabConfigTitle(tab: ConfigTabId) {
@@ -123,35 +116,3 @@ export function ScheduleControl({
   );
 }
 
-/**
- * 툴바의 알림 문구("수집 시 이메일·iMessage 발송"). 탭별 알림 설정을 따라간다 —
- * 고정 문구로 두면 알림을 꺼도 '이메일 발송'이라고 계속 거짓말을 한다.
- * 설정을 못 읽으면(옛 서버) 원래 문구(fallback)를 그대로 보여 준다.
- */
-export function NotifyMeta({
-  notify,
-  verb = "수집 시",
-  suffix = "",
-  fallback,
-}: {
-  notify: NotifyTabId;
-  verb?: string;
-  suffix?: string;
-  fallback: string;
-}) {
-  const { settings } = useTabConfig();
-  if (!settings) return <Meta>{fallback}</Meta>;
-  const on = activeChannels(settings, notify);
-  if (on.length === 0) return <Meta>알림 꺼짐</Meta>;
-  const channels = on.map((ch) => CHANNEL_LABEL[ch]).join("·");
-  // 툴바에는 어느 채널로 가는지만 둔다. 언제 나가는지(수집 시·지금 갱신 포함)는 매번 읽을 문장이
-  // 아니라 툴팁으로 내린다(UI 검토: 툴바가 운영 설명서가 되어 첫 화면을 차지했다).
-  return (
-    <Meta>
-      <span className="inline-flex items-center gap-1" title={`${verb} ${channels} 발송${suffix}`}>
-        <Bell aria-hidden className="h-3.5 w-3.5" />
-        알림 {channels}
-      </span>
-    </Meta>
-  );
-}

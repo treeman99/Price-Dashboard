@@ -115,16 +115,8 @@ export interface ScheduleResponse {
 // 저장: data/tab-settings.json(바꾼 필드만 sparse override) 위에 .env(config.ts) 기본값을 병합.
 // 저장 즉시 반영된다(재시작 불필요). 비밀값·경로·포트는 여기 넣지 않는다.
 
-/** 알림을 보내는 주체. 로또는 알림이 없다. uptime = 가동 중단 사후 보고. */
-export type NotifyTabId = "events" | "news" | "youtube" | "stock" | "stockPulse" | "skills" | "uptime";
-export type NotifyChannel = "email" | "imessage";
-
+// 메일·문자 알림 채널 설정(notify)은 2026-11-22 발송 기능 제거와 함께 없앴다.
 export interface TabSettings {
-  /**
-   * 탭별 알림 채널 on/off. 전역 .env 스위치(NOTIFY_EMAIL / NOTIFY_IMESSAGE+수신자)와 **AND** 다 —
-   * 전역이 꺼져 있으면 여기서 켜도 나가지 않는다. 그 탭에 없는 채널 값은 무시된다(channels 참고).
-   */
-  notify: Record<NotifyTabId, Record<NotifyChannel, boolean>>;
   youtube: {
     /** 최근 N일 이내 게시 영상만 채택(YOUTUBE_FRESH_DAYS). */
     freshDays: number;
@@ -184,10 +176,6 @@ export interface TabSettingsResponse {
   defaults: TabSettings;
   /** 숫자 필드 범위. 키는 점 경로("youtube.freshDays", "timeouts.newsMin" …). */
   numberRules: Record<string, NumberRule>;
-  /** 탭별로 실제 존재하는 알림 채널. */
-  channels: Record<NotifyTabId, NotifyChannel[]>;
-  /** 전역 채널 상태(.env). false 인 채널은 화면이 '전역에서 꺼짐'으로 표시한다. */
-  globalChannels: Record<NotifyChannel, boolean>;
 }
 
 // ── 수집/큐레이션 에이전트 모델 설정 ──
