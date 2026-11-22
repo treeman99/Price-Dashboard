@@ -295,7 +295,7 @@ export async function deliverReport(r: DailyReportJson, opts: { only?: ReportCha
 
   for (const c of ["email", "imessage"] as const) {
     if (!wanted(c)) {
-      out.skipped[c] = "보고서 탭 알림 꺼짐";
+      out.skipped[c] = opts.only ? "이번 발송 대상 아님" : "보고서 탭 알림 꺼짐";
       continue;
     }
     if (!ch[c].ready) {

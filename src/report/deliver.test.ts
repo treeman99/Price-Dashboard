@@ -160,6 +160,7 @@ test("화면의 '보내기'(only)는 탭 스위치와 무관하게 고른 채널
   const r = await deliver.deliverReport(sampleReport(), { only: ["imessage"] });
   assert.ok(r.sent.imessage);
   assert.equal(r.sent.email, undefined);
+  assert.equal(r.skipped.email, "이번 발송 대상 아님", "고르지 않은 채널을 '스위치 꺼짐'으로 오해하게 적지 않는다");
   assert.equal(texts.length, 1);
   assert.equal(mails.length, 0);
 });
