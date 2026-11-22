@@ -669,9 +669,9 @@ export function insertPulseAlert(input: InsertPulseAlertInput): PulseAlertRecord
 }
 
 /**
- * 최근 `hours` 시간 내에 **실제로 사용자에게 도달했거나 도달 예정인** 알림.
+ * 최근 `hours` 시간 내에 '문턱 이상'으로 올라간 판정(예전 기록의 'sent'·'queued', 발송 제거 뒤의 'muted').
  *
- * ⚠️ status 를 'sent'|'queued' 로 좁히는 것이 핵심이다. 중복 판정의 기준은 "이 사건을 이미
+ * ⚠️ status 를 'sent'|'queued'|'muted' 로 좁히는 것이 핵심이다. 중복 판정의 기준은 "이 사건을 이미
  * 알렸는가"이지 "이 사건을 이미 봤는가"가 아니다. 상한에 걸려 잘린('capped') 건이나 문턱
  * 미달('below') 건까지 중복으로 세면, 한 번 잘린 이슈는 **강도가 올라가도 영원히 못 나간다**
  * — 상한은 그날의 소음을 줄이려는 장치이지 사건을 영구 차단하려는 장치가 아니다.
@@ -681,7 +681,7 @@ export function recentPulseAlerts(hours: number): PulseAlertRecord[] {
   const rows = db()
     .prepare(
       `SELECT * FROM stock_pulse_alerts
-       WHERE created_at >= ? AND status IN ('sent','queued')
+       WHERE created_at >= ? AND status IN ('sent','queued','muted')
        ORDER BY created_at DESC`
     )
     .all(since) as unknown as PulseRow[];
@@ -698,10 +698,11 @@ export function allRecentPulseAlerts(hours: number): PulseAlertRecord[] {
 }
 
 /**
- * 그날 실제 발송된 건수. 상한 판정의 근거다.
+ * 그날 '문턱 이상'으로 올라간 판정 건수. 상한 판정의 근거다.
  *
- * 'queued'(야간 보류)도 **센다** — 07:00 에 반드시 나가므로 발송 예정 물량이다. 빼고 세면
- * 새벽 내내 상한이 소진되지 않아 아침 묶음 문자에 20건이 실린다.
+ * 메일·문자 발송 제거(2026-11-22) 뒤에는 발송 대상이던 판정이 'muted' 로 기록되므로 함께 센다 —
+ * 빼면 상한이 영영 차지 않아 같은 날 판정이 무제한으로 '문턱 이상'에 쌓인다. 예전 기록의
+ * 'sent'·'queued' 도 그대로 센다.
  */
 export function countPulseSentToday(
   date: string
@@ -709,7 +710,7 @@ export function countPulseSentToday(
   const rows = db()
     .prepare(
       `SELECT symbol, COUNT(*) AS n FROM stock_pulse_alerts
-       WHERE date = ? AND status IN ('sent','queued')
+       WHERE date = ? AND status IN ('sent','queued','muted')
        GROUP BY symbol`
     )
     .all(date) as unknown as Array<{ symbol: string | null; n: number }>;
@@ -725,64 +726,12 @@ export function countPulseSentToday(
   return { total, bySymbol, macro };
 }
 
-/** 야간 보류 큐(오래된 것부터). 07:00 플러시가 읽는다. */
+/** 예전 야간 보류 큐(오래된 것부터). 발송 제거 뒤에는 새로 쌓이지 않는다(점검·테스트용). */
 export function listQueuedPulseAlerts(): PulseAlertRecord[] {
   const rows = db()
     .prepare("SELECT * FROM stock_pulse_alerts WHERE status = 'queued' ORDER BY created_at")
     .all() as unknown as PulseRow[];
   return rows.map(rowToPulse);
-}
-
-/** 큐에서 꺼내 발송한 건들을 'sent' 로 승격. 빈 배열이면 아무것도 하지 않는다. */
-export function markPulseAlertsSent(ids: number[]): void {
-  if (!ids.length) return;
-  const conn = db();
-  const stmt = conn.prepare(
-    "UPDATE stock_pulse_alerts SET status = 'sent', sent_at = ? WHERE id = ?"
-  );
-  const now = nowIso();
-  conn.exec("BEGIN");
-  try {
-    for (const id of ids) stmt.run(now, id);
-    conn.exec("COMMIT");
-  } catch (e) {
-    conn.exec("ROLLBACK");
-    throw e;
-  }
-}
-
-/**
- * 보류분을 '보내지 않고 기록만'(muted)으로 내린다. 대시보드에서 펄스 문자를 꺼 둔 상태로 플러시가
- * 돌 때 쓴다 — 큐에 남겨 두면 다시 켜는 순간 밀린 문자가 한꺼번에 나간다.
- * muted 는 상한·중복 집계(sent|queued)에서 빠지므로 그날 예산도 돌려받는다.
- */
-export function markPulseAlertsMuted(ids: number[]): void {
-  if (!ids.length) return;
-  const conn = db();
-  const stmt = conn.prepare("UPDATE stock_pulse_alerts SET status = 'muted' WHERE id = ?");
-  conn.exec("BEGIN");
-  try {
-    for (const id of ids) stmt.run(id);
-    conn.exec("COMMIT");
-  } catch (e) {
-    conn.exec("ROLLBACK");
-    throw e;
-  }
-}
-
-/** 발송 실패 표시. 큐에 영원히 남아 매 플러시마다 재시도하는 것을 막는다. */
-export function markPulseAlertsFailed(ids: number[]): void {
-  if (!ids.length) return;
-  const conn = db();
-  const stmt = conn.prepare("UPDATE stock_pulse_alerts SET status = 'failed' WHERE id = ?");
-  conn.exec("BEGIN");
-  try {
-    for (const id of ids) stmt.run(id);
-    conn.exec("COMMIT");
-  } catch (e) {
-    conn.exec("ROLLBACK");
-    throw e;
-  }
 }
 
 // ── 보존 정책 ───────────────────────────────────────────

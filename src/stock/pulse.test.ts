@@ -8,6 +8,7 @@ import path from "node:path";
  * 펄스 실행(runPulse) — 메일·문자 발송 기능 제거(2026-11-22) 이후의 계약.
  *
  * - 펄스는 판정을 **원장에만** 남긴다. 예전 발송·보류 대상('sent'·'queued')은 'muted'(판정만 기록)다.
+ * - muted 는 예전 sent 처럼 상한·중복 집계에 센다 — 같은 이슈가 매시간 다시 '문턱 이상'으로 쌓이지 않는다.
  * - 야간(조용 시간)에도 큐에 넣지 않는다 — 나중에 몰아 보낼 발송 경로가 없다.
  * - 실행 on/off 는 대시보드 스케줄이 정본이고, 환경 변수(iMessage)로 실행을 막지 않는다.
  *
@@ -97,8 +98,11 @@ repo.createHolding({
 beforeEach(() => {
   agentCalls = 0;
   agentReply = null;
-  // 조용 시간 창 없음(시작=끝) — 각 테스트가 필요한 것만 바꾼다.
-  saveTabSettings({ stockPulse: { quietStartHour: 0, quietEndHour: 0 } });
+  // 조용 시간 창 없음(시작=끝) + 상한 최대 — 같은 날 원장에 쌓인 앞 테스트의 판정(muted 도 상한에 센다)이
+  // 다음 테스트를 'capped' 로 만들지 않게 한다. 상한 자체는 아래 전용 테스트가 본다.
+  saveTabSettings({
+    stockPulse: { quietStartHour: 0, quietEndHour: 0, perSymbolCap: 10, dailyCap: 30, macroCap: 10 },
+  });
 });
 
 const rowsOf = (slot: string) => repo.allRecentPulseAlerts(24).filter((r) => r.slot === slot);
@@ -136,33 +140,66 @@ test("발송 기능 제거: 문턱을 넘은 판정도 'muted' 로만 기록되�
   assert.equal(rows.length, 2);
   assert.ok(rows.every((x) => x.status === "muted"), JSON.stringify(rows.map((x) => x.status)));
   assert.equal(repo.listQueuedPulseAlerts().length, 0);
-  assert.deepEqual(repo.countPulseSentToday(today()), { total: 0, bySymbol: {}, macro: 0 });
+  // 문턱 이상 판정(muted)은 그날 상한 집계에 잡힌다 — 종목 1 + 거시 1
+  assert.deepEqual(repo.countPulseSentToday(today()), { total: 2, bySymbol: { AAPL: 1 }, macro: 1 });
+});
+
+/** 앞선 테스트와 겹치지 않는 사건 두 개(지문·헤드라인 모두 다르게 — 중복 판정은 헤드라인 유사도도 본다). */
+function distinctReply(company: string, macro: string): string {
+  const j = JSON.parse(AGENT_JSON);
+  j.impacts[0].issueKey = company;
+  j.impacts[0].headline = company;
+  j.impacts[1].issueKey = macro;
+  j.impacts[1].headline = macro;
+  return JSON.stringify(j);
+}
+
+test("같은 이슈를 다음 실행에서 다시 판정하면 'dup' 으로 기록한다(muted 도 중복 기준에 든다)", async () => {
+  agentReply = () => distinctReply("애플 실적 가이던스 하향 조정", "달러 환율 급등 경고 발령");
+  await runPulse({ slot: "t-dup-1", trigger: "test", force: true });
+  await runPulse({ slot: "t-dup-2", trigger: "test", force: true });
+  assert.ok(rowsOf("t-dup-1").every((x) => x.status === "muted"));
+  assert.deepEqual(rowsOf("t-dup-2").map((x) => x.status).sort(), ["dup", "dup"]);
 });
 
 test("야간에도 큐에 넣지 않는다 — 몰아 보낼 발송 경로가 없다", async () => {
   saveTabSettings({ stockPulse: quietNow() });
-  agentReply = () => AGENT_JSON.replace("애플 공급망 이슈", "야간 이슈").replace("반도체 관세", "야간 거시");
+  agentReply = () => distinctReply("애플 협력사 파업 확대 우려", "연준 금리 동결 시사 발언");
   const r = await runPulse({ slot: "t-quiet", trigger: "test", force: true });
   assert.equal(r.ok, true);
   assert.equal(r.queued, 0);
   assert.equal(repo.listQueuedPulseAlerts().length, 0);
-  assert.ok(rowsOf("t-quiet").every((x) => x.status !== "queued"));
+  // 야간이라 예전에는 '중요'(거시)가 큐에 들어갔지만 이제는 둘 다 기록만(muted)
+  assert.deepEqual(rowsOf("t-quiet").map((x) => x.status), ["muted", "muted"]);
+});
+
+test("상한: 같은 날 앞서 기록된 muted 판정이 상한을 채우면 새 판정은 'capped' 로 기록한다", async () => {
+  const macroToday = repo.countPulseSentToday(today()).macro;
+  assert.ok(macroToday >= 1, "앞 테스트의 거시 muted 판정이 그날 집계에 잡혀 있어야 한다");
+  saveTabSettings({ stockPulse: { macroCap: macroToday } });
+  agentReply = () => distinctReply("애플 신규 데이터센터 투자 발표", "유가 급락 원유 재고 증가");
+  await runPulse({ slot: "t-cap", trigger: "test", force: true });
+  const rows = rowsOf("t-cap");
+  assert.equal(rows.find((x) => x.impact.symbol === null)?.status, "capped", "거시 상한이 muted 로 이미 찼다");
+  assert.equal(rows.find((x) => x.impact.symbol === "AAPL")?.status, "muted");
 });
 
 test("보류 플러시(flushPulseQueue)는 더 이상 없다", () => {
   assert.equal("flushPulseQueue" in pulseModule, false);
 });
 
-test("muted 는 상한(countPulseSentToday)·중복(recentPulseAlerts) 집계에 잡히지 않는다", () => {
+test("muted·예전 sent 는 상한(countPulseSentToday)·중복(recentPulseAlerts) 집계에 잡히고, below 는 잡히지 않는다", () => {
   const d = "2000-01-01"; // 다른 테스트의 오늘 기록과 섞이지 않는 날짜
-  const base = { date: d, slot: "t-muted", impact: impact("AAPL", "muted 무해성") };
+  const base = { date: d, slot: "t-muted", impact: impact("AAPL", "muted 집계") };
   repo.insertPulseAlert({ ...base, fingerprint: "m1", status: "muted" });
-  assert.deepEqual(repo.countPulseSentToday(d), { total: 0, bySymbol: {}, macro: 0 });
-  repo.insertPulseAlert({ ...base, fingerprint: "s1", status: "sent" });
   assert.deepEqual(repo.countPulseSentToday(d), { total: 1, bySymbol: { AAPL: 1 }, macro: 0 });
+  repo.insertPulseAlert({ ...base, fingerprint: "s1", status: "sent" });
+  repo.insertPulseAlert({ ...base, fingerprint: "b1", status: "below" });
+  assert.deepEqual(repo.countPulseSentToday(d), { total: 2, bySymbol: { AAPL: 2 }, macro: 0 });
   const recentFps = repo.recentPulseAlerts(24).map((r) => r.fingerprint);
   assert.ok(recentFps.includes("s1"));
-  assert.ok(!recentFps.includes("m1"));
+  assert.ok(recentFps.includes("m1"));
+  assert.ok(!recentFps.includes("b1"));
 });
 
 // ── 언어 검증 ──

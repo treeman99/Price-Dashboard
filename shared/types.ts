@@ -898,7 +898,8 @@ export interface PulseAlertRecord {
    * - 'capped'      상한 초과로 잘림
    * - 'below'       문턱(중요) 미달 — 일일 브리핑 요약에서만 회수된다
    * - 'failed'      발송 시도했으나 실패
-   * - 'muted'       대시보드에서 펄스 문자를 꺼 둔 동안의 판정 — 보내지도 큐에 넣지도 않고 기록만(상한·중복 집계 제외)
+   * - 'muted'       문턱을 넘은 판정을 보내지 않고 기록만 한 것. 메일·문자 발송 제거(2026-11-22) 뒤에는 예전
+   *                 'sent'·'queued' 자리를 대신하므로 상한·중복 집계에 센다(같은 이슈가 매시간 다시 쌓이지 않게)
    */
   status: "sent" | "queued" | "dup" | "capped" | "below" | "failed" | "muted";
   createdAt: string;

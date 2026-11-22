@@ -185,11 +185,12 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
         dedupHours: policy.dedupHours,
       });
 
-      // 예전 발송·보류 대상('sent'·'queued')은 전부 'muted' 로 남긴다. muted 는 상한·중복 집계에서
-      // 빠지므로 판정이 이후 판정을 가로막지 않고, 큐에도 들어가지 않아 나중에 몰아 보낼 것이 없다.
+      // 예전 발송·보류 대상('sent'·'queued')은 전부 'muted' 로 남긴다(큐에 넣지 않아 몰아 보낼 것이 없다).
+      // muted 는 예전 sent 처럼 상한·중복 집계에 센다 — 같은 실행 안에서도 즉시 반영해야 한 번의
+      // 펄스가 상한을 무시하고 판정 전부를 '문턱 이상'으로 올리지 않는다(counts·recent 는 시작 시점 스냅샷).
       const wouldReach = decision.status === "sent" || decision.status === "queued";
       const status = wouldReach ? "muted" : decision.status;
-      insertPulseAlert({
+      const rec = insertPulseAlert({
         fingerprint: candidate.fingerprint,
         date,
         slot: opts.slot,
@@ -197,7 +198,11 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
         status,
       });
       suppressed++;
-      if (status === "muted") muted++;
+      if (status === "muted") {
+        muted++;
+        bump(counts, candidate.impact.symbol);
+        recent.unshift(rec);
+      }
       const why = status === "muted" ? `발송 기능 제거 — 판정만 기록 (게이트: ${decision.reason})` : decision.reason;
       log.info(`펄스 판정 기록 [${status}] ${candidate.impact.symbol ?? "macro"} — ${why}`);
     }
@@ -235,5 +240,15 @@ export async function runPulse(opts: RunPulseOptions): Promise<PulseRunResult> {
     return result;
   } finally {
     running = false;
+  }
+}
+
+/** 상한 카운터 증가. 심볼이 null 이면 거시 예산. */
+function bump(counts: GateCounts, symbol: string | null): void {
+  if (symbol) {
+    counts.bySymbol[symbol] = (counts.bySymbol[symbol] ?? 0) + 1;
+    counts.total += 1;
+  } else {
+    counts.macro += 1;
   }
 }
