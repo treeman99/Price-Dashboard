@@ -33,6 +33,8 @@ import { checkpointPath, readCheckpoint, runDailyReport, type PipelineDeps, type
 import { acquireLock, hashState, newRunId, snapshotState, STATE_FILES } from "./cli.ts";
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "daily-report-test-"));
+/** 고정 실행 시각(로컬) — 조사 구간(실행 시점 기준 최근 24시간)이 날짜에 따라 흔들리지 않게. 구간: 11/21 21:00 ~ 11/22 21:00. */
+const FIXED_NOW = new Date(2026, 10, 22, 21, 0, 0);
 after(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
 
 const [CLAUDE, GPT, GEMINI] = REPORT_MODELS;
@@ -201,7 +203,7 @@ test("agy 실행 설정: 명령·파일 쓰기·브라우저·다운로드·MCP 
 
 // ── 파이프라인(가짜 deps) ──
 
-function newsSnap(items: { title: string; link: string; source?: string; date?: string }[]): NewsSnapshot {
+function newsSnap(items: { title: string; link: string; source?: string; date?: string; publishedAt?: string | null }[]): NewsSnapshot {
   return {
     date: "2026-11-22",
     updatedAt: new Date().toISOString(),
@@ -213,7 +215,15 @@ function newsSnap(items: { title: string; link: string; source?: string; date?: 
         label: "AI",
         emoji: "🤖",
         color: "#000",
-        items: items.map((i) => ({ title: i.title, source: i.source ?? "매체", date: i.date ?? "2026-11-22", summary: `${i.title} 요약`, link: i.link, related: [] })),
+        items: items.map((i) => ({
+          title: i.title,
+          source: i.source ?? "매체",
+          date: i.date ?? "2026-11-22",
+          publishedAt: i.publishedAt ?? null,
+          summary: `${i.title} 요약`,
+          link: i.link,
+          related: [],
+        })),
       },
     ],
   };
@@ -224,7 +234,7 @@ function ytSnap(videos: { title: string; id: string }[]): YoutubeSnapshot {
     date: "2026-11-22",
     updatedAt: new Date().toISOString(),
     source: "llm",
-    freshDays: 2,
+    freshHours: 24,
     notes: null,
     categories: [
       {
@@ -254,7 +264,7 @@ interface FakeOpts {
   fail?: Partial<Record<ModelSpec["key"], () => Error>>;
   editorFail?: Partial<Record<ModelSpec["key"], () => Error>>;
   geekNewsOk?: boolean;
-  newsBy?: Partial<Record<ModelSpec["key"], { title: string; link: string; source?: string; date?: string }[]>>;
+  newsBy?: Partial<Record<ModelSpec["key"], { title: string; link: string; source?: string; date?: string; publishedAt?: string | null }[]>>;
   editorGroups?: (ids: string[]) => unknown;
 }
 
@@ -262,18 +272,19 @@ function fakeDeps(o: FakeOpts = {}) {
   const calls: Record<string, number> = {};
   const editorCalls: string[] = [];
   const bump = (k: string) => (calls[k] = (calls[k] ?? 0) + 1);
-  const defaultNews: Record<ModelSpec["key"], { title: string; link: string; source?: string; date?: string }[]> = {
+  const defaultNews: Record<ModelSpec["key"], { title: string; link: string; source?: string; date?: string; publishedAt?: string | null }[]> = {
     // 같은 사건(앤트로픽 발표)을 서로 다른 링크로, 그리고 Gemini 단독 사건 하나
     claude: [{ title: "앤트로픽 새 모델", link: "https://anthropic.com/news/x", source: "Anthropic" }],
     gpt: [{ title: "Anthropic new model", link: "https://anthropic.com/news/x?utm_source=feed", source: "Anthropic" }],
     gemini: [
-      { title: "Claude 신모델 보도", link: "https://techsite.com/claude", source: "TechSite", date: "2026-11-21" },
+      // 어제 날짜지만 발행 시각이 구간(11/21 21:00~) 안이라 들어온다 — 날짜 차이는 근거 차이로 표시된다.
+      { title: "Claude 신모델 보도", link: "https://techsite.com/claude", source: "TechSite", date: "2026-11-21", publishedAt: "2026-11-21T23:30:00+09:00" },
       { title: "양자 신기록(단독)", link: "https://quantum.example/qec" },
     ],
   };
   const deps: PipelineDeps = {
-    now: () => new Date(),
-    categories: () => ({ news: [{ key: "ai", label: "🤖 AI" }], youtube: [{ key: "tools", label: "🛠️ 도구" }], freshDays: 2 }),
+    now: () => new Date(FIXED_NOW),
+    categories: () => ({ news: [{ key: "ai", label: "🤖 AI" }], youtube: [{ key: "tools", label: "🛠️ 도구" }], freshHours: 24 }),
     collectRaw: async ({ now }): Promise<RawData> => ({
       geekNews: { ok: o.geekNewsOk !== false, entries: [], error: o.geekNewsOk === false ? "HTTP 503" : null, since: now.toISOString(), until: now.toISOString() },
       seeds: new Map([["tools", [{ videoId: "seedonly111", title: "추천 채널 업로드", channel: "추천", date: "2026-11-22", categoryKey: "tools", description: null }]]]),
@@ -541,8 +552,10 @@ test("실행 잠금과 실행 ID: 동시 실행은 막고(살아 있는 pid), �
   const again = acquireLock(lock);
   assert.ok(again, "죽은 잠금은 걷어 낸다");
   again!();
-  const ids = new Set(Array.from({ length: 50 }, () => newRunId(new Date("2026-11-22T00:00:00Z"))));
-  assert.equal(ids.size, 50);
+  // 같은 초에 여러 번 만들어도 겹치지 않아야 한다. 난수가 4자리(16비트)라 50개면 우연히 겹칠 확률이 약 2%였다
+  // (2026-11-23 실제로 한 번 실패) — 실행은 잠금으로 하나씩만 돌므로 같은 초 5개로 충분하다(우연 실패 약 0.02%).
+  const ids = new Set(Array.from({ length: 5 }, () => newRunId(new Date("2026-11-22T00:00:00Z"))));
+  assert.equal(ids.size, 5);
   assert.match([...ids][0], /^20261122T000000Z-[0-9a-f]{4}$/);
 });
 
@@ -612,7 +625,7 @@ test("카테고리 이동 학습: 사용자 기록이 통합 단계에 적용되
         { key: "sci", label: "⚛️ 과학" },
       ],
       youtube: [{ key: "tools", label: "🛠️ 도구" }],
-      freshDays: 2,
+      freshHours: 24,
     }),
     runEditor: async (spec, prompt) => {
       editorPrompt = prompt;
@@ -632,4 +645,69 @@ test("카테고리 이동 학습: 사용자 기록이 통합 단계에 적용되
   assert.equal(where("양자 신기록(단독)"), "sci", "사용자 기록(제목·출처 정규화 일치) 적용, 편집기의 'ai' 교정은 무시");
   assert.equal(where("앤트로픽 새 모델"), "sci", "사용자 기록이 없는 그룹은 편집기 교정 적용");
   assert.equal(rj.youtube[0].key, "tools", "모르는 key 의 편집기 교정은 무시");
+});
+
+// ── 조사 기간(2026-11-23): 실행 시점 기준 최근 24시간, 시각 단위 ──
+
+test("조사 구간: 통합 단계가 시각으로 다시 판정하고(날짜만이면 오늘만·시각 미확인 표시), 보고서에 정확한 구간을 적는다", async () => {
+  const out = path.join(tmpRoot, "window");
+  const { deps } = fakeDeps({
+    // 편집기는 항목을 묶지 않는다(이 테스트는 구간 판정만 본다).
+    editorGroups: (ids) => ({ groups: ids.map((id) => ({ ids: [id], representative: id })), highlights: [] }),
+    newsBy: {
+      claude: [
+        { title: "구간 안(시각)", link: "https://a.example/in", publishedAt: "2026-11-22T10:00:00+09:00" },
+        { title: "구간 밖(어제 20시)", link: "https://a.example/old", date: "2026-11-21", publishedAt: "2026-11-21T20:00:00+09:00" },
+      ],
+      gpt: [
+        { title: "날짜만 오늘", link: "https://b.example/today", date: "2026-11-22" },
+        { title: "날짜만 어제", link: "https://b.example/yday", date: "2026-11-21" },
+      ],
+      gemini: [{ title: "미래 시각", link: "https://c.example/future", date: "2026-11-23", publishedAt: "2026-11-23T08:00:00+09:00" }],
+    },
+  });
+  const r = await run(out, deps);
+  const rj = JSON.parse(fs.readFileSync(r.reportJsonPath, "utf8"));
+  const titles = rj.news.flatMap((s: { items: { title: string }[] }) => s.items.map((i) => i.title));
+  assert.deepEqual(titles.sort(), ["구간 안(시각)", "날짜만 오늘"].sort());
+  assert.equal(rj.counts.outOfWindow, 3, "어제 20시·날짜만 어제·미래 시각");
+  const today = rj.news[0].items.find((i: { title: string }) => i.title === "날짜만 오늘");
+  assert.equal(today.timeApprox, true);
+  const timed = rj.news[0].items.find((i: { title: string }) => i.title === "구간 안(시각)");
+  assert.equal(timed.publishedAt, "2026-11-22T10:00:00+09:00");
+  assert.equal(timed.timeApprox, undefined);
+  assert.equal(rj.coverage.freshHours, 24);
+  assert.equal(rj.coverage.windows.news.from, "2026-11-21T21:00:00+09:00");
+  assert.equal(rj.coverage.windows.news.to, "2026-11-22T21:00:00+09:00");
+  const md = fs.readFileSync(r.reportPath, "utf8");
+  assert.match(md, /뉴스: \*\*11\/21 21:00 ~ 11\/22 21:00 KST\*\* \(실행 시점 기준 최근 24시간, \*\*발행 시각 단위\*\*로 판정\)/);
+  assert.match(md, /유튜브: \*\*11\/21 21:00 ~ 11\/22 21:00 KST\*\* \(실행 시점 기준 최근 24시간, \*\*업로드 시각 단위\*\*/);
+  assert.match(md, /조사 구간 밖 3건 제외/);
+  assert.match(md, /발행 11\/22 10:00/);
+  assert.match(md, /발행 11\/22\(시각 미확인\)/);
+});
+
+test("조사 구간: 세 모델에 같은 구간(뉴스 24시간·유튜브 freshHours)을 넘긴다", async () => {
+  const out = path.join(tmpRoot, "window-pass");
+  const seen: string[] = [];
+  const { deps } = fakeDeps();
+  const r = await run(out, {
+    ...deps,
+    categories: () => ({ news: [{ key: "ai", label: "🤖 AI" }], youtube: [{ key: "tools", label: "🛠️ 도구" }], freshHours: 12 }),
+    collectNews: async (spec, raw, w) => {
+      seen.push(`news:${w.news.hours}:${w.news.start.toISOString()}`);
+      return deps.collectNews(spec, raw, w);
+    },
+    collectYoutube: async (spec, raw, w) => {
+      seen.push(`yt:${w.youtube.hours}:${w.youtube.start.toISOString()}`);
+      return deps.collectYoutube(spec, raw, w);
+    },
+  });
+  assert.equal(new Set(seen.filter((x) => x.startsWith("news"))).size, 1, "세 모델이 같은 뉴스 구간");
+  assert.ok(seen.includes(`news:24:${new Date(FIXED_NOW.getTime() - 24 * 3_600_000).toISOString()}`));
+  assert.ok(seen.includes(`yt:12:${new Date(FIXED_NOW.getTime() - 12 * 3_600_000).toISOString()}`));
+  // 유튜브 12시간 구간: 날짜만 있는 오늘 영상(0시 시작)은 구간 시작(09:00) 이전이라 보수적으로 빠진다.
+  const rj = JSON.parse(fs.readFileSync(r.reportJsonPath, "utf8"));
+  assert.equal(rj.youtube.length, 0);
+  assert.equal(rj.coverage.windows.youtube.hours, 12);
 });

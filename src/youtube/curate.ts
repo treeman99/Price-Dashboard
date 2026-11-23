@@ -2,7 +2,8 @@ import { log } from "../util/log.ts";
 import { getTabSettings, tabTimeoutMs } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { getAgentModel } from "../util/model-store.ts";
-import { localDate, localDateDaysAgo } from "../util/date.ts";
+import { localDate } from "../util/date.ts";
+import { checkRecency, parseTimestamp, promptWindow, toLocalIso, windowEndingAt, type RecencyWindow } from "../util/recency.ts";
 import { loadCategories } from "./categories.ts";
 import { loadBlocklist, buildBlockMatcher, UNKNOWN_CHANNEL } from "./blocklist.ts";
 import { isRecommendedChannel } from "../../shared/youtube.ts";
@@ -165,7 +166,8 @@ export function buildPrompt(
   defs: YoutubeCategoryDef[],
   today: string,
   cutoff: string,
-  freshDays: number,
+  /** 조사 기간(시간) — 실행 시점 기준 최근 N시간. */
+  freshHours: number,
   now: string,
   blocked: string[],
   watchedTitles: string[] = [],
@@ -174,7 +176,9 @@ export function buildPrompt(
   blockedByCat: Map<string, string[]> = new Map(),
   // 제외 영상은 **맨 뒤**에 붙인다 — watchedTitles 뒤에 끼워 넣으면 reclass.test.ts 처럼
   // reclassSection 을 위치 인자로 넘기는 기존 호출부가 조용히 어긋난다.
-  dismissedItems: DismissedVideo[] = []
+  dismissedItems: DismissedVideo[] = [],
+  /** 정확한 조사 구간 문구(예: "2026-11-22 09:00 ~ 2026-11-23 09:00 (한국시간)"). 없으면 날짜로. */
+  windowText = `${cutoff} ~ ${today}`
 ): string {
   const cats = defs
     .map((c) => {
@@ -251,16 +255,16 @@ export function buildPrompt(
       const vids = (seedByCat.get(c.key) ?? []).slice(0, 12);
       if (!vids.length) return "";
       const rows = vids
-        .map((v) => `    · ${v.date} | ${v.channel} | videoId=${v.videoId} | ${v.title}`)
+        .map((v) => `    · ${v.publishedAt ? v.publishedAt.slice(0, 16).replace("T", " ") : v.date} | ${v.channel} | videoId=${v.videoId} | ${v.title}`)
         .join("\n");
       return `  ▸ ${c.label} (key: "${c.key}"):\n${rows}`;
     })
     .filter(Boolean)
     .join("\n");
   const seedSection = seedLines
-    ? `\n\n📌 확정 신선 후보(추천·발굴 채널 RSS — 게시일이 이미 ${cutoff}~${today} 창 안으로 검증됨. videoId·게시일·채널을 그대로 신뢰하라):\n${seedLines}\n  규칙:\n  - 이 목록의 영상은 **실존·신선이 서버로 보증**됐다. 카테고리 주제에 맞으면 **반드시 채택**하라(WebFetch로 watch 내용을 열어 실제 내용을 한국어로 요약).\n  - date는 위 게시일을 **그대로** 쓰고, url은 https://www.youtube.com/watch?v=<videoId> 형식으로 적는다.\n  - 더 알맞은 다른 카테고리가 있으면 거기에 넣어도 된다. 단 주제와 무관하거나 🚫제외 채널·👁본영상 규칙에 걸리면 넣지 않는다.\n  - 이 목록이 전부는 아니다 — 창 안의 다른 좋은 영상도 WebSearch로 추가로 찾아 섞어라.`
+    ? `\n\n📌 확정 신선 후보(추천·발굴 채널 RSS — 게시 시각이 이미 조사 구간(${windowText}) 안으로 검증됨. videoId·게시 시각·채널을 그대로 신뢰하라):\n${seedLines}\n  규칙:\n  - 이 목록의 영상은 **실존·신선이 서버로 보증**됐다. 카테고리 주제에 맞으면 **반드시 채택**하라(WebFetch로 watch 내용을 열어 실제 내용을 한국어로 요약).\n  - date·publishedAt 은 위 게시 시각을 **그대로** 쓰고, url은 https://www.youtube.com/watch?v=<videoId> 형식으로 적는다.\n  - 더 알맞은 다른 카테고리가 있으면 거기에 넣어도 된다. 단 주제와 무관하거나 🚫제외 채널·👁본영상 규칙에 걸리면 넣지 않는다.\n  - 이 목록이 전부는 아니다 — 창 안의 다른 좋은 영상도 WebSearch로 추가로 찾아 섞어라.`
     : "";
-  return `너는 한국어 유튜브 소식 큐레이터다. 지금 시각은 ${now}. **조회 시점 기준 최근 ${freshDays}일 이내(${cutoff} 이후 ~ ${today})**에
+  return `너는 한국어 유튜브 소식 큐레이터다. 지금 시각은 ${now}. **실행 시점 기준 최근 ${freshHours}시간 이내(${windowText})**에
 업로드된 YouTube 영상만 모아 아래 ${defs.length}개 카테고리로 정리한다. 이 신선도 기준은 **모든 카테고리에 예외 없이 동일하게** 적용된다.
 모든 제목·요약은 **반드시 한국어**로 작성한다(영어 영상도 한국어로 번역·요약). 원제는 originalTitle에 보존한다.
 
@@ -286,13 +290,15 @@ export function buildPrompt(
    - watch URL은 반드시 정식 형식(https://www.youtube.com/watch?v=...)으로 적는다.
 3. 요약(summary)은 제목을 바꿔 쓴 게 아니라 **영상이 실제로 무엇을 다루는지**(주요 포인트 2~4개)를 한국어로 적는다.
 
-⚠️ 신선도 규칙(${freshDays}일 이내 — 최우선):
-- 목표: 업로드일이 **${cutoff} 이후 ~ ${today}** 인 최근 영상을 카테고리마다 **빠짐없이** 찾아낸다.
-- **날짜의 최종 판정은 서버가 한다**: 네가 넣은 각 영상은 서버가 **실제 업로드일을 유튜브 watch 페이지에서 직접 재검증**해, 창(${cutoff}~${today}) 밖이면 자동으로 드롭하고 존재하지 않는(지어낸) 영상도 제거한다.
+⚠️ 신선도 규칙(실행 시점 기준 최근 ${freshHours}시간 — 시각 단위, 최우선):
+- 목표: 업로드 **시각**이 **${windowText}** 안인 최근 영상을 카테고리마다 **빠짐없이** 찾아낸다. 날짜가 아니라 시각으로 판정한다
+  (예: 구간 시작이 어제 09:00 이면 어제 08:00 업로드는 밖이다).
+- **시각의 최종 판정은 서버가 한다**: 네가 넣은 각 영상은 서버가 **실제 업로드 시각을 유튜브 watch 페이지에서 직접 재검증**해, 구간 밖이면 자동으로 드롭하고 존재하지 않는(지어낸) 영상도 제거한다.
+  watch 페이지에서 시각을 못 구하면 날짜만으로 보수적으로 판정한다(그 날 전체가 구간 안인 날짜만 통과).
   → 그러니 **정확한 일자를 확신 못 한다는 이유로 최근으로 보이는 영상을 버리지 마라.** 후보로 올리기만 하면 서버가 진짜 날짜로 걸러준다. **0건을 내는 것보다, 최근으로 보이는 후보를 폭넓게 올리는 편이 항상 옳다**(오래된 건 서버가 알아서 떨궈낸다).
-- 각 영상 date에는 **파악한 최선의 업로드일**을 "YYYY-MM-DD"로 적는다(검색 스니펫의 "N일 전"·게시일 표기, 채널 최신 목록에서의 위치 등 근거 활용). 다만 근거 없이 경계일(${cutoff})로 **일괄 위조하지는 마라**(어차피 서버가 실제 날짜로 교체·검증한다).
+- 각 영상 date에는 **파악한 최선의 업로드일**을 "YYYY-MM-DD"로, publishedAt에는 업로드 **시각**을 알면 "YYYY-MM-DDTHH:mm+09:00"(한국시간)으로 적는다(모르면 null). 근거 없이 경계 시각으로 **위조하지는 마라**(어차피 서버가 실제 시각으로 교체·검증한다).
 - 단 **명백히 오래된 영상(몇 주·몇 달 전)은 애초에 넣지 마라** — 재검증이 실패(마크업/네트워크)하면 걸러지지 않을 수 있으니, "최근에 올라온 것 같다"는 근거가 있는 영상만 후보로 올린다.
-- **최신 우선**: 오늘·어제처럼 가장 최근 영상을 앞세우고, 경계(${cutoff}) 근처에만 몰리지 마라.
+- **최신 우선**: 가장 최근 영상을 앞세우고, 구간 시작 근처에만 몰리지 마라.
 - 특히 **추천 채널의 최근 업로드는 우선 확인해, 신선도 창 안으로 보이면 반드시 후보에 올린다**(관련성이 맞는 한 빠뜨리지 마라).
 
 🎯 다양성 규칙(신선도 다음으로 중요):
@@ -310,7 +316,7 @@ export function buildPrompt(
 {"categories":{${defs
     .map(
       (c) =>
-        `"${c.key}":[{"title":string,"originalTitle":string|null,"channel":string,"channelHandle":string|null,"date":"YYYY-MM-DD","summary":string,"url":string,"views":string|null,"duration":string|null}]`
+        `"${c.key}":[{"title":string,"originalTitle":string|null,"channel":string,"channelHandle":string|null,"date":"YYYY-MM-DD","publishedAt":"YYYY-MM-DDTHH:mm+09:00"|null,"summary":string,"url":string,"views":string|null,"duration":string|null}]`
     )
     .join(",")}},
 "notes":string|null}`;
@@ -329,43 +335,54 @@ function normDate(v: unknown): string | null {
   return m ? v.trim() : null;
 }
 
-/** 최근 freshDays 이내(cutoff~today)면 통과 */
+/** 날짜가 cutoff~today 안이면 통과 — LLM 후보의 느슨한 1차 거름(최종 판정은 verifyRealDates 의 시각 단위). */
 function isFresh(date: string | null, today: string, cutoff: string): boolean {
   return !!date && date >= cutoff && date <= today;
 }
 
 /**
- * 실제 업로드일 재검증 + 라이브(방송중/예정) 제외. watch 페이지를 한 번 받아 둘 다 처리한다.
+ * 실제 업로드 **시각** 재검증 + 라이브(방송중/예정) 제외. watch 페이지를 한 번 받아 둘 다 처리한다.
  * - 라이브: 방송 중이거나 아직 시작 전(예정)인 라이브는 취합에서 제외(종료된 라이브 다시보기 VOD 는 유지).
- * - 날짜: LLM 이 준 date 는 검증 불가라 필터 통과를 위해 cutoff(경계일)로 위조되기 쉽다(실측: 07-06
- *   표기 영상 다수가 실제 06-26~07-04). 진짜 게시일로 교체하고 신선도 창(cutoff~today) 밖이면 드롭한다.
- * 실제 정보를 못 구하면(마크업 변경·네트워크) 원래 판정을 유지해 탭이 통째로 비는 것을 막는다(fail-open).
+ * - 시각: LLM 이 준 date·publishedAt 은 검증 불가라 필터 통과를 위해 경계로 위조되기 쉽다(실측: 07-06 표기 영상 다수가
+ *   실제 06-26~07-04). watch 페이지의 실제 업로드 시각으로 교체하고 조사 구간(실행 시점 기준 최근 N시간) 밖이면 드롭한다.
+ * - watch 페이지가 날짜만 주거나 못 받으면(마크업 변경·네트워크): RSS 처럼 서버가 받은 시각(trusted)은 그대로 쓰고,
+ *   LLM 이 준 값은 **시각을 믿지 않고 날짜만으로 보수적으로**(그 날 전체가 구간 안일 때만) 판정해 timeApprox 로 표시한다.
  */
 async function verifyRealDates(
   items: YoutubeVideo[],
-  today: string,
-  cutoff: string,
+  window: RecencyWindow,
+  /** 서버가 RSS 로 받은 게시 시각(믿을 수 있는 값) — videoId → 시각·날짜. */
+  trusted: Map<string, { publishedAt: string | null; date: string }> = new Map(),
   concurrency = 6
 ): Promise<YoutubeVideo[]> {
   // watch 페이지(≈1MB)를 후보 수만큼 받으므로 동시 요청을 제한한다 — 무제한 팬아웃은 429/타임아웃을
-  // 유발하고, 그 실패는 fail-open 이라 라이브·신선도 판정을 조용히 건너뛰게 만든다(집 IP 429 취약).
+  // 유발하고, 그 실패는 라이브·신선도 판정을 조용히 약하게 만든다(집 IP 429 취약).
   const out: YoutubeVideo[] = [];
   for (let i = 0; i < items.length; i += concurrency) {
     const batch = items.slice(i, i + concurrency);
     const checked = await Promise.all(
       batch.map(async (v): Promise<YoutubeVideo | null> => {
-        if (!v.videoId) return v;
-        const { date: real, live } = await fetchWatchInfo(v.videoId);
-        if (live) {
+        const info = v.videoId ? await fetchWatchInfo(v.videoId) : { date: null, publishedAt: null, live: false };
+        if (info.live) {
           log.info(`유튜브 라이브(방송중/예정) 제외 — ${v.videoId} "${v.title}"`);
           return null;
         }
-        if (!real) return v; // 검증 불가 → 기존(LLM date) 유지: 우아한 저하
-        if (!isFresh(real, today, cutoff)) {
-          log.info(`유튜브 신선도 재검증 드롭 — ${v.videoId} 실제 ${real} (창 ${cutoff}~${today} 밖, LLM표기 ${v.date})`);
+        const rss = v.videoId ? trusted.get(v.videoId) : undefined;
+        const basis = info.publishedAt
+          ? { publishedAt: info.publishedAt, date: info.date }
+          : rss?.publishedAt
+            ? rss
+            : info.date
+              ? { publishedAt: null, date: info.date }
+              : { publishedAt: null, date: v.date }; // LLM 시각은 믿지 않는다
+        const c = checkRecency(basis, window);
+        if (!c.ok) {
+          log.info(
+            `유튜브 신선도 재검증 드롭 — ${v.videoId} 실제 ${basis.publishedAt ?? `${basis.date}(날짜만)`} (구간 밖: ${c.reason}, LLM표기 ${v.publishedAt ?? v.date})`
+          );
           return null;
         }
-        return v.date === real ? v : { ...v, date: real }; // 실제 게시일로 교체(표시도 정확해짐)
+        return { ...v, date: basis.date ?? v.date, publishedAt: basis.publishedAt, timeApprox: c.approx };
       })
     );
     for (const v of checked) if (v != null) out.push(v);
@@ -383,14 +400,17 @@ function normVideo(r: any): YoutubeVideo | null {
   const date = normDate(r?.date);
   const url = String(r?.url ?? "").trim();
   const videoId = extractVideoId(url);
+  const at = parseTimestamp(r?.publishedAt);
+  const day = date ?? (at ? localDate(at) : null);
   // 제목·날짜·식별 가능한 유튜브 URL이 없으면 버림(신선도/링크 판정 불가).
-  if (!title || !date || !videoId) return null;
+  if (!title || !day || !videoId) return null;
   return {
     title: title.slice(0, 200),
     originalTitle: nonEmpty(r?.originalTitle, 200),
     channel: String(r?.channel ?? "").slice(0, 80) || UNKNOWN_CHANNEL,
     channelHandle: nonEmpty(r?.channelHandle, 60),
-    date,
+    date: day,
+    publishedAt: at ? toLocalIso(at) : null,
     summary: String(r?.summary ?? "").slice(0, 1000),
     url: `https://www.youtube.com/watch?v=${videoId}`,
     videoId,
@@ -409,7 +429,7 @@ function emptySnapshot(date: string, note: string): YoutubeSnapshot {
     date,
     updatedAt: new Date().toISOString(),
     source: "empty",
-    freshDays: getTabSettings().youtube.freshDays,
+    freshHours: getTabSettings().youtube.freshHours,
     categories: loadCategories().map((c) => toCategory(c, [])),
     notes: note,
   };
@@ -424,6 +444,7 @@ function rssToVideo(r: RssVideo): YoutubeVideo {
     channel: r.channel,
     channelHandle: null,
     date: r.date,
+    publishedAt: r.publishedAt ?? null,
     summary,
     url: `https://www.youtube.com/watch?v=${r.videoId}`,
     videoId: r.videoId,
@@ -542,15 +563,22 @@ export interface CurateYoutubeOptions {
    * 무조건 노출'). 보고서는 '그 모델이 실제로 고른 항목'만 모델 결과로 집계해야 해서 끈다.
    */
   seedFallback?: boolean;
+  /**
+   * 조사 구간(실행 시점 기준 최근 N시간). 보고서는 세 모델이 같은 구간을 쓰도록 실행 시작 때 한 번 정해 넘긴다.
+   * 없으면 지금 시각과 운영 설정 youtube.freshHours 로 만든다.
+   */
+  window?: RecencyWindow;
 }
 
 export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {}): Promise<YoutubeSnapshot> {
-  const today = date;
   const model = opts.model ?? getAgentModel();
   const strict = opts.strict === true;
-  // 실행 시작 시점에 한 번 읽는다(대시보드 저장 즉시 다음 수집부터 반영 + 한 실행 안에서는 일관).
-  const freshDays = getTabSettings().youtube.freshDays;
-  const cutoff = localDateDaysAgo(freshDays);
+  // 실행 시작 시점에 한 번 정한다(대시보드 저장 즉시 다음 수집부터 반영 + 한 실행 안에서는 일관).
+  const window = opts.window ?? windowEndingAt(new Date(), getTabSettings().youtube.freshHours);
+  const freshHours = window.hours;
+  // 날짜 표기용(프롬프트 보조·LLM 후보의 느슨한 1차 거름). 최종 판정은 시각 단위(checkRecency).
+  const cutoff = localDate(window.start);
+  const today = date >= localDate(window.end) ? date : localDate(window.end);
   const defs = loadCategories();
   const blockList = loadBlocklist();
   const blockLabel = (b: BlockedChannel) => (b.handle ? `${b.channel} (${b.handle})` : b.channel);
@@ -589,7 +617,7 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
       const queries = shared
         ? [...(discovered[meta.key] ?? [])]
         : [...(meta.recommendedChannels ?? []), ...(discovered[meta.key] ?? [])];
-      const harvested = queries.length ? await harvestFreshUploads(queries, cutoff, today) : [];
+      const harvested = queries.length ? await harvestFreshUploads(queries, window) : [];
       const fresh = shared
         ? [...shared, ...harvested.filter((v) => !shared.some((x) => x.videoId === v.videoId))]
         : harvested;
@@ -608,7 +636,7 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
     log.info(`유튜브 RSS 하베스트 — 확정 신선 후보 ${seedTotal}건(추천+발굴 채널)`);
 
     const finalText = await runAgentQueryText(
-      buildPrompt(promptDefs, today, cutoff, freshDays, nowLabel(), globalBlockedLabels, watchedTitles, buildReclassSection(defs), seedByCat, blockedByCat, dismissHints),
+      buildPrompt(promptDefs, today, cutoff, freshHours, nowLabel(), globalBlockedLabels, watchedTitles, buildReclassSection(defs), seedByCat, blockedByCat, dismissHints, promptWindow(window)),
       {
         // tools = 가용 도구 제한(웹 조사 외 Bash/Write 등 차단 — 외부 페이지 프롬프트 인젝션 방어),
         // allowedTools = 그 도구들을 무프롬프트 허용.
@@ -621,7 +649,7 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
         maxTurns: 120,
         systemPrompt:
           "너는 꼼꼼한 한국어 유튜브 소식 큐레이터다. AI·LLM과 신제품 리뷰 등 최신 YouTube 영상을 " +
-          `최근 ${freshDays}일 이내 위주로 채택하되(명백히 오래된 것만 제외; 정확한 업로드일은 서버가 watch 페이지로 재검증하므로, 최근으로 보이는 후보를 '날짜 확신 부족'을 이유로 0건으로 버리지 마라), 영어 영상도 한국어로 번역·요약하며, ` +
+          `실행 시점 기준 최근 ${freshHours}시간(${promptWindow(window)}) 안에 업로드된 영상만 채택하되(정확한 업로드 시각은 서버가 watch 페이지로 재검증하므로, 최근으로 보이는 후보를 '시각 확신 부족'을 이유로 0건으로 버리지 마라), 영어 영상도 한국어로 번역·요약하며, ` +
           "watch URL을 정확히 적고, 같은 영상은 통합해 마지막에 지정된 JSON 한 개만 출력한다.",
       },
       // 유튜브 전용 예산(기본 20분). 예전엔 공용 `agentQueryTimeoutMs`(60분)를 썼다.
@@ -697,7 +725,11 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
           .filter((x) => !isForeignForKr(x, meta.region));
 
         // 마지막 관문: watch 페이지의 실제 업로드일로 신선도 재검증(LLM 의 날짜 위조 차단).
-        const fresh = await verifyRealDates(items, today, cutoff);
+        // RSS 시드(공용·발굴)는 서버가 받은 게시 시각이라 믿을 수 있다(LLM 이 준 시각은 watch 재검증 없이는 믿지 않는다).
+        const trusted = new Map(
+          (seedByCat.get(meta.key) ?? []).map((r) => [r.videoId, { publishedAt: r.publishedAt ?? null, date: r.date }] as const)
+        );
+        const fresh = await verifyRealDates(items, window, trusted);
         // 최신(업로드일 내림차순) 우선 정렬 — 저장·API·보고서 모두 일관되게 최신순.
         fresh.sort((a, b) => b.date.localeCompare(a.date));
         return toCategory(meta, fresh);
@@ -713,7 +745,7 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
       date: today,
       updatedAt: new Date().toISOString(),
       source: "llm",
-      freshDays,
+      freshHours,
       categories: dedupedCategories,
       notes: p?.notes ? String(p.notes) : null,
     };

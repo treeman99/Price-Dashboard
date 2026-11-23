@@ -1,5 +1,6 @@
 import type { ReportGroup } from "./merge.ts";
 import { MODEL_SHORT, OUTCOME_LABEL } from "./models.ts";
+import { formatWindowKst, kstShort } from "../util/recency.ts";
 import type { CategoryInfo, EditorRecord, ModelRunRecord, RawData, SharedSeedVideo } from "./pipeline.ts";
 
 export interface RenderInput {
@@ -11,9 +12,12 @@ export interface RenderInput {
   editor: EditorRecord;
   groups: ReportGroup[];
   seedsOnly: SharedSeedVideo[];
-  counts: { before: number; excludedByUser?: number; afterMerge: number; alreadyReported: number; reported: number; seedsOnly: number };
+  counts: { before: number; outOfWindow?: number; excludedByUser?: number; afterMerge: number; alreadyReported: number; reported: number; seedsOnly: number };
   raw: RawData;
-  freshDays: number;
+  /** 유튜브 조사 기간(시간). */
+  freshHours: number;
+  /** 실행 시점 기준 조사 구간(시각 단위). 없으면(예전 호출) 구간 문구를 시간 수로만 적는다. */
+  windows?: { news: { start: Date; end: Date; hours: number }; youtube: { start: Date; end: Date; hours: number } };
   lastSuccessAt: string | null;
   categories: CategoryInfo;
 }
@@ -49,6 +53,13 @@ function md(s: string | null | undefined): string {
 function link(label: string, url: string | null | undefined): string {
   if (!url || !/^https?:\/\//.test(url)) return md(label);
   return `[${md(label) || "링크"}](${url.replace(/\)/g, "%29").replace(/\s/g, "%20")})`;
+}
+
+/** 발행·업로드 시각 표기: "11/23 08:30" — 시각을 모르면 "11/23(시각 미확인)". */
+function whenOf(it: { date: string; publishedAt?: string | null; timeApprox?: boolean }): string {
+  if (it.publishedAt && !it.timeApprox) return md(kstShort(it.publishedAt));
+  const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(it.date);
+  return `${m ? `${Number(m[1])}/${Number(m[2])}` : md(it.date)}(시각 미확인)`;
 }
 
 function foundBy(g: ReportGroup): string {
@@ -96,7 +107,7 @@ export function renderReport(r: RenderInput): string {
   const failedEditors = r.editor.attempts.filter((a) => !a.ok);
   if (failedEditors.length) L.push(`- 편집 실패 시도: ${failedEditors.map((a) => `\`${a.model}\` ${md(a.error)}`).join(" / ")}`);
   L.push(
-    `- 중복 제거: 통합 전 ${r.counts.before}건${r.counts.excludedByUser ? ` → 사용자 취합 제외 ${r.counts.excludedByUser}건 제외` : ""} → 통합 후 ${r.counts.afterMerge}건 → 이미 보고된 ${r.counts.alreadyReported}건 제외 후 **${r.counts.reported}건**${
+    `- 중복 제거: 통합 전 ${r.counts.before}건${r.counts.outOfWindow ? ` → 조사 구간 밖 ${r.counts.outOfWindow}건 제외` : ""}${r.counts.excludedByUser ? ` → 사용자 취합 제외 ${r.counts.excludedByUser}건 제외` : ""} → 통합 후 ${r.counts.afterMerge}건 → 이미 보고된 ${r.counts.alreadyReported}건 제외 후 **${r.counts.reported}건**${
       r.counts.seedsOnly ? ` (+ 모델 미선정 추천 채널 업로드 ${r.counts.seedsOnly}건 별도)` : ""
     }`
   );
@@ -109,25 +120,30 @@ export function renderReport(r: RenderInput): string {
   L.push("");
   L.push("## 수집 범위");
   L.push("");
+  const nw = r.windows?.news;
+  const yw = r.windows?.youtube;
   L.push(
-    `- 뉴스: 실행 시점 기준 **최근 24시간**(기사 발행일 단위로 판정) — price 뉴스 탭 카테고리 ${r.categories.news.length}개(${r.categories.news
+    `- 뉴스: **${nw ? formatWindowKst(nw) : "최근 24시간"}** (실행 시점 기준 최근 ${nw?.hours ?? 24}시간, **발행 시각 단위**로 판정) — 카테고리 ${r.categories.news.length}개(${r.categories.news
       .map((c) => md(c.label))
-      .join(", ")})와 같은 수집·요약 규칙.`
+      .join(", ")}).`
+  );
+  L.push(
+    "  - 발행 시각을 확인하지 못한 기사는 날짜만으로 보수적으로 판정한다: 그 날 전체가 구간 안인 날짜(대개 오늘)만 싣고 '시각 미확인'으로 표시, 그 밖의 날짜는 뺀다."
   );
   const gn = r.raw.geekNews;
   L.push(
     `- GeekNews 공식 피드: ${gn.ok ? `${kst(gn.since)} 초과 ~ ${kst(gn.until)} 등록 글 ${gn.entries.length}건(커뮤니티 등록 시각, 원문 발행 시각과 다를 수 있음)` : `수집 실패 — ${md(gn.error)}`}`
   );
   L.push(
-    `- 유튜브: 최근 **${r.freshDays}일** 업로드(서버가 watch 페이지로 실제 업로드일 재검증) — price 유튜브 탭 카테고리 ${r.categories.youtube.length}개, 기존 채널 차단·제외 영상·본영상·제외 키워드·지역(한국 전용)·Shorts·라이브 규칙 적용.`
+    `- 유튜브: **${yw ? formatWindowKst(yw) : `최근 ${r.freshHours}시간`}** (실행 시점 기준 최근 ${yw?.hours ?? r.freshHours}시간, **업로드 시각 단위** — 서버가 watch 페이지의 실제 업로드 시각으로 재검증) — 카테고리 ${r.categories.youtube.length}개, 채널 차단·제외 영상·본영상·제외 키워드·지역(한국 전용)·Shorts·라이브 규칙 적용.`
   );
   L.push(
-    `- 증분: ${r.lastSuccessAt ? `직전 성공 보고(${kst(r.lastSuccessAt)}) 이후` : "첫 성공 실행이라 최근 24시간 전체"}를 대상으로, 이전 보고서에 이미 실린 링크·영상(${r.counts.alreadyReported}건)은 제외했습니다.`
+    `- 증분: 위 구간 안에서 이전 보고서에 이미 실린 링크·영상(${r.counts.alreadyReported}건)은 제외했습니다${r.lastSuccessAt ? `(직전 성공 보고 ${kst(r.lastSuccessAt)})` : "(첫 성공 실행)"}.`
   );
   if (r.lastSuccessAt && r.now.getTime() - Date.parse(r.lastSuccessAt) > 24 * 3_600_000) {
     const gapEnd = new Date(r.now.getTime() - 24 * 3_600_000);
     L.push(
-      `- ⚠️ 범위 공백: 직전 성공(${kst(r.lastSuccessAt)}) 이후 24시간을 넘는 구간(${kst(r.lastSuccessAt)} ~ ${kst(gapEnd)})은 뉴스 수집기 범위(최근 24시간) 밖이라 확인하지 못했습니다(GeekNews 피드는 출처별 마지막 성공 시점부터 다시 조회).`
+      `- ⚠️ 범위 공백: 직전 성공(${kst(r.lastSuccessAt)}) 이후 24시간을 넘는 구간(${kst(r.lastSuccessAt)} ~ ${kst(gapEnd)})은 조사 구간(실행 시점 기준 최근 24시간) 밖이라 확인하지 못했습니다.`
     );
   }
 
@@ -179,9 +195,9 @@ export function renderReport(r: RenderInput): string {
         if (kind === "news") {
           L.push(`- **${md(it.title)}**${upd}`);
           L.push(`  - ${md(it.summary)}`);
-          L.push(`  - 출처: ${link(it.source || "원문", it.url)} · 발행 ${md(it.date)} · 찾은 모델: ${foundBy(g)}`);
+          L.push(`  - 출처: ${link(it.source || "원문", it.url)} · 발행 ${whenOf(it)} · 찾은 모델: ${foundBy(g)}`);
         } else {
-          L.push(`- **${md(it.title)}**${upd} — ${md(it.source)}, 업로드 ${md(it.date)}`);
+          L.push(`- **${md(it.title)}**${upd} — ${md(it.source)}, 업로드 ${whenOf(it)}`);
           L.push(`  - ${md(it.summary)} _(제목·설명·검색 결과 기준 요약, 영상 본문은 시청하지 않음)_`);
           L.push(`  - ${link("영상 보기", it.url)} · 찾은 모델: ${foundBy(g)}`);
         }

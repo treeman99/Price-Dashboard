@@ -1,5 +1,6 @@
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
+import { parseTimestamp, toLocalIso } from "../util/recency.ts";
 
 const WATCH_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
@@ -60,11 +61,13 @@ export async function fetchOembed(videoId: string, timeoutMs = 8000): Promise<Oe
  * (순수 함수 — 실제 라이브 마크업으로 회귀 테스트.)
  */
 export function extractUploadIso(html: string): string | null {
-  const m =
-    /itemprop="datePublished"\s+content="([^"]+)"/.exec(html) ||
-    /"uploadDate":"([^"]+)"/.exec(html) ||
-    /"publishDate":"([^"]+)"/.exec(html);
-  return m ? m[1] : null;
+  // 시각까지 있는 값을 먼저 쓴다(조사 기간을 시각 단위로 판정 — 2026-11-23). 셋 다 날짜만이면 첫 값.
+  const found = [
+    /itemprop="datePublished"\s+content="([^"]+)"/.exec(html)?.[1],
+    /"uploadDate":"([^"]+)"/.exec(html)?.[1],
+    /"publishDate":"([^"]+)"/.exec(html)?.[1],
+  ].filter((v): v is string => !!v);
+  return found.find((v) => /T\d{2}:\d{2}/.test(v)) ?? found[0] ?? null;
 }
 
 /**
@@ -85,6 +88,8 @@ export function isLiveOrUpcomingHtml(html: string): boolean {
 export interface WatchInfo {
   /** 실제 업로드일(로컬 YYYY-MM-DD). 못 구하면 null. */
   date: string | null;
+  /** 실제 업로드 시각(로컬 오프셋 ISO). 페이지가 날짜만 주면 null. */
+  publishedAt: string | null;
   /** 방송 중이거나 시작 전(예정) 라이브면 true. 종료된 라이브 VOD·일반 영상은 false. */
   live: boolean;
 }
@@ -104,12 +109,15 @@ export async function fetchWatchInfo(videoId: string, timeoutMs = 8000): Promise
         signal: ac.signal,
         headers: { "User-Agent": WATCH_UA, "Accept-Language": "ko-KR,ko;q=0.9" },
       });
-      if (r.status !== 200) return { date: null, live: false }; // 404 등 → 검증 불가
+      if (r.status !== 200) return { date: null, publishedAt: null, live: false }; // 404 등 → 검증 불가
       const html = await r.text();
       const iso = extractUploadIso(html);
-      const d = iso ? new Date(iso) : null;
+      const at = parseTimestamp(iso);
+      const dayOnly = iso ? /^\d{4}-\d{2}-\d{2}$/.test(iso) : false;
+      const d = at ?? (dayOnly ? null : iso ? new Date(iso) : null);
       return {
-        date: d && !isNaN(d.getTime()) ? localDate(d) : null,
+        date: at ? localDate(at) : dayOnly ? iso : d && !isNaN(d.getTime()) ? localDate(d) : null,
+        publishedAt: at ? toLocalIso(at) : null,
         live: isLiveOrUpcomingHtml(html),
       };
     } catch {
@@ -118,7 +126,7 @@ export async function fetchWatchInfo(videoId: string, timeoutMs = 8000): Promise
       clearTimeout(timer);
     }
   }
-  return { date: null, live: false };
+  return { date: null, publishedAt: null, live: false };
 }
 
 /**

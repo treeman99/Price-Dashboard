@@ -45,6 +45,10 @@ export interface DailyReportEntry {
   url: string | null;
   /** 발행일·업로드일 YYYY-MM-DD. */
   date: string;
+  /** 발행·업로드 시각(로컬 오프셋 ISO). 예전 실행·시각 미확인이면 없음/null. */
+  publishedAt?: string | null;
+  /** 시각을 확인하지 못하고 날짜만으로 조사 구간 안이라고 판정했다(표시용). */
+  timeApprox?: boolean;
   /** 이 항목을 찾은 모델 표시명. */
   foundBy: string[];
   /** 대표가 아닌 출처. */
@@ -65,6 +69,8 @@ export interface DailyReportCounts {
   before: number;
   /** 사용자 취합 제외(뉴스 제외 사이트·유튜브 채널 차단·제외 영상)로 통합 단계에서 거른 건수. 예전 실행에는 없다. */
   excludedByUser?: number;
+  /** 조사 구간(실행 시점 기준, 시각 단위) 밖이라 통합 단계에서 거른 건수. 예전 실행에는 없다. */
+  outOfWindow?: number;
   afterMerge: number;
   alreadyReported: number;
   reported: number;
@@ -91,7 +97,15 @@ export interface DailyReportJson {
   coverage: {
     /** 직전 성공 보고 시각(증분 기준). 첫 실행이면 null. */
     lastSuccessAt: string | null;
-    freshDays: number;
+    /** 예전(2026-11-23 이전) 실행: 유튜브 신선도 일수. */
+    freshDays?: number;
+    /** 유튜브 조사 기간(시간). */
+    freshHours?: number;
+    /** 실행 시점 기준 조사 구간(시각 단위, ISO). 예전 실행에는 없다. */
+    windows?: {
+      news: { from: string; to: string; hours: number };
+      youtube: { from: string; to: string; hours: number };
+    };
     /** 뉴스 수집 범위(최근 24시간) 밖이라 확인하지 못한 구간. 없으면 null. */
     gap: { from: string; to: string } | null;
     geekNews: { ok: boolean; count: number; since: string; until: string; error: string | null };

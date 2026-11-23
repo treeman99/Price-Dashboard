@@ -2,7 +2,8 @@ import { log } from "../util/log.ts";
 import { tabTimeoutMs } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { getAgentModel } from "../util/model-store.ts";
-import { localDate, localDateDaysAgo } from "../util/date.ts";
+import { localDate } from "../util/date.ts";
+import { checkRecency, parseTimestamp, promptWindow, toLocalIso, windowEndingAt, type RecencyWindow } from "../util/recency.ts";
 import { loadCategories } from "./categories.ts";
 import { fetchGeekNews, type GeekNewsEntry } from "./geeknews.ts";
 import { buildDomainMatcher, excludedDomainsSection, loadExcludedDomains } from "./excluded.ts";
@@ -40,17 +41,19 @@ ${rows || "   (최근 24시간 등록 글 없음)"}`;
 
 export function buildPrompt(
   defs: NewsCategoryDef[],
-  today: string,
-  yesterday: string,
+  /** 조사 구간(실행 시점 기준 최근 24시간 — 시각 단위). */
+  window: RecencyWindow,
   now: string,
   geekNews: GeekNewsEntry[] | null = null,
   /** 사용자 취합 제외 사이트 섹션(excludedDomainsSection) + 재분류 규칙 섹션(buildNewsReclassSection). */
   userRules = ""
 ): string {
+  const range = promptWindow(window);
+  const endDay = localDate(window.end);
   const cats = defs
     .map((c) => `${c.emoji} ${c.label} (key: "${c.key}")${c.description ? ` — ${c.description}` : ""}`)
     .join("\n  - ");
-  return `너는 한국어 뉴스 큐레이터다. 지금 시각은 ${now}. **최근 24시간 이내(${yesterday} 이후 ~ ${today})**에 발행된 뉴스만 모아
+  return `너는 한국어 뉴스 큐레이터다. 지금 시각은 ${now}. **실행 시점 기준 최근 ${window.hours}시간(${range})** 안에 발행된 뉴스만 모아
 아래 ${defs.length}개 카테고리로 정리한다. 모든 제목·요약은 **반드시 한국어**로 작성한다(영문 소스도 번역).
 
 카테고리:
@@ -62,11 +65,14 @@ export function buildPrompt(
 ${geekNewsInstruction(geekNews)}
 3. 필요하면 주요 발표/사건은 공식 페이지를 WebFetch로 열어 내용을 보강한다.
 
-⚠️ 24시간 신선도 규칙(최우선, 기사 수보다 중요):
-- 검색 결과 스니펫에 **명시적 날짜("YYYY-MM-DD", "YYYY년 M월 D일")** 또는 "N시간 전(N<24)"이 보이는 기사만 채택.
-- "1일 전/2일 전/어제/그저께" 같은 상대 표현 → **제외**(부정확). GeekNews 페이지의 "N시간전"만 예외로 신뢰.
-- 날짜가 불명확/미상이면 **제외**. 쿼터를 채우려고 오래된 기사를 넣지 마라. 0건이어도 괜찮다.
-- 각 기사 date는 발행일을 "YYYY-MM-DD"로. ${today} 또는 (cutoff 이후가 확실한) ${yesterday}만 허용.
+⚠️ 조사 기간 규칙(최우선, 기사 수보다 중요) — **날짜가 아니라 시각으로 판정한다**:
+- 발행 **시각**이 ${range} 안인 기사만 채택한다. 구간 시작 이전 기사는 같은 날짜여도 넣지 마라.
+- 각 기사 publishedAt 에 발행 시각을 "YYYY-MM-DDTHH:mm+09:00"(한국시간)으로 적는다. 원문 기사·메타 정보·검색 스니펫의
+  시각을 확인하고, 해외 기사는 한국시간으로 바꾼다. "N시간 전"이면 지금 시각에서 계산한다. GeekNews 는 등록 시각을 쓴다.
+- 발행 시각을 끝내 확인하지 못하면 publishedAt 은 null 로 두고 date("YYYY-MM-DD")만 적는다. 이때 서버는 **보수적으로**
+  ${endDay}(그 날 전체가 구간 안인 날짜) 기사만 받고 나머지는 버린다 — 그러니 시각을 최대한 확인하라.
+- "1일 전/2일 전/어제/그저께" 같은 모호한 상대 표현만 있으면 **제외**. 쿼터를 채우려고 오래된 기사를 넣지 마라. 0건이어도 괜찮다.
+- 서버가 publishedAt·date 로 구간을 다시 판정해 밖이면 버린다(시각을 위조하지 마라).
 
 ⚠️ 유튜브/영상 제외(중요):
 - 이 뉴스 다이제스트는 **텍스트 기사 전용**이다. YouTube 등 영상은 출처로도 related로도 넣지 마라.
@@ -77,7 +83,7 @@ ${geekNewsInstruction(geekNews)}
 - 가장 상세한 출처를 대표로 삼고, 나머지는 related(최대 2개, 텍스트 기사만)로 붙인다.
 
 출력 형식 — 검증을 마친 뒤 **아래 JSON 한 개만** 출력(다른 텍스트 없이). 각 카테고리 key 아래 기사 배열, 없으면 빈 배열:
-{"categories":{${defs.map((c) => `"${c.key}":[{"title":string,"source":string,"date":"YYYY-MM-DD","summary":string,"link":string|null,"related":[{"label":string,"link":string}]}]`).join(",")}},
+{"categories":{${defs.map((c) => `"${c.key}":[{"title":string,"source":string,"date":"YYYY-MM-DD","publishedAt":"YYYY-MM-DDTHH:mm+09:00"|null,"summary":string,"link":string|null,"related":[{"label":string,"link":string}]}]`).join(",")}},
 "notes":string|null}`;
 }
 
@@ -94,14 +100,10 @@ function normDate(v: unknown): string | null {
   return m ? v.trim() : null;
 }
 
-/** 최근 24시간(오늘 또는 어제 날짜)만 통과 */
-function isFresh(date: string | null, today: string, yesterday: string): boolean {
-  return date === today || date === yesterday;
-}
-
 function normItem(r: any): NewsItem | null {
   const title = String(r?.title ?? "").trim();
-  const date = normDate(r?.date);
+  const at = parseTimestamp(r?.publishedAt);
+  const date = normDate(r?.date) ?? (at ? localDate(at) : null);
   if (!title || !date) return null; // 제목/날짜 없으면 버림(신선도 판정 불가)
   const related = Array.isArray(r?.related)
     ? r.related
@@ -113,6 +115,7 @@ function normItem(r: any): NewsItem | null {
     title: title.slice(0, 200),
     source: String(r?.source ?? "").slice(0, 80),
     date,
+    publishedAt: at ? toLocalIso(at) : null,
     summary: String(r?.summary ?? "").slice(0, 1000),
     link: r?.link ? String(r.link) : null,
     related,
@@ -152,6 +155,11 @@ export interface CurateNewsOptions {
    */
   strict?: boolean;
   /**
+   * 조사 구간(실행 시점 기준 최근 24시간). 보고서는 세 모델이 같은 구간을 쓰도록 실행 시작 때 정해 넘긴다.
+   * 없으면 지금 시각 기준 24시간.
+   */
+  window?: RecencyWindow;
+  /**
    * GeekNews 공식 피드 원자료. undefined 면 여기서 직접 받는다(대시보드 평소 수집),
    * 배열이면 호출부가 받은 공용 원자료를 그대로 쓴다(일일 보고서 — 세 모델에 같은 원자료),
    * null 이면 피드 없이 예전 페이지 확인 지시를 쓴다.
@@ -165,7 +173,7 @@ export interface CurateNewsOptions {
  */
 export async function curateNews(date: string, opts: CurateNewsOptions = {}): Promise<NewsSnapshot> {
   const today = date;
-  const yesterday = localDateDaysAgo(1);
+  const window = opts.window ?? windowEndingAt(new Date(), 24);
   const defs = loadCategories();
   // 실행 시작 시점에 한 번 읽는다(사용자 제외 사이트·재분류 규칙 — 대시보드 조작이 다음 수집부터 반영).
   const excluded = loadExcludedDomains();
@@ -175,12 +183,12 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
   if (opts.geekNews !== undefined) geekNews = opts.geekNews;
   else {
     const now = new Date();
-    const feed = await fetchGeekNews(new Date(now.getTime() - 24 * 3_600_000), now);
+    const feed = await fetchGeekNews(window.start, now);
     geekNews = feed.ok ? feed.entries : null;
   }
   try {
     const finalText = await runAgentQueryText(
-      buildPrompt(defs, today, yesterday, nowLabel(), geekNews, userRules),
+      buildPrompt(defs, window, nowLabel(), geekNews, userRules),
       {
         // tools = 가용 도구 제한(웹 조사 외 차단 — 외부 페이지 프롬프트 인젝션 방어), allowedTools = 무프롬프트 허용
         tools: ["WebSearch", "WebFetch"],
@@ -217,7 +225,12 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
       const items = raw
         .map(normItem)
         .filter((x: NewsItem | null): x is NewsItem => !!x)
-        .filter((x: NewsItem) => isFresh(x.date, today, yesterday))
+        .map((x: NewsItem) => {
+          // 조사 기간(시각 단위): 시각을 알면 시각으로, 날짜만이면 보수적으로(그 날 전체가 구간 안일 때만) — src/util/recency.ts
+          const c = checkRecency(x, window);
+          return c.ok ? (c.approx ? { ...x, timeApprox: true } : x) : null;
+        })
+        .filter((x: NewsItem | null): x is NewsItem => !!x)
         .map((x: NewsItem) => dropExcluded(x, isExcluded))
         .filter((x: NewsItem | null): x is NewsItem => !!x);
       return toCategory(meta, items);

@@ -7,6 +7,7 @@
 import type { DailyReportEntry, DailyReportJson, DailyReportSection } from "../../shared/report.ts";
 import { canonicalUrl, youtubeId, type ReportGroup, type ReportKind } from "./merge.ts";
 import { MODEL_SHORT } from "./models.ts";
+import { toLocalIso } from "../util/recency.ts";
 import type { RenderInput } from "./render.ts";
 
 function foundBy(g: ReportGroup): string[] {
@@ -49,6 +50,8 @@ function entryOf(g: ReportGroup): DailyReportEntry {
     source: g.rep.source,
     url: g.rep.url,
     date: g.rep.date,
+    publishedAt: g.rep.publishedAt ?? null,
+    ...(g.rep.timeApprox ? { timeApprox: true } : {}),
     foundBy: foundBy(g),
     secondary: g.secondary.map((s) => ({ label: s.label, link: s.link })),
     conflict: g.conflict,
@@ -112,7 +115,15 @@ export function buildReportJson(
     counts: r.counts,
     coverage: {
       lastSuccessAt: r.lastSuccessAt,
-      freshDays: r.freshDays,
+      freshHours: r.freshHours,
+      ...(r.windows
+        ? {
+            windows: {
+              news: { from: toLocalIso(r.windows.news.start), to: toLocalIso(r.windows.news.end), hours: r.windows.news.hours },
+              youtube: { from: toLocalIso(r.windows.youtube.start), to: toLocalIso(r.windows.youtube.end), hours: r.windows.youtube.hours },
+            },
+          }
+        : {}),
       gap: gapStart ? { from: gapStart, to: new Date(r.now.getTime() - 24 * 3_600_000).toISOString() } : null,
       geekNews: { ok: gn.ok, count: gn.entries.length, since: gn.since, until: gn.until, error: gn.error },
     },

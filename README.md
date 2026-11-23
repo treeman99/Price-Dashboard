@@ -171,7 +171,7 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | `EVENTS_COLLECT_TIME` · `REPORT_COLLECT_TIMES` · `STOCK_KR/US_COLLECT_TIMES` · `STOCK_PULSE_TIMES` | 기본 10:00 · 09:00,17:00 · 08:00 / 18:00 · 장중 매시 | 탭별 자동 수집 시각(로컬). `REPORT_COLLECT_TIMES` 는 뉴스·유튜브를 함께 갱신하는 세 모델 통합 보고서 일정. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** — 화면에서는 요일·격주·매월까지 |
 | `NOTIFY_EMAIL` · `GMAIL_ADDRESS` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `NOTIFY_IMESSAGE` · `IMESSAGE_TO` | 선택 | 통합 보고서 메일(Gmail API OAuth)·문자(iMessage) 전역 스위치·자격. 실제 발송은 대시보드 '보고서' 탭의 '메일로 받기'·'문자로 받기'(기본 꺼짐)와 AND |
 | `DAILY_NEWS_DIR` · `DAILY_REPORT_COLLECTOR` · `DAILY_REPORT_TIMEOUT_MIN` | 기본 봇 홈 · `<DIR>/collector/daily-report.mjs` · 75 | 통합 보고서 수집기 위치·출력 폴더·1회 실행 상한(분) |
-| `YOUTUBE_FRESH_DAYS` / `YOUTUBE_WATCHED_EXCLUDE_DAYS` | 기본 7(권장 3) / 7 | 유튜브 신선도(최근 N일 게시만) / '본영상' 제외 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
+| `YOUTUBE_FRESH_HOURS` / `YOUTUBE_WATCHED_EXCLUDE_DAYS` | 기본 24 / 7 | 유튜브 조사 기간(실행 시점 기준 최근 N시간, 업로드 시각 단위 — 뉴스는 24시간 고정) / '본영상' 제외 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `EVENTS_NEW_GAP_DAYS` / `EVENTS_NEW_SHOW_DAYS` | 기본 7 / 3 | 팝업·전시 '신규' 판정 공백 / 배지 유지 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `STOCK_PULSE_THRESHOLD` · `_PER_SYMBOL_CAP` · `_DAILY_CAP` · `_MACRO_CAP` · `_DEDUP_HOURS` · `_QUIET_START` · `_QUIET_END` | 기본 important · 3 · 10 · 2 · 24 · 23 · 7 | 펄스 판정 문턱·하루 상한·중복 억제·조용 시간(판정은 원장에 기록만 하고 발송하지 않는다). **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `HISTORY_RETENTION_DAYS` | 기본 90 | 증시 시계열·펄스 원장 보존 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |

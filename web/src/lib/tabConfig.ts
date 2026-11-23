@@ -58,7 +58,12 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
         label: "문자로 받기",
         hint: "핵심 요약·모델별 상태·대시보드 링크를 iMessage 로 보냅니다(.env 수신자 필요).",
       },
-      { kind: "number", path: "youtube.freshDays", label: "최근 영상 기준", hint: "이 기간 안에 게시된 영상만 채택합니다." },
+      {
+        kind: "number",
+        path: "youtube.freshHours",
+        label: "유튜브 조사 기간",
+        hint: "실행 시점 기준 이 시간 안에 업로드된 영상만 채택합니다(기본 24시간, 업로드 시각 단위). 뉴스는 최근 24시간 고정.",
+      },
       {
         kind: "number",
         path: "youtube.watchedExcludeDays",
@@ -152,7 +157,7 @@ export const MANUAL_RUN_LABEL: Partial<Record<ScheduleJobId, string>> = {
 
 // ── 점 경로 읽기/쓰기 ─────────────────────────────────────────────────────────
 
-/** "youtube.freshDays" 처럼 점 경로로 값을 읽는다. 없으면 undefined. */
+/** "youtube.freshHours" 처럼 점 경로로 값을 읽는다. 없으면 undefined. */
 export function getAtPath(obj: unknown, path: string): unknown {
   let cur: unknown = obj;
   for (const key of path.split(".")) {

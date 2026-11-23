@@ -223,7 +223,7 @@ test("applyRegionFilter: kr 카테고리의 해외 영상만 제거, global은 �
     date: "2026-06-28",
     updatedAt: "2026-06-28T00:00:00Z",
     source: "llm",
-    freshDays: 7,
+    freshHours: 168,
     categories: [
       { key: "krlaptop", label: "게이밍 노트북", emoji: "💻", color: "#000", items: [vid("Best Gaming Laptop"), vid("게이밍 노트북 추천"), vid(null)] },
       { key: "world", label: "월드", emoji: "🌐", color: "#000", items: [vid("Global English Video")] },
@@ -281,7 +281,7 @@ test("dedupeCategoriesByVideoId: 같은 카테고리 내 중복도 제거, video
 test("applyYoutubeDedup: null 은 그대로, 스냅샷은 교차 카테고리 중복 제거", () => {
   assert.equal(applyYoutubeDedup(null), null);
   const snap: YoutubeSnapshot = {
-    date: "2026-07-16", updatedAt: "2026-07-16T00:00:00Z", source: "llm", freshDays: 7,
+    date: "2026-07-16", updatedAt: "2026-07-16T00:00:00Z", source: "llm", freshHours: 168,
     categories: [
       { key: "a", label: "A", emoji: "🅰️", color: "#000", items: [{ title: "t", originalTitle: null, channel: "c", channelHandle: null, date: "2026-07-16", summary: "s", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", videoId: "dQw4w9WgXcQ", thumbnail: null }] },
       { key: "b", label: "B", emoji: "🅱️", color: "#000", items: [{ title: "t2", originalTitle: null, channel: "c", channelHandle: null, date: "2026-07-16", summary: "s2", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", videoId: "dQw4w9WgXcQ", thumbnail: null }] },

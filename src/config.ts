@@ -87,9 +87,13 @@ export interface AppConfig {
     /** 야간 종료 = 보류분 묶음 발송 시각. 예: 7 */
     quietEndHour: number;
   };
-  // ⚠️ 아래 4개(youtubeFreshDays ~ eventsNewShowDays)는 대시보드 운영 설정의 **.env 기본값**이다 —
+  // ⚠️ 아래 4개(youtubeFreshHours ~ eventsNewShowDays)는 대시보드 운영 설정의 **.env 기본값**이다 —
   //    런타임 값은 `getTabSettings()`(src/settings/tab-settings.ts, 대시보드 값 우선)로 읽을 것.
-  youtubeFreshDays: number; // 최근 N일 이내 게시 영상만 채택
+  /**
+   * 실행 시점 기준 최근 N시간 안에 업로드된 영상만 채택(YOUTUBE_FRESH_HOURS, 기본 24). 2026-11-23 일 단위
+   * YOUTUBE_FRESH_DAYS 를 대체했다(사용자 결정 "24시간 이내로만") — 예전 값은 읽지 않는다.
+   */
+  youtubeFreshHours: number;
   /** '본영상' 체크된 유튜브 영상을 이만큼(일) 동안 수집·검색에서 제외 */
   youtubeWatchedExcludeDays: number;
   /** 팝업/전시 '신규' 판정: 이만큼(일) 이상 목록에 없다가 다시 나오면 신규 */
@@ -245,7 +249,7 @@ export const config: AppConfig = {
     quietStartHour: clampHour(int(process.env.STOCK_PULSE_QUIET_START, 23)),
     quietEndHour: clampHour(int(process.env.STOCK_PULSE_QUIET_END, 7)),
   },
-  youtubeFreshDays: Math.max(1, int(process.env.YOUTUBE_FRESH_DAYS, 7)),
+  youtubeFreshHours: Math.max(1, int(process.env.YOUTUBE_FRESH_HOURS, 24)),
   youtubeWatchedExcludeDays: Math.max(1, int(process.env.YOUTUBE_WATCHED_EXCLUDE_DAYS, 7)),
   eventsNewGapDays: Math.max(1, int(process.env.EVENTS_NEW_GAP_DAYS, 7)),
   eventsNewShowDays: Math.max(1, int(process.env.EVENTS_NEW_SHOW_DAYS, 3)),

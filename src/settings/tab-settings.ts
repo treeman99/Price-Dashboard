@@ -34,8 +34,9 @@ const STORE_PATH = path.join(path.dirname(config.dbPath), "tab-settings.json");
  * 다시 검증한다. 모두 **정수**만 받는다. 범위 근거(각 값의 쓰임새·사고 기록):
  */
 export const NUMBER_RULES: Record<string, NumberRule> = {
-  // 하한 1 = config.ts 하한. 상한 30: 시드인 채널 RSS 가 최신 15개만 줘서(src/youtube/channels.ts) 한 달을 넘는 창은 시드가 못 채우고 '소식' 탭 성격도 잃는다.
-  "youtube.freshDays": { min: 1, max: 30, unit: "일" },
+  // 하한 1시간. 상한 720시간(30일): 시드인 채널 RSS 가 최신 15개만 줘서(src/youtube/channels.ts) 한 달을 넘는 창은 시드가 못 채운다.
+  // 기본 24시간(사용자 결정 2026-11-23 "실행 시점 기준 24시간 이내로만").
+  "youtube.freshHours": { min: 1, max: 720, unit: "시간" },
   // 하한 1 = config.ts 하한. 상한 30: 신선도 창(최대 30일) 이상 제외하면 그 영상은 이미 신선도에서 탈락해 더 길게 잡을 의미가 없다.
   "youtube.watchedExcludeDays": { min: 1, max: 30, unit: "일" },
   // 하한 1 = config.ts 하한. 상한 60: 등장 원장이 60일 넘게 안 보인 항목을 지운다(new-tracker.ts RETENTION_DAYS) — 그보다 긴 공백은 판정 근거가 없다.
@@ -73,7 +74,7 @@ export const NUMBER_RULES: Record<string, NumberRule> = {
 const FIELD_LABEL: Record<string, string> = {
   "report.notifyEmail": "보고서 메일 받기",
   "report.notifyImessage": "보고서 문자 받기",
-  "youtube.freshDays": "유튜브 신선도",
+  "youtube.freshHours": "유튜브 최근 영상 기준(시간)",
   "youtube.watchedExcludeDays": "유튜브 본영상 제외 기간",
   "events.newGapDays": "팝업·전시 신규 판정 공백",
   "events.newShowDays": "팝업·전시 신규 배지 유지",
@@ -115,7 +116,7 @@ function defaults(clamped?: string[]): TabSettings {
     // 보고서 발송은 사용자가 시험 발송을 확인한 뒤 화면에서 켠다 — .env 전역 스위치가 켜져 있어도 기본은 꺼짐.
     report: { notifyEmail: false, notifyImessage: false },
     youtube: {
-      freshDays: config.youtubeFreshDays,
+      freshHours: config.youtubeFreshHours,
       watchedExcludeDays: config.youtubeWatchedExcludeDays,
     },
     events: {
@@ -272,8 +273,26 @@ export function saveTabSettings(patch: DeepPartial<TabSettings>): TabSettings {
     }
   }
 
-  writeStored({ ...legacySections(readStored(), next), ...diffFromDefaults(next, def) });
+  writeStored(mergeLegacy(readStored(), next, diffFromDefaults(next, def)));
   return getTabSettings();
+}
+
+/**
+ * 저장 파일에 남은 '지금 스키마에 없는 값'(섹션 통째 또는 알려진 섹션 안의 예전 필드 — 예: youtube.freshDays)을
+ * 새로 쓰는 값 옆에 그대로 남긴다. 기능을 바꿨다고 사용자의 기존 값을 저장 한 번에 날리지 않는다(되돌릴 근거).
+ */
+function mergeLegacy(stored: Record<string, unknown>, known: TabSettings, diff: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...legacySections(stored, known) };
+  const k = known as unknown as Record<string, Record<string, unknown>>;
+  for (const [section, raw] of Object.entries(stored)) {
+    if (!Object.hasOwn(k, section) || !isPlainObject(raw)) continue;
+    const legacy = Object.fromEntries(Object.entries(raw).filter(([f]) => !Object.hasOwn(k[section], f)));
+    if (Object.keys(legacy).length) out[section] = legacy;
+  }
+  for (const [section, v] of Object.entries(diff)) {
+    out[section] = { ...(out[section] as Record<string, unknown> | undefined), ...(v as Record<string, unknown>) };
+  }
+  return out;
 }
 
 /** 기본값과 다른 리프만 남긴 sparse 객체. 빈 섹션은 뺀다. */

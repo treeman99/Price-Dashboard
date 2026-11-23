@@ -13,7 +13,7 @@ import path from "node:path";
  */
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "price-tab-settings-"));
 process.env.DB_PATH = path.join(tmpDir, "price.db");
-process.env.YOUTUBE_FRESH_DAYS = "4"; // 표식값
+process.env.YOUTUBE_FRESH_HOURS = "36"; // 표식값
 process.env.STOCK_PULSE_THRESHOLD = "info"; // 깨진 값 폴백이 '덜 보내는 쪽'인지 보려고 가장 느슨한 값
 process.env.STOCK_PULSE_DEDUP_HOURS = "24";
 process.env.NEWS_TIMEOUT_MS = "900000"; // 15분
@@ -39,7 +39,7 @@ const readStore = () => JSON.parse(fs.readFileSync(STORE, "utf8"));
 test("기본값은 .env(config.ts) 값이다 — 파일이 없으면 settings 와 defaults 가 같다", () => {
   const r = ts.getTabSettingsResponse();
   assert.deepEqual(r.settings, r.defaults);
-  assert.equal(r.settings.youtube.freshDays, 4);
+  assert.equal(r.settings.youtube.freshHours, 36);
   assert.equal(r.settings.stockPulse.threshold, "info");
   assert.equal(r.settings.timeouts.newsMin, 15);
   assert.equal(r.settings.timeouts.youtubeMin, config.youtubeTimeoutMs / 60_000);
@@ -64,25 +64,25 @@ test("모든 숫자 필드에 범위 규칙이 있다(필드를 늘리고 규칙
 // ── sparse 저장 / 병합 ──
 
 test("바꾼 필드만 sparse 저장하고, 나머지는 계속 기본값을 따른다", () => {
-  const s1 = ts.saveTabSettings({ youtube: { freshDays: 9 } });
-  assert.equal(s1.youtube.freshDays, 9);
+  const s1 = ts.saveTabSettings({ youtube: { freshHours: 48 } });
+  assert.equal(s1.youtube.freshHours, 48);
   assert.equal(s1.youtube.watchedExcludeDays, config.youtubeWatchedExcludeDays);
-  assert.deepEqual(readStore(), { youtube: { freshDays: 9 } });
+  assert.deepEqual(readStore(), { youtube: { freshHours: 48 } });
 
   const s2 = ts.saveTabSettings({ stockPulse: { dedupHours: 12 } });
-  assert.equal(s2.youtube.freshDays, 9, "앞서 저장한 값이 유지된다");
+  assert.equal(s2.youtube.freshHours, 48, "앞서 저장한 값이 유지된다");
   assert.equal(s2.stockPulse.dedupHours, 12);
   assert.deepEqual(readStore(), {
-    youtube: { freshDays: 9 },
+    youtube: { freshHours: 48 },
     stockPulse: { dedupHours: 12 },
   });
 });
 
 test("기본값과 같은 값을 보내면 저장분에서 빠져 다시 .env 를 따른다('기본값으로 되돌리기')", () => {
-  ts.saveTabSettings({ youtube: { freshDays: 9 }, timeouts: { newsMin: 30 } });
-  ts.saveTabSettings({ youtube: { freshDays: 4 } });
+  ts.saveTabSettings({ youtube: { freshHours: 48 }, timeouts: { newsMin: 30 } });
+  ts.saveTabSettings({ youtube: { freshHours: 36 } });
   assert.deepEqual(readStore(), { timeouts: { newsMin: 30 } });
-  assert.equal(ts.getTabSettings().youtube.freshDays, 4);
+  assert.equal(ts.getTabSettings().youtube.freshHours, 36);
   assert.equal(ts.tabTimeoutMs("newsMin"), 30 * 60_000);
 });
 
@@ -115,16 +115,31 @@ test(".env 기본값이 규칙 밖·분 환산 비정수여도 기본값은 저�
 
 test("제거된 notify 섹션이 저장 파일에 남아 있으면 읽을 때 무시하고, 다른 값을 저장해도 지우지 않는다", () => {
   // 사용자의 기존 설정 파일을 기능 제거 때문에 바꾸지 않는다(되돌릴 때 원래 값이 남아 있게).
-  fs.writeFileSync(STORE, JSON.stringify({ notify: { news: { imessage: false } }, youtube: { freshDays: 9 } }));
+  fs.writeFileSync(STORE, JSON.stringify({ notify: { news: { imessage: false } }, youtube: { freshHours: 48 } }));
   const s = ts.getTabSettings();
   assert.equal("notify" in s, false);
-  assert.equal(s.youtube.freshDays, 9);
+  assert.equal(s.youtube.freshHours, 48);
   ts.saveTabSettings({ timeouts: { newsMin: 30 } });
   assert.deepEqual(readStore(), {
     notify: { news: { imessage: false } },
-    youtube: { freshDays: 9 },
+    youtube: { freshHours: 48 },
     timeouts: { newsMin: 30 },
   });
+});
+
+test("예전 youtube.freshDays(일 단위)는 읽지 않고(기본 24시간 적용) 저장 파일에는 그대로 보존한다(2026-11-23)", () => {
+  // 운영 파일 그대로의 모양: { report: …, youtube: { freshDays: 2 } }
+  fs.writeFileSync(STORE, JSON.stringify({ report: { notifyEmail: true }, youtube: { freshDays: 2 } }));
+  const s = ts.getTabSettings();
+  assert.equal(s.youtube.freshHours, 36, "예전 일 단위 값은 시간으로 옮기지 않는다 — 기본값(.env 표식 36)을 쓴다");
+  assert.equal("freshDays" in s.youtube, false);
+  ts.saveTabSettings({ youtube: { watchedExcludeDays: 5 } });
+  assert.deepEqual(readStore(), {
+    report: { notifyEmail: true },
+    youtube: { freshDays: 2, watchedExcludeDays: 5 },
+  }, "같은 섹션의 예전 필드도 지우지 않는다");
+  ts.saveTabSettings({ youtube: { freshHours: 24 } });
+  assert.deepEqual(readStore().youtube, { freshDays: 2, watchedExcludeDays: 5, freshHours: 24 });
 });
 
 test("notify 를 저장하려 하면 '알 수 없는 설정 항목'으로 거부한다", () => {
@@ -145,7 +160,7 @@ test("필드 단위 관대 읽기: 타입 오류→기본값, 범위 밖 숫자�
   fs.writeFileSync(
     STORE,
     JSON.stringify({
-      youtube: { freshDays: "abc", watchedExcludeDays: 5 },
+      youtube: { freshHours: "abc", watchedExcludeDays: 5 },
       events: { verifyDates: "yes" },
       stockPulse: { quietStartHour: 30, quietEndHour: -3, threshold: "infoo", dailyCap: 7.9 },
       timeouts: { newsMin: 999 },
@@ -153,7 +168,7 @@ test("필드 단위 관대 읽기: 타입 오류→기본값, 범위 밖 숫자�
     })
   );
   const s = ts.getTabSettings();
-  assert.equal(s.youtube.freshDays, 4, "타입 오류 → 기본값");
+  assert.equal(s.youtube.freshHours, 36, "타입 오류 → 기본값");
   assert.equal(s.youtube.watchedExcludeDays, 5, "정상 값은 그대로");
   assert.equal(s.events.verifyDates, config.eventsVerifyDates);
   assert.equal(s.stockPulse.quietStartHour, 23, "0~23 클램프(config.ts clampHour 원칙)");
@@ -167,13 +182,13 @@ test("필드 단위 관대 읽기: 타입 오류→기본값, 범위 밖 숫자�
 // ── 엄격 쓰기: 거부 ──
 
 test("범위 밖·정수 아님·타입 오류·알 수 없는 항목은 throw 하고 파일을 바꾸지 않는다", () => {
-  ts.saveTabSettings({ youtube: { freshDays: 9 } });
+  ts.saveTabSettings({ youtube: { freshHours: 48 } });
   const before = fs.readFileSync(STORE, "utf8");
   const bad: unknown[] = [
-    { youtube: { freshDays: 0 } },
-    { youtube: { freshDays: 31 } },
-    { youtube: { freshDays: 2.5 } },
-    { youtube: { freshDays: "7" } },
+    { youtube: { freshHours: 0 } },
+    { youtube: { freshHours: 721 } },
+    { youtube: { freshHours: 2.5 } },
+    { youtube: { freshHours: "7" } },
     { stockPulse: { quietStartHour: 24 } },
     { stockPulse: { threshold: "high" } },
     { stockPulse: { threshold: "Urgent" } },
@@ -186,7 +201,7 @@ test("범위 밖·정수 아님·타입 오류·알 수 없는 항목은 throw �
     { secrets: { gmailAddress: "x" } },
     { youtube: 5 },
     JSON.parse('{"__proto__":{"polluted":true}}'),
-    JSON.parse('{"youtube":{"__proto__":{"freshDays":1}}}'),
+    JSON.parse('{"youtube":{"__proto__":{"freshHours":1}}}'),
     { constructor: {} },
     [],
   ];
@@ -198,7 +213,7 @@ test("범위 밖·정수 아님·타입 오류·알 수 없는 항목은 throw �
 });
 
 test("거부 사유는 한국어 이름과 허용 범위를 담는다", () => {
-  assert.throws(() => ts.saveTabSettings({ youtube: { freshDays: 99 } }), /유튜브 신선도: 1~30일 사이의 정수/);
+  assert.throws(() => ts.saveTabSettings({ youtube: { freshHours: 999 } }), /유튜브 최근 영상 기준\(시간\): 1~720시간 사이의 정수/);
   assert.throws(() => ts.saveTabSettings({ stockPulse: { threshold: "x" as never } }), /urgent \/ important \/ info/);
 });
 

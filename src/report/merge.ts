@@ -25,6 +25,10 @@ export interface ReportItem {
   url: string | null;
   /** 발행일(뉴스)·업로드일(유튜브) YYYY-MM-DD. */
   date: string;
+  /** 발행·업로드 시각(로컬 오프셋 ISO). 모르면 null. */
+  publishedAt?: string | null;
+  /** 시각을 확인하지 못하고 날짜만으로 조사 구간 안이라고 판정했는가. */
+  timeApprox?: boolean;
   videoId?: string | null;
   /** 유튜브 채널 핸들(있으면) — 채널 차단 판정용. */
   channelHandle?: string | null;

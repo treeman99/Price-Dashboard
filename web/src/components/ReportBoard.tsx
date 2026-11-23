@@ -66,6 +66,21 @@ function when(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? iso : formatWhen(d, new Date());
 }
 
+/** "11/22 09:00 ~ 11/23 09:00 KST" — 구간(ISO 두 개)을 한국시간으로. */
+function windowText(w: { from: string; to: string }): string {
+  const f = (iso: string) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+        .formatToParts(d)
+        .map((p) => [p.type, p.value])
+    );
+    return `${parts.month}/${parts.day} ${parts.hour}:${parts.minute}`;
+  };
+  return `${f(w.from)} ~ ${f(w.to)} KST`;
+}
+
 function runTone(r: { ok: boolean; successCount: number; modelCount: number }): { tone: TagTone; label: string } {
   if (!r.ok) return { tone: "error", label: "통합 실패" };
   if (r.successCount < r.modelCount) return { tone: "warn", label: `부분 ${r.successCount}/${r.modelCount}` };
@@ -282,8 +297,15 @@ function ReportDetail({
             </tbody>
           </table>
         </div>
+        {r.coverage.windows && (
+          <p className="num mt-2 text-[13px]">
+            <span className="text-muted-foreground">수집 범위</span> 뉴스 {windowText(r.coverage.windows.news)} · 유튜브{" "}
+            {windowText(r.coverage.windows.youtube)}
+            <span className="text-muted-foreground"> (실행 시점 기준, 발행·업로드 시각 단위)</span>
+          </p>
+        )}
         <p className="num mt-2 text-[12.5px] text-muted-foreground">
-          통합 전 {r.counts.before}건{r.counts.excludedByUser ? ` → 사용자 취합 제외 ${r.counts.excludedByUser}건 제외` : ""} → 통합 후 {r.counts.afterMerge}건 → 이미 보고한 {r.counts.alreadyReported}건 제외 후 새{" "}
+          통합 전 {r.counts.before}건{r.counts.outOfWindow ? ` → 조사 구간 밖 ${r.counts.outOfWindow}건 제외` : ""}{r.counts.excludedByUser ? ` → 사용자 취합 제외 ${r.counts.excludedByUser}건 제외` : ""} → 통합 후 {r.counts.afterMerge}건 → 이미 보고한 {r.counts.alreadyReported}건 제외 후 새{" "}
           {r.counts.reported}건{r.counts.seedsOnly ? ` (+ 모델 미선정 추천 채널 업로드 ${r.counts.seedsOnly}건)` : ""}
           {r.editor.note ? ` · ${r.editor.note}` : ""}
         </p>

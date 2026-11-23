@@ -20,6 +20,7 @@ import {
 } from "./merge.ts";
 import { modelOutcome, runWithLimitRetry, type ModelOutcome, type ModelSpec } from "./models.ts";
 import { renderReport } from "./render.ts";
+import { checkRecency, windowEndingAt, type RecencyWindow } from "../util/recency.ts";
 import { buildReportJson } from "./output.ts";
 
 /**
@@ -35,6 +36,8 @@ export interface SharedSeedVideo {
   title: string;
   channel: string;
   date: string;
+  /** RSS 게시 시각(로컬 오프셋 ISO). */
+  publishedAt?: string | null;
   categoryKey: string;
   description: string | null;
 }
@@ -62,15 +65,25 @@ export interface CategoryInfo {
   /** label 은 보고서 표기(이모지 포함), name·emoji·color 는 탭 스냅샷용 원래 값(없으면 label·빈 값). */
   news: { key: string; label: string; name?: string; emoji?: string; color?: string }[];
   youtube: { key: string; label: string; name?: string; emoji?: string; color?: string }[];
-  freshDays: number;
+  /** 유튜브 조사 기간(시간) — 운영 설정 youtube.freshHours(기본 24). */
+  freshHours: number;
 }
+
+/** 실행 시점 기준 조사 구간(뉴스 24시간, 유튜브 freshHours) — 실행 시작 때 한 번 정해 세 모델·통합 단계가 같이 쓴다. */
+export interface RunWindows {
+  news: RecencyWindow;
+  youtube: RecencyWindow;
+}
+
+/** 뉴스 조사 기간(시간). 사용자 결정(2026-11-23): 실행 시점 기준 최근 24시간. */
+export const NEWS_WINDOW_HOURS = 24;
 
 export interface PipelineDeps {
   now(): Date;
   categories(): CategoryInfo;
-  collectRaw(ctx: { now: Date; checkpoint: Checkpoint }): Promise<RawData>;
-  collectNews(spec: ModelSpec, raw: RawData): Promise<NewsSnapshot>;
-  collectYoutube(spec: ModelSpec, raw: RawData): Promise<YoutubeSnapshot>;
+  collectRaw(ctx: { now: Date; checkpoint: Checkpoint; windows: RunWindows }): Promise<RawData>;
+  collectNews(spec: ModelSpec, raw: RawData, windows: RunWindows): Promise<NewsSnapshot>;
+  collectYoutube(spec: ModelSpec, raw: RawData, windows: RunWindows): Promise<YoutubeSnapshot>;
   runEditor(spec: ModelSpec, prompt: string): Promise<string>;
   /**
    * 사용자 '취합 제외' 판정(보고서 탭에서 만든 기록). 모델이 가져온 항목도 통합 전에 여기서 다시 걸러낸다.
@@ -143,7 +156,15 @@ export interface RunResult {
   successCount: number;
   models: ModelRunRecord[];
   editor: EditorRecord;
-  counts: { before: number; excludedByUser?: number; afterMerge: number; alreadyReported: number; reported: number; seedsOnly: number };
+  counts: {
+    before: number;
+    outOfWindow?: number;
+    excludedByUser?: number;
+    afterMerge: number;
+    alreadyReported: number;
+    reported: number;
+    seedsOnly: number;
+  };
   checkpointAdvanced: boolean;
   /** 구조화 보고서(report.json) 경로. */
   reportJsonPath: string;
@@ -197,6 +218,8 @@ function newsItems(spec: ModelSpec, snap: NewsSnapshot, labels: Map<string, stri
         source: it.source,
         url: it.link,
         date: it.date,
+        publishedAt: it.publishedAt ?? null,
+        timeApprox: !!it.timeApprox,
         related: it.related ?? [],
       });
     }
@@ -219,6 +242,8 @@ function youtubeItems(spec: ModelSpec, snap: YoutubeSnapshot, labels: Map<string
         source: v.channel,
         url: v.url,
         date: v.date,
+        publishedAt: v.publishedAt ?? null,
+        timeApprox: !!v.timeApprox,
         videoId: v.videoId ?? youtubeId(v.url),
         channelHandle: v.channelHandle ?? null,
         originalTitle: v.originalTitle ?? null,
@@ -317,7 +342,12 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
 
   // ── 1. 공용 원자료(모델 결과가 아니다): GeekNews 공식 피드 + 추천 채널 RSS ──
   deps.log("공용 원자료 수집 시작");
-  const raw = await deps.collectRaw({ now, checkpoint });
+  // 조사 구간: 실행 시점 기준 최근 24시간(뉴스)·freshHours(유튜브), 시각 단위. 세 모델·통합 단계가 같은 구간을 쓴다.
+  const windows: RunWindows = {
+    news: windowEndingAt(now, NEWS_WINDOW_HOURS),
+    youtube: windowEndingAt(now, cats.freshHours),
+  };
+  const raw = await deps.collectRaw({ now, checkpoint, windows });
   writeJson(path.join(opts.runDir, "raw", "sources.json"), raw.sources);
   writeJson(path.join(opts.runDir, "raw", "geeknews.json"), raw.geekNews);
   writeJson(path.join(opts.runDir, "raw", "youtube-seeds.json"), Object.fromEntries(raw.seeds));
@@ -330,8 +360,8 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
       const retryNote = (part: string) => (reason: string) =>
         deps.log(`${spec.label} ${part}: 한도 응답 → ${Math.round(opts.retryDelayMs / 1000)}초 뒤 1회 재시도 (${reason.slice(0, 160)})`);
       const [news, youtube] = await Promise.all([
-        deps.trace(traces, () => runWithLimitRetry(spec, () => deps.collectNews(spec, raw), opts.retryDelayMs, retryNote("뉴스"))),
-        deps.trace(traces, () => runWithLimitRetry(spec, () => deps.collectYoutube(spec, raw), opts.retryDelayMs, retryNote("유튜브"))),
+        deps.trace(traces, () => runWithLimitRetry(spec, () => deps.collectNews(spec, raw, windows), opts.retryDelayMs, retryNote("뉴스"))),
+        deps.trace(traces, () => runWithLimitRetry(spec, () => deps.collectYoutube(spec, raw, windows), opts.retryDelayMs, retryNote("유튜브"))),
       ]);
       const partOf = (
         r: { ok: true; attempts: number } | { ok: false; kind: "limit" | "error"; error: string; attempts: number }
@@ -376,7 +406,15 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
   const ex = deps.exclusions?.();
   const items: ReportItem[] = [];
   let excludedByUser = 0;
+  let outOfWindow = 0;
   for (const it of collected) {
+    // 조사 구간(시각 단위) 재판정 — 모델 후처리가 놓친 것까지 여기서 거른다. 날짜만 있으면 보수적으로(그 날 전체가 구간 안).
+    const rc = checkRecency(it, it.kind === "news" ? windows.news : windows.youtube);
+    if (!rc.ok) {
+      outOfWindow++;
+      continue;
+    }
+    if (rc.approx) it.timeApprox = true;
     const drop = !ex
       ? false
       : it.kind === "news"
@@ -389,6 +427,7 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
     // 제외 사이트의 관련 출처 링크도 보조 출처로 올리지 않는다.
     items.push(ex && it.related?.length ? { ...it, related: it.related.filter((r) => !ex.newsUrl(r.link)) } : it);
   }
+  if (outOfWindow) deps.log(`조사 구간 밖(시각 단위 재판정) ${outOfWindow}건 제외`);
   if (excludedByUser) deps.log(`사용자 취합 제외 규칙으로 ${excludedByUser}건 제외`);
   const labels: CategoryLabels = { news: newsLabels, youtube: ytLabels };
   const moves = deps.categoryMoves?.() ?? { news: [], youtube: [] };
@@ -445,6 +484,7 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
   }
   const counts = {
     before: collected.length,
+    outOfWindow,
     excludedByUser,
     afterMerge: groups.length,
     alreadyReported: alreadyReported.length,
@@ -478,9 +518,10 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
     seedsOnly: ok ? seedsOnly : [],
     counts,
     raw,
-    freshDays: cats.freshDays,
+    freshHours: cats.freshHours,
     lastSuccessAt,
     categories: cats,
+    windows,
   };
   const markdown = renderReport(renderInput);
   const reportPath = path.join(opts.runDir, "report.md");

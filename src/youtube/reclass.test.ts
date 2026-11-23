@@ -27,6 +27,6 @@ test("buildPrompt: reclassSection 인자가 프롬프트에 그대로 삽입된�
 test("buildPrompt: reclassSection 미지정이면 재분류 문구 없음 + 신선도 '모든 카테고리' 문구 포함", () => {
   const p = buildPrompt(defs, "2026-07-08", "2026-07-01", 7, "2026-07-08 12:00", []);
   assert.doesNotMatch(p, /사용자 재분류 규칙/);
-  assert.match(p, /조회 시점 기준 최근 7일/);
+  assert.match(p, /실행 시점 기준 최근 7시간 이내/);
   assert.match(p, /모든 카테고리에 예외 없이 동일하게/);
 });

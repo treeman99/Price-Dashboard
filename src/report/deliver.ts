@@ -7,6 +7,7 @@
  * - 실제 발송기(sendMail·sendIMessage)는 주입할 수 있다 — 테스트는 모의 발송기만 쓴다(실제 메시지 금지).
  */
 import { config } from "../config.ts";
+import { formatWindowKst, kstShort as kstClock } from "../util/recency.ts";
 import { log } from "../util/log.ts";
 import { getTabSettings } from "../settings/tab-settings.ts";
 import { getGoogleAuthStatus } from "../notify/google-auth.ts";
@@ -110,13 +111,26 @@ export function reportSubject(r: DailyReportJson): string {
   return `🗞️ IT 보고서 ${kstShort(r.startedAt)} · 뉴스 ${c.news} · 영상 ${c.youtube}${state}`;
 }
 
+/** 발행·업로드 시각 "11. 23. 08:30" — 시각을 모르면 날짜(시각 미확인). */
+function entryWhen(e: DailyReportEntry): string {
+  if (e.publishedAt && !e.timeApprox) return kstClock(e.publishedAt);
+  return e.timeApprox ? `${e.date}(시각 미확인)` : e.date;
+}
+
+/** 수집 범위 한 줄(정확한 시각 구간). 예전 실행에는 구간 기록이 없다. */
+function coverageLine(r: DailyReportJson): string | null {
+  const w = r.coverage.windows;
+  if (!w) return null;
+  return `수집 범위: 뉴스 ${formatWindowKst({ start: w.news.from, end: w.news.to })} · 유튜브 ${formatWindowKst({ start: w.youtube.from, end: w.youtube.to })}(실행 시점 기준, 발행·업로드 시각 단위)`;
+}
+
 function entryRow(e: DailyReportEntry): string {
   const href = safeHref(e.url);
   const isVideo = e.kind === "youtube";
   const lead = e.update ? statusTag("새 출처", "info") : "";
   const meta = metaLine([
     breakLongRuns(escapeHtml(e.source)),
-    breakLongRuns(escapeHtml(isVideo ? `업로드 ${e.date}` : e.date)),
+    breakLongRuns(escapeHtml(`${isVideo ? "업로드" : "발행"} ${entryWhen(e)}`)),
     `찾은 모델 ${escapeHtml(e.foundBy.join(", "))}`,
   ]);
   const extra = [
@@ -240,7 +254,7 @@ export function buildReportEmailHtml(r: DailyReportJson): string {
     ]),
     body: parts.join(""),
     footnote:
-      `직전 보고 이후 새 항목만 싣습니다(통합 전 ${r.counts.before}건 → 통합 후 ${r.counts.afterMerge}건, 이미 보고 ${r.counts.alreadyReported}건 제외). ` +
+      `${coverageLine(r) ? `${escapeHtml(coverageLine(r)!)}. ` : ""}직전 보고 이후 새 항목만 싣습니다(통합 전 ${r.counts.before}건 → 통합 후 ${r.counts.afterMerge}건, 이미 보고 ${r.counts.alreadyReported}건 제외). ` +
       "유튜브 요약은 제목·설명·검색 결과 기준이며 영상을 시청한 것은 아닙니다.",
   });
 }

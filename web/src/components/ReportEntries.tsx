@@ -31,6 +31,21 @@ export interface EntryActionsContext {
   onError: (msg: string) => void;
 }
 
+/** 발행·업로드 시각 "11/23 08:30" — 시각을 모르면 "11/23(시각 미확인)", 예전 실행은 날짜 그대로. */
+function entryWhen(e: DailyReportEntryView): string {
+  if (e.publishedAt && !e.timeApprox) {
+    const d = new Date(e.publishedAt);
+    if (!Number.isNaN(d.getTime())) {
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+  }
+  const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(e.date);
+  if (!m) return e.date;
+  const md = `${Number(m[1])}/${Number(m[2])}`;
+  return e.timeApprox ? `${md}(시각 미확인)` : md;
+}
+
 function thumb(videoId: string | null | undefined): string | null {
   return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null;
 }
@@ -129,7 +144,8 @@ function EntryRow({ e, ctx }: { e: DailyReportEntryView; ctx: EntryActionsContex
           )}
         </p>
         <p className="num mt-1 text-[12.5px] text-muted-foreground">
-          {e.source} · {isVideo ? `업로드 ${e.date}` : e.date} · 찾은 모델 {e.foundBy.join(", ")}
+          {e.source} · {isVideo ? "업로드 " : "발행 "}
+          {entryWhen(e)} · 찾은 모델 {e.foundBy.join(", ")}
           {e.movedFrom && <> · 옮김({defs.find((d) => d.key === e.movedFrom)?.label ?? e.movedFrom} → 여기)</>}
         </p>
         <p className="mt-1.5 text-[14px] leading-relaxed text-foreground/85">{e.summary}</p>

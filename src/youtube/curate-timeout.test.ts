@@ -72,7 +72,7 @@ test("유튜브: Gemini(agy) 경로만 채널 발굴 예산을 8분으로 늘린
 
 test("유튜브: 대시보드 운영 설정 저장 직후 다음 수집이 새 신선도·타임아웃을 쓴다(재시작 불필요)", async () => {
   const { saveTabSettings } = await import("../settings/tab-settings.ts");
-  saveTabSettings({ youtube: { freshDays: 5 }, timeouts: { youtubeMin: 7 } });
+  saveTabSettings({ youtube: { freshHours: 30 }, timeouts: { youtubeMin: 7 } });
 
   const calls: { label: string; prompt: string; system: string; timeoutMs: number }[] = [];
   const record = async (prompt: string, options: unknown, timeoutMs: number, label: string) => {
@@ -94,7 +94,7 @@ test("유튜브: 대시보드 운영 설정 저장 직후 다음 수집이 새 �
   const curation = calls.find((c) => c.label === "유튜브 큐레이션");
   assert.ok(curation, "큐레이션 호출이 없다");
   assert.equal(curation.timeoutMs, 7 * 60_000);
-  assert.match(curation.prompt, /최근 5일 이내/);
-  assert.match(curation.system, /최근 5일 이내/);
-  assert.doesNotMatch(curation.prompt, new RegExp(`최근 ${config.youtubeFreshDays}일 이내`));
+  assert.match(curation.prompt, /실행 시점 기준 최근 30시간 이내\(\d{4}-\d{2}-\d{2} \d{2}:\d{2} ~ \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(한국시간\)\)/);
+  assert.match(curation.system, /실행 시점 기준 최근 30시간/);
+  assert.doesNotMatch(curation.prompt, new RegExp(`최근 ${config.youtubeFreshHours}시간 이내`));
 });

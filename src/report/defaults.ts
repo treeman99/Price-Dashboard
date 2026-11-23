@@ -13,12 +13,13 @@ import { loadCategories as loadYoutubeCategories } from "../youtube/categories.t
 import { buildBlockMatcher, loadBlocklist } from "../youtube/blocklist.ts";
 import { buildWatchedMatcher } from "../youtube/watched.ts";
 import { buildDismissMatcher } from "../youtube/dismissed.ts";
-import { fetchChannelUploadsDetailed, inWindow, resolveChannelId, type RssVideo } from "../youtube/channels.ts";
+import { fetchChannelUploadsDetailed, resolveChannelId, type RssVideo } from "../youtube/channels.ts";
 import { filterOutShorts } from "../youtube/oembed.ts";
 import { getTabSettings } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
 import { withQueryTrace } from "../util/agent-trace.ts";
 import { localDate } from "../util/date.ts";
+import { checkRecency } from "../util/recency.ts";
 import { buildDomainMatcher } from "../news/excluded.ts";
 import { loadNewsReclass } from "../news/reclass.ts";
 import { loadReclass } from "../youtube/reclass.ts";
@@ -28,7 +29,15 @@ import type { PipelineDeps, RawData, SharedSeedVideo, SourceStatus } from "./pip
 const EDITOR_TIMEOUT_MS = 10 * 60_000;
 
 function toRss(v: SharedSeedVideo): RssVideo {
-  return { videoId: v.videoId, title: v.title, channel: v.channel, channelId: null, date: v.date, description: v.description };
+  return {
+    videoId: v.videoId,
+    title: v.title,
+    channel: v.channel,
+    channelId: null,
+    date: v.date,
+    publishedAt: v.publishedAt ?? null,
+    description: v.description,
+  };
 }
 
 async function collectRaw(ctx: Parameters<PipelineDeps["collectRaw"]>[0]): Promise<RawData> {
@@ -50,10 +59,8 @@ async function collectRaw(ctx: Parameters<PipelineDeps["collectRaw"]>[0]): Promi
     ...(feed.error ? { error: feed.error } : {}),
   });
 
-  // 유튜브 추천 채널 RSS: price 유튜브 탭과 같은 신선도 창 + 스킵 규칙(차단·본영상·제외·Shorts).
-  const freshDays = getTabSettings().youtube.freshDays;
-  const today = localDate(now);
-  const defaultCutoff = localDate(new Date(now.getTime() - freshDays * 86_400_000));
+  // 유튜브 추천 채널 RSS: 조사 구간(실행 시점 기준 최근 N시간 — 게시 시각 단위) + 스킵 규칙(차단·본영상·제외·Shorts).
+  const ytWindow = ctx.windows.youtube;
   const defs = stripBlockedRecommended(loadYoutubeCategories(), loadBlocklist());
   const isBlocked = buildBlockMatcher();
   const isWatched = buildWatchedMatcher();
@@ -77,16 +84,15 @@ async function collectRaw(ctx: Parameters<PipelineDeps["collectRaw"]>[0]): Promi
   for (const q of queries) {
     const r = fetched.get(q)!;
     const srcId = `youtube:${q.toLowerCase()}`;
-    const okAt = ctx.checkpoint.sources[srcId]?.okAt;
-    // 이 채널이 지난번에 실패했으면 마지막 성공 시점부터 다시 본다(신선도 창보다 이를 때만).
-    const cutoff = okAt && localDate(new Date(okAt)) < defaultCutoff ? localDate(new Date(okAt)) : defaultCutoff;
-    const inWin = r.videos.filter((v) => inWindow(v.date, cutoff, today));
+    // 조사 기간은 실행 시점 기준 최근 N시간으로 고정한다(2026-11-23 "24시간 이내로만") — 예전처럼 실패한 채널의
+    // 마지막 성공 시점까지 거슬러 올라가지 않는다(그 구간은 보고서의 '범위 공백'으로 남는다).
+    const inWin = r.videos.filter((v) => checkRecency(v, ytWindow).ok);
     sources.push({
       id: srcId,
       label: `유튜브 추천 채널 RSS: ${q}`,
       ok: r.ok,
       count: inWin.length,
-      since: new Date(`${cutoff}T00:00:00+09:00`).toISOString(),
+      since: ytWindow.start.toISOString(),
       until: now.toISOString(),
       ...(r.error ? { error: r.error } : {}),
     });
@@ -97,10 +103,18 @@ async function collectRaw(ctx: Parameters<PipelineDeps["collectRaw"]>[0]): Promi
       const r = fetched.get(q.trim());
       if (!r?.ok) continue;
       for (const v of r.videos) {
-        if (!inWindow(v.date, defaultCutoff, today)) continue;
+        if (!checkRecency(v, ytWindow).ok) continue;
         if (isBlocked(v.channel, null, d.key) || isWatched(v.videoId) || isDismissed(v.videoId)) continue;
         if (list.some((x) => x.videoId === v.videoId)) continue;
-        list.push({ videoId: v.videoId, title: v.title, channel: v.channel, date: v.date, categoryKey: d.key, description: v.description });
+        list.push({
+          videoId: v.videoId,
+          title: v.title,
+          channel: v.channel,
+          date: v.date,
+          publishedAt: v.publishedAt ?? null,
+          categoryKey: d.key,
+          description: v.description,
+        });
       }
     }
     seeds.set(d.key, await filterOutShorts(list));
@@ -123,20 +137,25 @@ export const defaultDeps: PipelineDeps = {
   categories: () => ({
     news: loadNewsCategories().map((c) => ({ key: c.key, label: `${c.emoji} ${c.label}`, name: c.label, emoji: c.emoji, color: c.color })),
     youtube: loadYoutubeCategories().map((c) => ({ key: c.key, label: `${c.emoji} ${c.label}`, name: c.label, emoji: c.emoji, color: c.color })),
-    freshDays: getTabSettings().youtube.freshDays,
+    freshHours: getTabSettings().youtube.freshHours,
   }),
   collectRaw,
-  collectNews: (spec, raw) =>
-    curateNews(localDate(), {
+  collectNews: (spec, raw, windows) =>
+    curateNews(localDate(windows.news.end), {
       model: spec.model,
       strict: true,
-      // 공용 원자료: 피드를 못 받았으면 null → 각 모델이 예전 방식(페이지 직접 확인)으로 조사
-      geekNews: raw.geekNews.ok ? raw.geekNews.entries : null,
+      window: windows.news,
+      // 공용 원자료: 피드를 못 받았으면 null → 각 모델이 예전 방식(페이지 직접 확인)으로 조사.
+      // 피드는 출처별 마지막 성공부터 받아 두지만(raw 기록), 모델에는 조사 구간(최근 24시간 — 등록 시각) 안 글만 준다.
+      geekNews: raw.geekNews.ok
+        ? raw.geekNews.entries.filter((e) => checkRecency({ publishedAt: e.publishedAt }, windows.news).ok)
+        : null,
     }),
-  collectYoutube: (spec, raw) =>
-    curateYoutube(localDate(), {
+  collectYoutube: (spec, raw, windows) =>
+    curateYoutube(localDate(windows.youtube.end), {
       model: spec.model,
       strict: true,
+      window: windows.youtube,
       sharedSeeds: new Map([...raw.seeds].map(([k, v]) => [k, v.map(toRss)])),
       seedFallback: false,
     }),

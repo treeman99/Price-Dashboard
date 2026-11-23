@@ -129,8 +129,11 @@ export interface TabSettings {
     notifyImessage: boolean;
   };
   youtube: {
-    /** 최근 N일 이내 게시 영상만 채택(YOUTUBE_FRESH_DAYS). */
-    freshDays: number;
+    /**
+     * 실행 시점 기준 최근 N시간 안에 업로드된 영상만 채택(YOUTUBE_FRESH_HOURS, 기본 24). 2026-11-23 일 단위
+     * freshDays 를 대체했다 — 저장 파일의 예전 freshDays 값은 지우지 않고 보존하지만 읽지 않는다.
+     */
+    freshHours: number;
     /** '본영상' 체크 영상을 N일 동안 제외(YOUTUBE_WATCHED_EXCLUDE_DAYS). */
     watchedExcludeDays: number;
   };
@@ -185,7 +188,7 @@ export interface TabSettingsResponse {
   settings: TabSettings;
   /** .env 기본값('기본값으로 되돌리기'용). */
   defaults: TabSettings;
-  /** 숫자 필드 범위. 키는 점 경로("youtube.freshDays", "timeouts.newsMin" …). */
+  /** 숫자 필드 범위. 키는 점 경로("youtube.freshHours", "timeouts.newsMin" …). */
   numberRules: Record<string, NumberRule>;
 }
 
@@ -354,6 +357,10 @@ export interface NewsItem {
   source: string;
   /** 발행일 YYYY-MM-DD */
   date: string;
+  /** 발행 시각(ISO, 시간대 포함). 모르면 null — 그때는 날짜만으로 보수적으로 판정한다(src/util/recency.ts). */
+  publishedAt?: string | null;
+  /** 발행 시각을 확인하지 못하고 날짜로만 조사 기간 안이라고 판정했는가(표시용). */
+  timeApprox?: boolean;
   /** 한국어 요약 (5줄 이내) */
   summary: string;
   link: string | null;
@@ -399,6 +406,10 @@ export interface YoutubeVideo {
   channelHandle?: string | null;
   /** 영상 게시일 YYYY-MM-DD (없으면 상대표현 추정 불가 → 채택 안 함) */
   date: string;
+  /** 업로드 시각(ISO, 시간대 포함 — watch 페이지·RSS 의 실제 값). 모르면 null(날짜로 보수적으로 판정). */
+  publishedAt?: string | null;
+  /** 업로드 시각을 확인하지 못하고 날짜로만 판정했는가(표시용). */
+  timeApprox?: boolean;
   /** 한국어 요약 — 영상이 다루는 핵심 내용(제목 재진술이 아니라 실제 내용). */
   summary: string;
   /** 영상 watch URL (https://www.youtube.com/watch?v=...) */
@@ -515,8 +526,8 @@ export interface YoutubeSnapshot {
   updatedAt: string; // ISO
   /** 큐레이션 출처: LLM or 미수집(empty) */
   source: "llm" | "empty";
-  /** 신선도 기준일 수(이 일수 이내 게시 영상만 채택) */
-  freshDays: number;
+  /** 신선도 기준 시간(실행 시점 기준 이 시간 안에 업로드된 영상만 채택) */
+  freshHours: number;
   categories: YoutubeCategory[];
   notes: string | null;
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { localDate } from "../util/date.ts";
+import { checkRecency, toLocalIso, type RecencyWindow } from "../util/recency.ts";
 import { filterOutShorts } from "./oembed.ts";
 
 /**
@@ -24,6 +25,8 @@ export interface RssVideo {
   channelId: string | null;
   /** 로컬 YYYY-MM-DD (RSS published 를 로컬 날짜로 변환). */
   date: string;
+  /** RSS published 의 실제 게시 시각(로컬 오프셋 ISO). 조사 기간을 시각 단위로 판정할 때 쓴다. */
+  publishedAt?: string | null;
   /** RSS media:description 앞부분(요약 힌트로만). */
   description: string | null;
 }
@@ -90,7 +93,7 @@ export function parseRssEntries(xml: string): RssVideo[] {
     const channel = decodeXml(/<author>\s*<name>([\s\S]*?)<\/name>/.exec(e)?.[1] ?? "");
     const descRaw = /<media:description>([\s\S]*?)<\/media:description>/.exec(e)?.[1] ?? "";
     const description = descRaw ? decodeXml(descRaw).slice(0, 400) : null;
-    out.push({ videoId: vid, title, channel, channelId, date: localDate(d), description });
+    out.push({ videoId: vid, title, channel, channelId, date: localDate(d), publishedAt: toLocalIso(d), description });
   }
   return out;
 }
@@ -211,11 +214,11 @@ export async function fetchChannelUploadsDetailed(
  * 채널 문자열 목록 → 각 채널 RSS 최근 업로드 중 [cutoff, today] 안의 영상만(videoId 중복 제거).
  * 채널 해석/조회 실패는 조용히 스킵(부분 성공). 유튜브에 대한 매너로 동시성을 제한한다.
  */
-export async function harvestFreshUploads(
-  channelQueries: string[],
-  cutoff: string,
-  today: string
-): Promise<RssVideo[]> {
+/**
+ * 추천·발굴 채널의 조사 기간 안 업로드(RSS 게시 **시각** 기준 — 실행 시점 기준 최근 N시간).
+ * 2026-11-23 날짜 단위(cutoff~today)에서 시각 단위(window)로 바꿨다.
+ */
+export async function harvestFreshUploads(channelQueries: string[], window: RecencyWindow): Promise<RssVideo[]> {
   const uniq = Array.from(new Set(channelQueries.map((s) => s.trim()).filter(Boolean)));
   const seen = new Set<string>();
   const out: RssVideo[] = [];
@@ -227,7 +230,7 @@ export async function harvestFreshUploads(
         const id = await resolveChannelId(q);
         if (!id) return [];
         const ups = await fetchChannelUploads(id);
-        return ups.filter((v) => inWindow(v.date, cutoff, today));
+        return ups.filter((v) => checkRecency(v, window).ok);
       })
     );
     for (const vids of results) {
