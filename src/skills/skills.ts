@@ -21,6 +21,7 @@ import {
 } from "./curate.ts";
 import { pruneDeadLinks, type PruneResult } from "./verify.ts";
 import { attachAccess, scanRepos, type RepoScan } from "./scan.ts";
+import { sendSkillsEmail } from "../notify/skills-email.ts";
 import { getSchedule } from "../scheduler/schedule-store.ts";
 import { lastOccurrence, nextOccurrence } from "../../shared/schedule.ts";
 import type { JobSchedule } from "../../shared/types.ts";
@@ -246,27 +247,40 @@ export function skillsCoveredThisWeek(now: Date = new Date()): boolean {
  * 순위를 다시 매겨 보여주되 DB 에는 남기지 않는다.
  *
  * 이번 회차가 아직 비어 있으면(맥이 자서 놓쳤거나 첫 수집 전) 이 버튼이 곧 그 회차다 —
- * 스케줄러 보충이 했을 일을 그대로 하므로 기록한다. (메일·문자 알림은 2026-11-22 제거됐다.)
+ * 스케줄러 보충이 했을 일을 그대로 하므로 기록하고, 자동 실행이 켜져 있으면 알림도 보낸다
+ * (안 보내면 그 회차 알림이 영영 사라진다 — 보충은 이제 '커버됨'을 보고 건너뛴다).
+ * 회차당 한 번뿐이라 눌러 댈 때마다 메일이 나가는 일은 없다.
  */
-export function decideManualRun(snap: SkillsSnapshot | null, boundary: Date): { record: boolean } {
-  return { record: !snapshotCoversSince(snap, boundary) };
+export function decideManualRun(
+  snap: SkillsSnapshot | null,
+  boundary: Date,
+  autoEnabled: boolean
+): { record: boolean; notify: boolean } {
+  if (snapshotCoversSince(snap, boundary)) return { record: false, notify: false };
+  return { record: true, notify: autoEnabled };
 }
 
 /** '지금 갱신'(POST /api/skills/refresh). 판정은 실행 직전에 한다(decideManualRun). */
 export function refreshSkillsNow(now: Date = new Date()): Promise<SkillsSnapshot> {
   const job = getSchedule().skills;
-  const { record } = decideManualRun(getSkillsSnapshot(), lastSkillsCycleBoundary(now, job));
-  return refreshSkills({ trigger: record ? "manual" : "manual:interim", record });
+  const { record, notify } = decideManualRun(
+    getSkillsSnapshot(),
+    lastSkillsCycleBoundary(now, job),
+    job.enabled
+  );
+  return refreshSkills({ trigger: record ? "manual" : "manual:interim", notify, record });
 }
 
 // ── 스냅샷 보호 ──────────────────────────────────────────────────────────────
 
-/** refreshSkills 한 회차의 처리 방침(순수 판정 — 디스크 부작용 없음). */
+/** refreshSkills 한 회차의 처리 방침(순수 판정 — 디스크/알림 부작용 없음). */
 export interface SkillsSnapshotDecision {
   /** "save" = 이번 결과를 저장 / "keep" = 직전 스냅샷 유지(실패 결과의 덮어쓰기 차단) */
   action: "save" | "keep";
   /** 실제로 화면·API 에 노출할 스냅샷 */
   snapshot: SkillsSnapshot;
+  /** 이번 회차 결과가 알림 대상인지 — opts.notify 와 AND 로 묶인다 */
+  notify: boolean;
   /** 이번 시도의 성패 기록 */
   attempt: SkillsAttemptRecord;
 }
@@ -278,6 +292,7 @@ export interface SkillsSnapshotDecision {
  *    지난주 랭킹이 보이는 것이 빈 화면보다 낫다. 대신 notes 에 상황을 적어 날짜를 오해하지
  *    않게 한다(스키마는 그대로 두고 계약에 이미 있는 notes 만 쓴다).
  * 2. 직전이 없거나 직전도 실패성이면 이번 결과를 그대로 저장한다(첫 실행의 빈 화면은 정상).
+ * 3. 보호가 걸린 회차는 **알림을 보내지 않는다** — 지난주 랭킹이 이번 주 메일로 또 오면 안 된다.
  *
  * 성패를 attempt 로 함께 돌려주어 스케줄러가 getSkillsLastAttempt() 로 백오프를 걸 수 있게
  * 한다(자기봉인과 무한 재시도를 동시에 막는 조합이다).
@@ -305,11 +320,12 @@ export function decideSkillsSnapshot(
       // date/updatedAt 은 건드리지 않는다 — 스케줄러 catch-up 이 이 값으로 '언제 자료인지'를 본다.
       // notes 는 매번 통째로 다시 쓴다(누적 append 금지 — 실패가 반복돼도 길이가 늘지 않는다).
       snapshot: { ...kept, notes: staleNote(kept, fresh, attemptedAt) },
+      notify: false,
       attempt,
     };
   }
 
-  return { action: "save", snapshot: fresh, attempt };
+  return { action: "save", snapshot: fresh, notify: ok, attempt };
 }
 
 /** 보호 발동 시 스냅샷에 남길 안내문(화면·API·JSON 을 직접 열어본 사람 모두를 위한 것). */
@@ -342,7 +358,7 @@ function emptySnapshot(date: string, source: "empty" | "error", note: string): S
  * 실패한 회차는 직전 스냅샷을 덮어쓰지 않는다(decideSkillsSnapshot).
  */
 export async function refreshSkills(
-  opts: { trigger: string; record?: boolean } = { trigger: "manual" }
+  opts: { trigger: string; notify?: boolean; record?: boolean } = { trigger: "manual" }
 ): Promise<SkillsSnapshot> {
   if (running) {
     log.warn(`스킬 수집 진행 중 → ${opts.trigger} 중복 방지`);
@@ -371,12 +387,20 @@ export async function refreshSkills(
     if (decision.action === "keep") {
       log.warn(
         `스킬 수집 실패 → 기존 스냅샷 유지 [${opts.trigger}] ` +
-          `(유지: ${decision.snapshot.date}, 원인: ${decision.attempt.error})`
+          `(유지: ${decision.snapshot.date}, 원인: ${decision.attempt.error}) · 알림 발송 생략`
       );
       return decision.snapshot;
     }
 
-    // 보고서는 Orca IT News에서 전달한다.
+    if (opts.notify && decision.notify) {
+      await sendSkillsEmail(decision.snapshot).catch((e) =>
+        log.warn(`스킬 이메일 발송 예외: ${(e as Error).message}`)
+      );
+      // 문자는 보내지 않는다(2026-11-23 사용자 결정: 스킬 랭킹은 메일만).
+    } else if (opts.notify) {
+      log.info("스킬 랭킹 0건 → 알림 발송 생략");
+    }
+
     log.info(
       `스킬 랭킹 ${interim ? "중간 점검(기록 안 함)" : "회차"} 완료 [${opts.trigger}] ${date} — 추적 ${decision.snapshot.trackedCount}건, ` +
         `총합 ${decision.snapshot.byStars.length}위 / 증가 ${decision.snapshot.byGrowth.length}위` +

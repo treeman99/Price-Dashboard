@@ -144,6 +144,8 @@ export interface TabSettings {
     newShowDays: number;
     /** 종료된 행사 날짜 검증(EVENTS_VERIFY_DATES). */
     verifyDates: boolean;
+    /** 팝업·전시 결과를 메일로 받는다(기본 켜짐 — PR #2 이전 기본값. 2026-11-23 메일만 복구, 문자는 없음). */
+    notifyEmail: boolean;
   };
   stockPulse: {
     perSymbolCap: number;
@@ -159,6 +161,12 @@ export interface TabSettings {
   stock: {
     /** 증시 시계열 보존 일수(HISTORY_RETENTION_DAYS). 매일 04:30 정리. */
     historyRetentionDays: number;
+    /** 증시 브리핑을 메일로 받는다(기본 켜짐 — PR #2 이전 기본값. 2026-11-23 메일만 복구, 문자는 없음). */
+    notifyEmail: boolean;
+  };
+  skills: {
+    /** 스킬 랭킹 회차 결과를 메일로 받는다(기본 켜짐 — PR #2 이전 기본값. 2026-11-23 메일만 복구, 문자는 없음). */
+    notifyEmail: boolean;
   };
   /** 탭별 LLM 1회 최대 대기(분). 다음 실행부터 적용된다(진행 중인 실행은 시작 시점 값). */
   timeouts: {

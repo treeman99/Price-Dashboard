@@ -6,7 +6,8 @@ import path from "node:path";
 
 /**
  * 탭별 운영 설정 저장소(src/settings/tab-settings.ts) + 소비처 즉시 반영.
- * (메일·문자 알림 채널 설정 notify 는 2026-11-22 발송 기능 제거와 함께 없앴다 — 아래 '제거된 notify' 참고.)
+ * (예전 탭별 알림 채널 설정 notify 는 2026-11-22 없앴다 — 아래 '제거된 notify' 참고. 2026-11-23 증시·팝업/전시·스킬 랭킹
+ *  메일만 되살리면서 <탭>.notifyEmail 로 옮겼고, 예전 notify.<탭>.email 값이 파일에 있으면 그대로 따른다.)
  *
  * ★ 실제 data/ 를 건드리지 않는다. config 는 import 시점에 DB_PATH 와 .env 를 읽으므로 모듈을
  *   불러오기 **전에** 임시 경로와 표식값을 심는다(dotenv 는 이미 있는 env 를 덮지 않는다).
@@ -140,6 +141,32 @@ test("예전 youtube.freshDays(일 단위)는 읽지 않고(기본 24시간 적�
   }, "같은 섹션의 예전 필드도 지우지 않는다");
   ts.saveTabSettings({ youtube: { freshHours: 24 } });
   assert.deepEqual(readStore().youtube, { freshDays: 2, watchedExcludeDays: 5, freshHours: 24 });
+});
+
+test("세 탭 '메일로 받기'는 기본 켜짐이고, 예전 notify.<탭>.email 이 있으면 따른다(파일은 그대로, 2026-11-23)", () => {
+  // 파일이 없으면 기본값(PR #2 이전 기본 = 켜짐).
+  const d = ts.getTabSettings();
+  assert.deepEqual([d.stock.notifyEmail, d.events.notifyEmail, d.skills.notifyEmail], [true, true, true]);
+  assert.equal(fs.existsSync(STORE), false, "읽기만으로 파일을 만들지 않는다");
+
+  const legacy = { notify: { stock: { email: false, imessage: true }, skills: { email: true } } };
+  fs.writeFileSync(STORE, JSON.stringify(legacy));
+  const s = ts.getTabSettings();
+  assert.equal(s.stock.notifyEmail, false, "예전 증시 메일 꺼짐을 따른다");
+  assert.equal(s.events.notifyEmail, true, "예전 값이 없는 탭은 기본값");
+  assert.equal(s.skills.notifyEmail, true);
+  assert.deepEqual(readStore(), legacy, "읽기는 파일을 바꾸지 않는다");
+
+  // 대시보드에서 다시 켜면(=기본값과 같아도) 새 필드를 명시 저장해 예전 값보다 우선한다. 예전 섹션은 보존.
+  ts.saveTabSettings({ stock: { notifyEmail: true } });
+  assert.equal(ts.getTabSettings().stock.notifyEmail, true);
+  const after1 = readStore();
+  assert.deepEqual(after1.notify, legacy.notify, "예전 notify 섹션은 지우지 않는다");
+  assert.equal(after1.stock.notifyEmail, true);
+
+  // 끄기도 그대로 반영.
+  ts.saveTabSettings({ events: { notifyEmail: false } });
+  assert.equal(ts.getTabSettings().events.notifyEmail, false);
 });
 
 test("notify 를 저장하려 하면 '알 수 없는 설정 항목'으로 거부한다", () => {

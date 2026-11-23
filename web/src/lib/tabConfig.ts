@@ -32,10 +32,11 @@ export interface TabConfigDef {
   label: string;
   /** 이 탭의 스케줄 잡(증시는 시장별 브리핑 2개). */
   jobs: ScheduleJobId[];
-  /** 운영 설정 필드(TabSettings 의 점 경로). (탭별 메일·문자 알림은 없다 — 발송은 통합 보고서 스위치만) */
+  /** 운영 설정 필드(TabSettings 의 점 경로). 메일 스위치: 통합 보고서(메일·문자), 증시·팝업/전시·스킬 랭킹(메일만). */
   fields: SettingField[];
 }
 
+const MAIL_HINT = "결과를 Gmail 로 보냅니다(.env 메일 설정·Google 계정 연결 필요). 문자는 보내지 않습니다.";
 const TIMEOUT_HINT = "AI 실행 1회가 이보다 길면 중단합니다. 다음 실행부터 적용됩니다.";
 
 // 뉴스·유튜브 탭은 2026-11-23 없앴다 — 세 모델 통합 보고서(report) 탭 하나가 일정·발송·수집 설정을 모두 맡는다.
@@ -78,6 +79,7 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
     label: "스킬 랭킹",
     jobs: ["skills"],
     fields: [
+      { kind: "boolean", path: "skills.notifyEmail", label: "메일로 받기", hint: MAIL_HINT },
       { kind: "number", path: "timeouts.skillsSummaryMin", label: "요약 배치 최대 대기", hint: TIMEOUT_HINT },
       {
         kind: "number",
@@ -91,6 +93,7 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
     label: "증시",
     jobs: ["stockKr", "stockUs"],
     fields: [
+      { kind: "boolean", path: "stock.notifyEmail", label: "메일로 받기", hint: MAIL_HINT },
       { kind: "number", path: "timeouts.stockBriefMin", label: "브리핑 최대 대기", hint: TIMEOUT_HINT },
       {
         kind: "number",
@@ -104,6 +107,7 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
     label: "팝업·전시",
     jobs: ["events"],
     fields: [
+      { kind: "boolean", path: "events.notifyEmail", label: "메일로 받기", hint: `${MAIL_HINT} 수동 '지금 갱신'은 보내지 않습니다.` },
       {
         kind: "number",
         path: "events.newGapDays",

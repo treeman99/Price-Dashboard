@@ -76,21 +76,35 @@ function rawFallback(): EventsSnapshot {
 
 const AT = "2026-08-02T02:00:00.000Z";
 
-// ── 원본 폴백 판정 (메일·문자 알림 게이트는 2026-11-22 제거) ─────────────────
+// ── 알림 품질 게이트 ─────────────────────────────────────────────────────────
 
-test("source=naver-raw(원본 폴백)면 건수가 많아도 실패로 기록한다(24건 전부 블로그 글이었던 실측 사례)", () => {
+test("source=naver-raw(원본 폴백)면 이메일·iMessage 를 보내지 않는다", () => {
   const d = decideEventsPublish(rawFallback(), AT, "schedule");
-  assert.equal(d.attempt.ok, false);
-  assert.equal(d.attempt.total, 26); // 팝업 24 + 전시 1 + 축제 1
-  assert.equal(d.attempt.source, "naver-raw");
-  assert.equal("notify" in d, false, "알림 판정 필드는 없다");
+  assert.equal(d.notify, false);
+  assert.match(String(d.skipReason), /원본 폴백/);
+  assert.match(String(d.skipReason), /naver-raw/);
 });
 
-test("source=llm 이면 항목이 0건이어도 성공으로 기록한다", () => {
-  const d = decideEventsPublish(snapshot({ popups: [], exhibitions: { venues: [] }, festivals: [] }), AT);
-  assert.equal(d.attempt.ok, true);
+test("건수가 많아도 폴백이면 발송하지 않는다(24건 전부 블로그 글이었던 실측 사례)", () => {
+  const d = decideEventsPublish(rawFallback(), AT);
+  assert.equal(d.attempt.total, 26); // 팝업 24 + 전시 1 + 축제 1
+  assert.equal(d.notify, false);
+});
+
+test("source=llm 이면 기존대로 발송한다", () => {
+  const d = decideEventsPublish(snapshot(), AT, "schedule");
+  assert.equal(d.notify, true);
+  assert.equal(d.skipReason, null);
+});
+
+test("llm 이면 항목이 0건이어도 발송 판정 자체는 통과한다(0건 차단은 알림 모듈의 몫)", () => {
+  // sendEventsEmail/sendEventsIMessage 가 자체 0건 게이트를 갖고 있어 여기서 중복 판정하지 않는다.
+  const d = decideEventsPublish(
+    snapshot({ popups: [], exhibitions: { venues: [] }, festivals: [] }),
+    AT
+  );
+  assert.equal(d.notify, true);
   assert.equal(d.attempt.total, 0);
-  assert.equal(d.attempt.error, null);
 });
 
 // ── 시도 성패 판정 ───────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { localDate } from "../util/date.ts";
 import { gatherCorpus } from "./gather.ts";
 import { curate } from "./curate.ts";
 import { markNewItems } from "./new-tracker.ts";
+import { sendEventsEmail } from "../notify/events-email.ts";
 import type { EventsSnapshot } from "../../shared/types.ts";
 
 // 이력 저장 없음: 최신 스냅샷 1개만 캐시(JSON 파일 + 메모리)
@@ -135,20 +136,29 @@ export function isEventsCollecting(): boolean {
   return running;
 }
 
-/** refreshEvents 한 회차의 판정(순수 — 디스크 부작용 없음). */
+/** refreshEvents 한 회차의 알림 방침(순수 판정 — 디스크/알림 부작용 없음). */
 export interface EventsPublishDecision {
+  /** 이번 회차 결과가 메일 대상인지 — opts.notify 와 AND 로 묶인다(문자는 2026-11-23부터 보내지 않음) */
+  notify: boolean;
+  /** 발송을 생략한 이유(보낼 때는 null). 로그 문구로 그대로 쓴다. */
+  skipReason: string | null;
   /** 이번 시도의 성패 기록 */
   attempt: EventsAttemptRecord;
 }
 
 /**
- * 시도 성패 판정.
+ * 알림 품질 게이트.
  *
  * 큐레이션이 실패하면 curate() 는 네이버 검색 **원본**(source="naver-raw")으로 폴백한다.
- * 원본은 제목·링크가 그대로라 팝업이 아닌 블로그 글·광고가 섞이고, 기간/장소도 정리되지 않는다
- * (실측 2026-08-02 02:18: '팝업 24건'이 전부 블로그 글 제목). 화면에는 폴백 결과가 남지만 이 회차는
- * **실패**로 기록해 catch-up·백오프가 다시 시도하게 한다(getEventsLastAttempt().ok=false).
- * (메일·문자 알림 품질 게이트는 2026-11-22 발송 기능 제거와 함께 없앴다.)
+ * 원본은 제목·링크가 그대로라 팝업이 아닌 블로그 글·광고가 섞이고, 기간/장소도 정리되지 않는다.
+ * 그런데 알림 코드가 source 를 보지 않아 이 저품질 결과가 **정상인 척** 이메일+iMessage 로 나갔다
+ * (실측 2026-08-02 02:18: '팝업 24건'이 전부 블로그 글 제목).
+ *
+ * 정책: **발송 생략**. "원본 폴백(미큐레이션)"이라고 제목에 붙여 보내는 안도 있었지만,
+ * - 알림은 훑어보는 매체라 꼬리표를 붙여도 목록 자체는 그대로 신뢰하게 된다(오인 위험이 남는다).
+ * - 화면(대시보드)에는 폴백 결과가 그대로 남으므로 정보가 사라지는 게 아니다. 보고 싶으면 볼 수 있다.
+ * - 매일 오는 알림이 한 번이라도 거짓이면 나머지 정상 발송까지 못 믿게 된다. 침묵이 손해가 작다.
+ * 침묵을 사고와 구분할 수단은 따로 있다 — getEventsLastAttempt().ok=false 와 아래 warn 로그.
  */
 export function decideEventsPublish(
   snapshot: EventsSnapshot,
@@ -165,18 +175,25 @@ export function decideEventsPublish(
     total,
     error: ok ? null : (snapshot.notes ?? "큐레이션 실패(원본 폴백)"),
   };
-  return { attempt };
+  if (!ok) {
+    return {
+      notify: false,
+      skipReason: `원본 폴백(source=${snapshot.source}, ${total}건) → 메일 발송 생략`,
+      attempt,
+    };
+  }
+  return { notify: true, skipReason: null, attempt };
 }
 
 /**
- * 팝업/전시 수집 실행: 네이버 검색 → 큐레이션 → 캐시 갱신.
+ * 팝업/전시 수집 실행: 네이버 검색 → 큐레이션 → 캐시 갱신 → (옵션)이메일.
  * 이력은 저장하지 않고 최신 스냅샷만 덮어쓴다.
  *
  * 뉴스·유튜브와 달리 실패해도 스냅샷을 덮어쓴다 — 폴백(naver-raw)도 '오늘 검색 결과'라
  * 화면에 띄울 값어치는 있다고 보고 이번 작업 범위에서는 기존 동작을 유지했다.
- * 다만 그 회차는 실패로 기록한다(decideEventsPublish).
+ * 다만 그 결과로 알림을 보내지는 않는다(decideEventsPublish).
  */
-export async function refreshEvents(opts: { trigger: string } = { trigger: "manual" }): Promise<EventsSnapshot> {
+export async function refreshEvents(opts: { trigger: string; notify?: boolean } = { trigger: "manual" }): Promise<EventsSnapshot> {
   if (running) {
     log.warn(`이벤트 수집 진행 중 → ${opts.trigger} 중복 방지`);
     return getEventsSnapshot() ?? emptySnapshot();
@@ -201,7 +218,14 @@ export async function refreshEvents(opts: { trigger: string } = { trigger: "manu
     const decision = decideEventsPublish(snapshot, startedAt, opts.trigger);
     recordAttempt(decision.attempt);
 
-    // 보고서는 Orca IT News에서 전달한다.
+    if (opts.notify && decision.notify) {
+      await sendEventsEmail(snapshot).catch((e) =>
+        log.warn(`이벤트 이메일 발송 예외: ${(e as Error).message}`)
+      );
+      // 문자는 보내지 않는다(2026-11-23 사용자 결정: 팝업·전시는 메일만).
+    } else if (opts.notify && decision.skipReason) {
+      log.warn(`이벤트 ${decision.skipReason}`);
+    }
     log.info(`이벤트 수집 완료 [${opts.trigger}] ${date} (source=${snapshot.source})`);
     return snapshot;
   } catch (e) {

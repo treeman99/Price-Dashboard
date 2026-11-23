@@ -149,6 +149,64 @@ test("buildRawMessage: 한글 제목은 MIME 인코딩되어 원문이 ASCII 로
   assert.match(subject, /=\?UTF-8\?/i);
 });
 
+const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+
+// 증시 브리핑 메일의 차트 PNG(2026-11-23 PR #2 이전 형식으로 복구).
+test("buildRawMessage: CID 인라인 첨부가 multipart/related 로 들어간다", async () => {
+  connectedStore();
+  const raw = await buildRawMessage({
+    subject: "증시 브리핑",
+    html: `<img src="cid:chart-kr-005930">`,
+    attachments: [
+      { filename: "chart_kr_005930.png", content: PNG, cid: "chart-kr-005930", contentType: "image/png" },
+    ],
+  });
+
+  assert.ok(isBase64Url(raw));
+  const mime = Buffer.from(raw, "base64url").toString("utf8");
+
+  // 인라인 이미지는 본문과 같은 related 컨테이너 안에 있어야 메일 클라이언트가 렌더한다.
+  assert.ok(mime.includes("multipart/related"), "multipart/related 컨테이너 필요");
+  assert.ok(mime.includes("Content-ID: <chart-kr-005930>"), "Content-ID 헤더 필요");
+  assert.ok(mime.includes("chart_kr_005930.png"));
+  assert.ok(mime.includes("image/png"));
+  assert.ok(/Content-Disposition: inline/i.test(mime), "CID 첨부는 inline 이어야 한다");
+  // PNG 본문이 base64 로 실려 있어야 한다.
+  assert.ok(mime.includes(PNG.toString("base64").slice(0, 16)));
+});
+
+test("buildRawMessage: 첨부 여러 개가 모두 실린다", async () => {
+  connectedStore();
+  const raw = await buildRawMessage({
+    subject: "증시 브리핑",
+    html: `<img src="cid:c1"><img src="cid:c2">`,
+    attachments: [
+      { filename: "a.png", content: PNG, cid: "c1", contentType: "image/png" },
+      { filename: "b.png", content: PNG, cid: "c2", contentType: "image/png" },
+    ],
+  });
+  const mime = Buffer.from(raw, "base64url").toString("utf8");
+  assert.ok(mime.includes("Content-ID: <c1>"));
+  assert.ok(mime.includes("Content-ID: <c2>"));
+});
+
+test("sendMail: 첨부가 있으면 그대로 Gmail API 원문에 실린다", async () => {
+  connectedStore();
+  const f = stubFetch([{ ok: true, body: { id: "18f1" } }]);
+  try {
+    const ok = await sendMail({
+      subject: "증시 브리핑",
+      html: `<img src="cid:chart">`,
+      attachments: [{ filename: "c.png", content: PNG, cid: "chart", contentType: "image/png" }],
+    });
+    assert.equal(ok, true);
+    const mime = Buffer.from(f.calls[0].payload.raw, "base64url").toString("utf8");
+    assert.ok(mime.includes("Content-ID: <chart>"));
+  } finally {
+    f.restore();
+  }
+});
+
 test("buildRawMessage: HTML 본문은 UTF-8 base64 한 파트로 실리고 헤더 줄바꿈 주입을 막는다", async () => {
   connectedStore();
   const raw = await buildRawMessage({ subject: "제목\r\nBcc: x@example.com", html: "<p>한글 본문</p>" });

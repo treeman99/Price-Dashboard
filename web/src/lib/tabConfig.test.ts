@@ -24,7 +24,7 @@ function settingsFixture() {
   return {
     report: { notifyEmail: false, notifyImessage: false },
     youtube: { freshHours: 24, watchedExcludeDays: 7 },
-    events: { newGapDays: 7, newShowDays: 3, verifyDates: true },
+    events: { newGapDays: 7, newShowDays: 3, verifyDates: true, notifyEmail: true },
     stockPulse: {
       perSymbolCap: 3,
       dailyCap: 10,
@@ -34,7 +34,8 @@ function settingsFixture() {
       quietStartHour: 23,
       quietEndHour: 7,
     },
-    stock: { historyRetentionDays: 90 },
+    stock: { historyRetentionDays: 90, notifyEmail: true },
+    skills: { notifyEmail: true },
     timeouts: {
       newsMin: 20,
       youtubeMin: 20,

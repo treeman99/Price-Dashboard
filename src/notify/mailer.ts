@@ -1,12 +1,13 @@
 /**
  * Gmail API(`users.messages.send`) 기반 메일 발송.
  *
- * 2026-11-22 재도입: 메일은 **세 모델 통합 보고서 전용**이다(증시·팝업/전시·스킬·펄스·가동 중단 메일은 되살리지 않는다).
- * 예전에는 MIME 생성에 nodemailer 의 MailComposer 를 빌려 썼지만(차트 PNG 인라인 첨부 때문), 보고서 메일은
- * HTML 한 장뿐이라 의존성 없이 직접 조립한다. 전송은 내장 fetch 로 Gmail REST 를 친다.
+ * 메일로 보내는 것: 세 모델 통합 보고서(2026-11-22 재도입), 증시 브리핑·팝업/전시·스킬 랭킹(2026-11-23 복구 —
+ * PR #2 이전과 같은 일정·형식, 메일만). 펄스·가동 중단 알림은 보내지 않는다.
+ * MIME 생성은 nodemailer 의 MailComposer(CID 인라인 첨부의 multipart/related 중첩), 전송은 내장 fetch 로 Gmail REST.
  */
 import fs from "node:fs";
 import path from "node:path";
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import {
@@ -66,43 +67,40 @@ export function isMailConfigured(): boolean {
   );
 }
 
-/** RFC 2047 encoded-word(UTF-8 base64). ASCII 만이면 그대로 둔다. */
-function encodeHeader(v: string): string {
-  const clean = v.replace(/[\r\n]+/g, " ");
-  return /^[\x20-\x7e]*$/.test(clean) ? clean : `=?UTF-8?B?${Buffer.from(clean, "utf8").toString("base64")}?=`;
-}
-
-/** 주소 헤더 값. 줄바꿈 주입을 막는다(값은 .env 의 본인 주소뿐이지만 방어선으로 둔다). */
-function addressHeader(v: string): string {
-  return v.replace(/[\r\n<>]+/g, "").trim();
-}
+export type MailAttachment = {
+  filename: string;
+  content: Buffer;
+  /** 지정하면 본문에서 `<img src="cid:...">` 로 인라인 참조된다. */
+  cid?: string;
+  contentType?: string;
+};
 
 /**
  * RFC822 원문을 만들어 base64url 로 인코딩한다. 순수 함수 — 네트워크를 타지 않는다.
  * (Gmail API 의 `raw` 는 base64url: `+/` 대신 `-_`, 패딩 없음.)
- * 본문은 HTML 한 파트(UTF-8, base64 76자 줄바꿈)다.
+ *
+ * MIME 조립은 nodemailer 의 MailComposer 를 쓴다 — 증시 메일의 차트 PNG 를 CID 인라인 첨부(multipart/related)로
+ * 싣기 위해서다(2026-11-23 증시·팝업/전시·스킬 랭킹 메일 복구와 함께 PR #2 이전 방식으로 되돌림).
+ * 헤더 값의 줄바꿈은 MailComposer 가 접어 새 헤더가 생기지 않게 한다.
  */
 export async function buildRawMessage(opts: {
   subject: string;
   html: string;
+  attachments?: MailAttachment[];
   from?: string;
   to?: string;
 }): Promise<string> {
   const address = config.notify.gmailAddress;
-  const body = Buffer.from(opts.html, "utf8").toString("base64").replace(/.{1,76}/g, "$&\r\n");
-  const lines = [
-    `From: ${addressHeader(opts.from ?? address)}`,
+  const composer = new MailComposer({
+    from: opts.from ?? address,
     // 예전 SMTP·Gmail 발송과 동일하게 자기 자신에게 보낸다.
-    `To: ${addressHeader(opts.to ?? address)}`,
-    `Subject: ${encodeHeader(opts.subject)}`,
-    `Date: ${new Date().toUTCString().replace("GMT", "+0000")}`,
-    "MIME-Version: 1.0",
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    body,
-  ];
-  return Buffer.from(lines.join("\r\n"), "utf8").toString("base64url");
+    to: opts.to ?? address,
+    subject: opts.subject,
+    html: opts.html,
+    attachments: opts.attachments,
+  });
+  const message = await composer.compile().build();
+  return message.toString("base64url");
 }
 
 /** Gmail 오류 본문을 한 줄로 줄인다. 응답에 토큰은 실리지 않지만 길이는 잘라 로그를 지킨다. */
@@ -183,7 +181,11 @@ function clearReauthAlert(): void {
  *
  * 예외적으로 "재로그인 필요"만은 로그에 묻어두지 않고 iMessage 로 밀어 올린다.
  */
-export async function sendMail(opts: { subject: string; html: string }): Promise<boolean> {
+export async function sendMail(opts: {
+  subject: string;
+  html: string;
+  attachments?: MailAttachment[];
+}): Promise<boolean> {
   if (!config.notify.email) return false;
   if (!config.notify.gmailAddress) {
     log.warn("GMAIL_ADDRESS 미설정 → 메일 발송 건너뜀");
@@ -216,7 +218,8 @@ export async function sendMail(opts: { subject: string; html: string }): Promise
 
       if (res.ok) {
         clearReauthAlert();
-        log.info(`메일 발송 완료 [${opts.subject}]`);
+        const n = opts.attachments?.length ?? 0;
+        log.info(`메일 발송 완료 [${opts.subject}]${n ? ` (첨부 ${n}개)` : ""}`);
         return true;
       }
 

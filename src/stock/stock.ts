@@ -19,6 +19,7 @@ import {
   resolveSlot,
   MANUAL_SLOT,
   SLOT_HANDLED,
+  type NotifiedFlags,
 } from "./notify-ledger.ts";
 import { searchTicker, fetchHistory, fetchIndexHistory, fetchExchangeRate } from "./quote.ts";
 import {
@@ -35,6 +36,7 @@ import {
   type IndexQuoteRow,
   type PositionPromptRow,
 } from "./curate.ts";
+import { sendStockEmail, stockChannelOffReason } from "../notify/stock-email.ts";
 import { stockSlotRoleDetail } from "./slot-role.ts";
 import { gatherSec } from "./sec.ts";
 import { getSchedule } from "../scheduler/schedule-store.ts";
@@ -608,6 +610,7 @@ function buildPositionRows(market: StockMarket, g: Gathered): PositionPromptRow[
 export interface RefreshStockOptions {
   market: StockMarket;
   trigger: string;
+  notify?: boolean;
   /**
    * 이 런이 귀속되는 스케줄 슬롯("HH:mm"). 정시/catch-up 은 스케줄러가 이미 아는 값을 넘긴다.
    * 미지정(수동 갱신)이면 런 시작 시각 기준 '가장 최근 지난 슬롯'으로 귀속된다(notify-ledger).
@@ -616,7 +619,7 @@ export interface RefreshStockOptions {
 }
 
 /**
- * 증시 브리핑 수집: 휴장 체크 → 확정 시세 수집 → LLM 서술 → 시세 덮어쓰기 → 저장 → 슬롯 원장.
+ * 증시 브리핑 수집: 휴장 체크 → 확정 시세 수집 → LLM 서술 → 시세 덮어쓰기 → 저장 → 알림.
  * 이력은 저장하지 않고 시장별 최신 스냅샷만 덮어쓴다(시계열은 stock_points 에 별도 저장).
  */
 export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnapshot> {
@@ -697,7 +700,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
       });
       log.info(
         `증시 휴장 [${market}] ${today} — ${closed.reason ?? "사유 미상"} ` +
-          `(LLM 생략, 지수 ${holidayIndices.length}건 최종 거래일 기준으로 유지)`
+          `(LLM·알림 생략, 지수 ${holidayIndices.length}건 최종 거래일 기준으로 유지)`
       );
       return snap;
     }
@@ -771,7 +774,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     // 시세는 전부 null 이 되며 watchlist 는 통째로 드롭되는데, LLM 뉴스·분석 서술은 그대로
     // 남는다. 그러면 hasContent(지수+뉴스+분석)가 참이라 **알맹이 없는 브리핑이 발송되고
     // 슬롯이 닫혀** 몇 분 뒤 네이버가 살아나도 그날은 영영 복구되지 않는다.
-    // 그래서 이 상태는 '성공'이 아니라 수집 실패로 취급한다 → 슬롯 열어둠(catch-up 이 다시 시도)
+    // 그래서 이 상태는 '성공'이 아니라 수집 실패로 취급한다 → 발송 생략 + 슬롯 열어둠
     // → 30분 catch-up 이 재시도한다(scheduler.checkStockCatchup 의 slotNeedsCatchup 게이트).
     // 조건은 watchlist 와 무관한 **등록 종목·지수** 기준이다. LLM 이 종목을 하나도 안 냈거나
     // 심볼을 지어낸 경우(모델 잘못)를 장애로 오판하면 catch-up 이 매번 헛돈다.
@@ -783,7 +786,7 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     if (quoteOutage) {
       log.warn(
         `증시 시세 인프라 전면 장애 의심 [${market}] — 지수 0건 / 등록 종목 ${g.quotes.length}건 전부 시세 없음 / ` +
-          `관심 종목 조회 실패 ${verified?.lookupFailures ?? 0}건 → 슬롯 ${slot} 열어둔 채 catch-up 대기`
+          `관심 종목 조회 실패 ${verified?.lookupFailures ?? 0}건 → 알림 생략, 슬롯 ${slot} 열어둔 채 catch-up 대기`
       );
     }
 
@@ -801,18 +804,37 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
     }
     store(snapshot, role);
 
-    // ── 6. 슬롯 원장 (stock_runs, **슬롯×채널** 멱등) ──
-    // 메일·문자 발송 기능은 2026-11-22 제거됐다. 원장 플래그의 의미는 처음부터 '발송 성공'이 아니라
-    // **'이 슬롯에서 더 할 일이 없음'**(notify-ledger SLOT_HANDLED)이라, 정상 수집(ok)이면 슬롯을 닫는다.
-    // 닫지 않으면 slotNeedsCatchup 이 그 슬롯을 영원히 미처리로 보고 catch-up 이 30분마다 브리핑 전체를
-    // 다시 수집한다(2026-10-25 QA H1). ok=false 는 열어 둔다 — 다음 catch-up 이 재수집한다.
-    // 첫 슬롯 이전의 수동 갱신(MANUAL_SLOT)은 닫을 슬롯이 없다.
+    // ── 6. 알림 (stock_runs 원장으로 **슬롯×채널** 멱등) ──
+    // 키가 (date, market) 뿐이던 시절엔 같은 날 두 번째 슬롯(예: 17:00)이 첫 슬롯의
+    // notified=true 에 막혀 통째로 삼켜졌다. 이제 슬롯별로 따로 기록해
+    // '슬롯당 1회 발송 + 같은 슬롯 재실행(catch-up/재시작) 시 중복 방지'를 동시에 만족한다.
+    // ok=false 는 '이 슬롯을 닫지 않는다'는 뜻이다(발송 생략 + 원장에 미발송으로 남김).
     const ok = snapshot.source === "llm" && !quoteOutage;
     const notifiedMap = loadNotifiedMap(today, market);
     let { email: emailed, imessage: imessaged } = slotNotified(notifiedMap, slot);
-    if (ok && slot !== MANUAL_SLOT) {
+    // 포지션 점검도 '내용'으로 친다. 보유 종목만 등록하고 등록 종목·뉴스가 비는 구성에서
+    // 이걸 빼면 매일 '내용 0건'으로 판정돼 브리핑이 영영 발송되지 않는다.
+    const hasContent =
+      snapshot.indices.length +
+        snapshot.news.length +
+        snapshot.analyses.length +
+        (snapshot.positions?.length ?? 0) >
+      0;
+    // 첫 슬롯 이전의 수동 갱신(MANUAL_SLOT)은 메울 슬롯이 없으므로 발송하지 않는다.
+    // 보내면 곧 오는 첫 정시 슬롯이 같은 브리핑을 한 번 더 보낸다(07:30 수동 → 08:00 정시).
+    // 수동 갱신은 '지난 슬롯의 누락을 보충'할 뿐 새 알림을 만들지 않는다(notify-ledger 참고).
+    const sendable = opts.notify === true && slot !== MANUAL_SLOT;
+    if (sendable && ok && hasContent && (!emailed || !imessaged)) {
+      ({ email: emailed, imessage: imessaged } = await notifySlotChannels(snapshot, slot, {
+        email: emailed,
+        imessage: imessaged,
+      }));
+    } else if (sendable && ok && !hasContent) {
+      // 보낼 내용이 없는 것은 '실패'가 아니라 확정된 결과다 → 슬롯을 닫아 catch-up 이
+      // 이 슬롯을 30분마다 재시도하지 않게 한다(수집 실패 ok=false 는 반대로 열어 둔다).
       emailed = SLOT_HANDLED.email;
       imessaged = SLOT_HANDLED.imessage;
+      log.info(`증시 브리핑 내용 0건 [${market}] → 알림 발송 생략 (슬롯 ${slot} 종료 처리)`);
     }
 
     finishStockRun(today, market, ok, {
@@ -835,6 +857,45 @@ export async function refreshStock(opts: RefreshStockOptions): Promise<StockSnap
   }
 }
 
+/**
+ * 슬롯 하나의 채널별 알림 → 원장에 기록할 플래그. 이미 닫힌 채널(true)은 건드리지 않는다.
+ *
+ * 원장 플래그의 의미는 '발송 성공'이 아니라 **'이 채널로 더 보낼 것이 없음'**(notify-ledger SLOT_HANDLED)이다.
+ * - **꺼진 채널**(탭 스위치 off · 전역 off · 메일 자격증명 미설정 · iMessage 수신자 없음)은 보내지 않고
+ *   닫는다. 열어 두면 slotNeedsCatchup 이 그 슬롯을 영원히 미발송으로 보고 catch-up 이 자정까지
+ *   30분마다 증시 브리핑 전체(LLM)를 다시 수집한다(2026-10-25 QA H1).
+ * - **켜진 채널의 발송 실패**(예외·API 오류)는 false 그대로 — 다음 catch-up 이 그 채널만 재시도한다.
+ *
+ * ⚠️ '꺼짐' 판정은 send 함수의 조기 반환과 같은 stockChannelOffReason 하나만 본다(그 함수 주석).
+ *
+ * export 이유: 알림 블록은 refreshStock(LLM·시세) 안쪽이라 단위 테스트가 닿지 않는다.
+ */
+export async function notifySlotChannels(
+  snapshot: StockSnapshot,
+  slot: string,
+  done: NotifiedFlags
+): Promise<NotifiedFlags> {
+  const market = snapshot.market;
+  let { email, imessage } = done;
+  if (!email) {
+    const off = stockChannelOffReason("email");
+    if (off) {
+      email = SLOT_HANDLED.email;
+      log.info(`증시 [${market}] 슬롯 ${slot} 메일 알림 꺼짐(${off}) → 슬롯 종료 처리`);
+    } else {
+      email = await sendStockEmail(snapshot).catch((e) => {
+        log.warn(`증시 이메일 발송 예외 [${market}]: ${(e as Error).message}`);
+        return false;
+      });
+    }
+  }
+  if (!imessage) {
+    // 문자는 보내지 않는다(2026-11-23 사용자 결정: 증시 브리핑은 메일만) — 채널을 닫아 catch-up 이 붙잡지 않게 한다.
+    imessage = SLOT_HANDLED.imessage;
+    log.info(`증시 [${market}] 슬롯 ${slot} 문자 알림 꺼짐(${stockChannelOffReason("imessage")}) → 슬롯 종료 처리`);
+  }
+  return { email, imessage };
+}
 
 /** resolveSession 의 종료 상태. holiday 와 settled 는 **서로 다른 종료**다(아래 주석 참고). */
 export interface ResolvedSession {

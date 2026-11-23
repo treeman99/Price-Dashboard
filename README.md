@@ -169,7 +169,7 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 | `EVENTS_VERIFY_DATES` / `INSANE_*` | 선택 | 팝업/전시 날짜 검증(insane-engine). 차단된 실제 페이지를 우회 fetch 해 종료된 행사를 제외. 끄려면 `EVENTS_VERIFY_DATES=false`(**대시보드 설정에서도 변경 가능, 대시보드 값 우선**). 자세한 항목은 `.env.example`/`tools/insane-engine/README.md` |
 | `PORT` | 기본 7777 | 대시보드/API 포트 |
 | `EVENTS_COLLECT_TIME` · `REPORT_COLLECT_TIMES` · `STOCK_KR/US_COLLECT_TIMES` · `STOCK_PULSE_TIMES` | 기본 10:00 · 09:00,17:00 · 08:00 / 18:00 · 장중 매시 | 탭별 자동 수집 시각(로컬). `REPORT_COLLECT_TIMES` 는 뉴스·유튜브를 함께 갱신하는 세 모델 통합 보고서 일정. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** — 화면에서는 요일·격주·매월까지 |
-| `NOTIFY_EMAIL` · `GMAIL_ADDRESS` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `NOTIFY_IMESSAGE` · `IMESSAGE_TO` | 선택 | 통합 보고서 메일(Gmail API OAuth)·문자(iMessage) 전역 스위치·자격. 실제 발송은 대시보드 '보고서' 탭의 '메일로 받기'·'문자로 받기'(기본 꺼짐)와 AND |
+| `NOTIFY_EMAIL` · `GMAIL_ADDRESS` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `NOTIFY_IMESSAGE` · `IMESSAGE_TO` | 선택 | 메일(Gmail API OAuth)·문자(iMessage) 전역 스위치·자격. 통합 보고서는 메일·문자('보고서' 탭 '메일로 받기'·'문자로 받기', 기본 꺼짐과 AND), 증시 브리핑·팝업/전시·스킬 랭킹은 **메일만**(각 탭 운영 설정 '메일로 받기', 기본 켜짐과 AND — 정시·보충 실행 때, 증시는 슬롯마다 1회) |
 | `DAILY_NEWS_DIR` · `DAILY_REPORT_COLLECTOR` · `DAILY_REPORT_TIMEOUT_MIN` | 기본 봇 홈 · `<DIR>/collector/daily-report.mjs` · 75 | 통합 보고서 수집기 위치·출력 폴더·1회 실행 상한(분) |
 | `YOUTUBE_FRESH_HOURS` / `YOUTUBE_WATCHED_EXCLUDE_DAYS` | 기본 24 / 7 | 유튜브 조사 기간(실행 시점 기준 최근 N시간, 업로드 시각 단위 — 뉴스는 24시간 고정) / '본영상' 제외 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
 | `EVENTS_NEW_GAP_DAYS` / `EVENTS_NEW_SHOW_DAYS` | 기본 7 / 3 | 팝업·전시 '신규' 판정 공백 / 배지 유지 일수. **대시보드 설정에서도 변경 가능(대시보드 값 우선)** |
@@ -182,7 +182,7 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 > 실행해 세 모델(Claude Opus 5.5 · GPT-6.1 Sol · Gemini 4 Neon)로 뉴스·유튜브를 함께 취합·중복 정리한다. 보고서 탭에서
 > 실행 기록·모델별 상태·본문(직전 보고 이후 새 항목)을 보고, '수집 설정'에서 뉴스·유튜브 카테고리(추천 채널·제외 키워드·
 > 지역)·뉴스 제외 사이트·차단 채널·제외 영상을 관리하며, 항목마다 카테고리 이동(다음 실행 분류 학습)·사이트 제외·영상 제외·
-> 본영상·채널 차단·추천 채널을 할 수 있다. 켜 두면 메일·문자로도 받는다(보고서만 — 다른 탭 알림은 없다). 수집기 코드는 `src/report/`, 직접 실행은
+> 본영상·채널 차단·추천 채널을 할 수 있다. 켜 두면 메일·문자로도 받는다(문자는 보고서만 — 증시·팝업/전시·스킬 랭킹은 메일만 보낸다). 수집기 코드는 `src/report/`, 직접 실행은
 > `npm run daily:report`, 운영 배포는 `npm run daily:report:bundle`, 운영 가이드는 봇 홈의 `daily-news-runbook.md`.
 >
 > **대시보드 값 우선**: 위 표에서 '대시보드 설정에서도 변경 가능' 항목은 탭별 '자동 수집·설정' 버튼

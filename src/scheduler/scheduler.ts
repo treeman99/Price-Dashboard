@@ -485,7 +485,8 @@ async function safeRefreshEvents(trigger: string) {
         return;
       }
       outcome = "attempted";
-      await refreshEvents({ trigger });
+      // 정시·보충 모두 메일을 보낸다(PR #2 이전과 같음 — 2026-11-23 메일만 복구).
+      await refreshEvents({ trigger, notify: true });
     });
   } catch (e) {
     log.error(`이벤트 수집 오류 [${trigger}]: ${(e as Error).message}`);
@@ -635,7 +636,8 @@ async function safeRefreshStock(
         log.warn(`증시(${market}) 수집이 이미 진행 중(수동 갱신 등) → ${trigger} 건너뜀`);
         return;
       }
-      await refreshStock({ market, trigger, slot });
+      // 정시·보충 모두 알림 대상(슬롯×채널 원장으로 멱등 — PR #2 이전과 같음, 2026-11-23 메일만 복구).
+      await refreshStock({ market, trigger, slot, notify: true });
     });
   } catch (e) {
     log.error(`증시(${market}) 수집 오류 [${trigger}]: ${(e as Error).message}`);
@@ -835,7 +837,8 @@ async function safeRunSkills(trigger: string) {
         return;
       }
       outcome = "attempted";
-      await refreshSkills({ trigger });
+      // 정시·보충 회차는 메일을 보낸다(PR #2 이전과 같음 — 2026-11-23 메일만 복구).
+      await refreshSkills({ trigger, notify: true });
     });
   } catch (e) {
     log.error(`스킬 랭킹 오류 [${trigger}]: ${(e as Error).message}`);

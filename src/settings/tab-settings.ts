@@ -73,6 +73,9 @@ export const NUMBER_RULES: Record<string, NumberRule> = {
 /** 오류 문구용 한국어 이름. */
 const FIELD_LABEL: Record<string, string> = {
   "report.notifyEmail": "보고서 메일 받기",
+  "stock.notifyEmail": "증시 브리핑 메일 받기",
+  "events.notifyEmail": "팝업·전시 메일 받기",
+  "skills.notifyEmail": "스킬 랭킹 메일 받기",
   "report.notifyImessage": "보고서 문자 받기",
   "youtube.freshHours": "유튜브 최근 영상 기준(시간)",
   "youtube.watchedExcludeDays": "유튜브 본영상 제외 기간",
@@ -123,9 +126,12 @@ function defaults(clamped?: string[]): TabSettings {
       newGapDays: config.eventsNewGapDays,
       newShowDays: config.eventsNewShowDays,
       verifyDates: config.eventsVerifyDates,
+      // 메일 기본 켜짐 = PR #2 이전 기본값(그때 운영 파일에는 탭 알림 설정이 저장된 적이 없어 기본값이 쓰였다).
+      notifyEmail: true,
     },
     stockPulse: { ...config.stockPulse },
-    stock: { historyRetentionDays: config.historyRetentionDays },
+    stock: { historyRetentionDays: config.historyRetentionDays, notifyEmail: true },
+    skills: { notifyEmail: true },
     timeouts: {
       newsMin: min(config.newsTimeoutMs),
       youtubeMin: min(config.youtubeTimeoutMs),
@@ -210,7 +216,35 @@ function lenientLeaf(key: string, def: unknown, raw: unknown): unknown {
  * 호출 시점마다 파일을 읽는다(수 KB 미만 — schedule-store 와 같은 방식).
  */
 export function getTabSettings(): TabSettings {
-  return mergeOnto(defaults(), readStored());
+  const stored = readStored();
+  return withLegacyNotify(mergeOnto(defaults(), stored), stored);
+}
+
+/**
+ * PR #2 이전 저장 형식(`notify.<탭>.email`)이 파일에 남아 있으면 그 값을 따른다 — 새 필드(<탭>.notifyEmail)를
+ * 저장한 적이 없을 때만. 기존 설정 파일을 바꾸거나 초기화하지 않는다(2026-11-23 증시·팝업/전시·스킬 메일 복구).
+ */
+function withLegacyNotify(s: TabSettings, stored: Record<string, unknown>): TabSettings {
+  for (const [tab, old] of legacyMailFlags(stored)) {
+    const section = stored[tab];
+    const setNow = isPlainObject(section) && typeof section.notifyEmail === "boolean";
+    if (!setNow) s[tab].notifyEmail = old;
+  }
+  return s;
+}
+
+const MAIL_TABS = ["stock", "events", "skills"] as const;
+
+/** 저장 파일의 예전 `notify.<탭>.email` 불리언(있는 탭만). */
+function legacyMailFlags(stored: Record<string, unknown>): Array<[(typeof MAIL_TABS)[number], boolean]> {
+  const legacy = isPlainObject(stored.notify) ? stored.notify : null;
+  if (!legacy) return [];
+  const out: Array<[(typeof MAIL_TABS)[number], boolean]> = [];
+  for (const tab of MAIL_TABS) {
+    const old = isPlainObject(legacy[tab]) ? legacy[tab].email : undefined;
+    if (typeof old === "boolean") out.push([tab, old]);
+  }
+  return out;
 }
 
 function mergeOnto(def: TabSettings, stored: Record<string, unknown>): TabSettings {
@@ -273,7 +307,14 @@ export function saveTabSettings(patch: DeepPartial<TabSettings>): TabSettings {
     }
   }
 
-  writeStored(mergeLegacy(readStored(), next, diffFromDefaults(next, def)));
+  const stored = readStored();
+  const diff = diffFromDefaults(next, def) as Record<string, Record<string, unknown>>;
+  // 예전 notify.<탭>.email 이 남아 있으면 새 필드를 기본값과 같아도 명시 저장한다 — 빼면 예전 값이 다시 이긴다
+  // (예: 예전 false → 대시보드에서 켬(=기본 true) → 저장분에서 빠짐 → 여전히 꺼짐).
+  for (const [tab] of legacyMailFlags(stored)) {
+    diff[tab] = { ...diff[tab], notifyEmail: next[tab].notifyEmail };
+  }
+  writeStored(mergeLegacy(stored, next, diff));
   return getTabSettings();
 }
 

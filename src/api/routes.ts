@@ -587,7 +587,8 @@ api.post("/events/refresh", async (_req, res) => {
     return res.status(409).json({ error: "이미 팝업/전시 수집이 진행 중입니다.", collecting: true });
   }
   const started = await startManualLlmJob("팝업/전시", () =>
-    refreshEvents({ trigger: "manual" })
+    // 수동 갱신은 메일을 보내지 않는다(PR #2 이전과 같음 — 정시 회차와 중복 방지).
+    refreshEvents({ trigger: "manual", notify: false })
   );
   if (!started) return res.status(409).json(llmBusyBody());
   res.status(202).json({ started: true, collecting: true });
@@ -1222,7 +1223,8 @@ api.post("/stock/:market/refresh", async (req, res) => {
   //    거기서 슬롯(브리핑 회차)을 정하는 것이 맞다 — 버튼을 누른 시각이 아니라 실제로 데이터를
   //    모은 시각이 그 브리핑의 기준이기 때문이다.
   const started = await startManualLlmJob(market === "kr" ? "국내 증시" : "미국 증시", () =>
-    refreshStock({ market, trigger: "manual" })
+    // 수동 갱신도 지난 슬롯의 미발송을 보충한다(PR #2 이전과 같음 — 슬롯 원장으로 중복 방지, 첫 슬롯 전이면 보내지 않음).
+    refreshStock({ market, trigger: "manual", notify: true })
   );
   if (!started) return res.status(409).json(llmBusyBody());
   res.status(202).json({ started: true, collecting: true });
