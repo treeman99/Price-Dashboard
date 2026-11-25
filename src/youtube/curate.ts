@@ -1,6 +1,8 @@
 import { log } from "../util/log.ts";
 import { getTabSettings, tabTimeoutMs } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
+import { hoistStrayFields, parseLlmJsonOrReask } from "../util/llm-json.ts";
+import { modelJsonReasker } from "../util/llm-json-reask.ts";
 import { getAgentModel } from "../util/model-store.ts";
 import { localDate } from "../util/date.ts";
 import { checkRecency, parseTimestamp, promptWindow, toLocalIso, windowEndingAt, type RecencyWindow } from "../util/recency.ts";
@@ -322,12 +324,6 @@ export function buildPrompt(
 "notes":string|null}`;
 }
 
-function extractJson(text: string): unknown {
-  const s = text.indexOf("{");
-  const e = text.lastIndexOf("}");
-  if (s === -1 || e <= s) throw new Error("JSON 미발견");
-  return JSON.parse(text.slice(s, e + 1));
-}
 
 function normDate(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -507,6 +503,7 @@ ${catList}
 
 출력은 JSON 하나만(다른 텍스트 없이):
 {"channels":{${defs.map((c) => `"${c.key}":["채널명 또는 @핸들"]`).join(",")}}}`;
+  const label = strictModel ? `유튜브 채널 발굴(${model})` : "유튜브 채널 발굴";
   try {
     const text = await runAgentQueryText(
       prompt,
@@ -520,10 +517,11 @@ ${catList}
           "너는 유튜브 채널 생태계에 정통한 전문가다. 실존하는 채널만 정확히 나열하고 지정된 JSON 하나만 출력한다.",
       },
       channelDiscoveryTimeoutMs(model), // 근거는 상수 선언부 주석
-      strictModel ? `유튜브 채널 발굴(${model})` : "유튜브 채널 발굴",
+      label,
       { strictModel }
     );
-    const parsed = extractJson(text) as any;
+    // 발굴은 실패해도 추천 채널만으로 진행하므로 재요청 없이 관대한 파싱만 한다.
+    const parsed = (await parseLlmJsonOrReask(text, { label })).value as any;
     const ch = parsed?.channels ?? {};
     const out: Record<string, string[]> = {};
     for (const meta of defs) {
@@ -573,6 +571,7 @@ export interface CurateYoutubeOptions {
 export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {}): Promise<YoutubeSnapshot> {
   const model = opts.model ?? getAgentModel();
   const strict = opts.strict === true;
+  const curateLabel = opts.model ? `유튜브 큐레이션(${opts.model})` : "유튜브 큐레이션";
   // 실행 시작 시점에 한 번 정한다(대시보드 저장 즉시 다음 수집부터 반영 + 한 실행 안에서는 일관).
   const window = opts.window ?? windowEndingAt(new Date(), getTabSettings().youtube.freshHours);
   const freshHours = window.hours;
@@ -659,7 +658,7 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
       // (2026-07-26 05:18Z, 도구 86회). 그런 런은 더 기다려도 건질 게 없으므로 20분에서 끊고
       // catch-up 에 넘기는 편이 낫다. 앞단의 채널 발굴·RSS 하베스트까지 합쳐도 20분이면 넉넉하다.
       tabTimeoutMs("youtubeMin"),
-      opts.model ? `유튜브 큐레이션(${opts.model})` : "유튜브 큐레이션",
+      curateLabel,
       { strictModel: strict }
     );
     if (!finalText) {
@@ -667,7 +666,14 @@ export async function curateYoutube(date: string, opts: CurateYoutubeOptions = {
       return emptySnapshot(today, "유튜브 큐레이션 결과가 비어 있습니다.");
     }
 
-    const p = extractJson(finalText) as any;
+    // 세 모델 공통 관대 파서(src/util/llm-json.ts) — 뉴스와 같은 보강(복구 → 같은 모델 JSON 재출력 1회).
+    const parsed = await parseLlmJsonOrReask(finalText, {
+      label: curateLabel,
+      reask: modelJsonReasker(model, curateLabel, strict),
+      shapeHint: '{"categories":{"<카테고리 key>":[영상…]},"notes":string|null}',
+    });
+    const p = parsed.value as any;
+    hoistStrayFields(p, "categories", ["notes"]);
     const catsIn = p?.categories ?? {};
 
     // LLM이 전 카테고리에서 이미 넣은 videoId — 시드 폴백을 어느 카테고리에 병합할지 결정할 때

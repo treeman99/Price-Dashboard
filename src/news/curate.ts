@@ -1,6 +1,8 @@
 import { log } from "../util/log.ts";
 import { tabTimeoutMs } from "../settings/tab-settings.ts";
 import { runAgentQueryText } from "../util/agent-query.ts";
+import { hoistStrayFields, parseLlmJsonOrReask } from "../util/llm-json.ts";
+import { modelJsonReasker } from "../util/llm-json-reask.ts";
 import { getAgentModel } from "../util/model-store.ts";
 import { localDate } from "../util/date.ts";
 import { checkRecency, parseTimestamp, promptWindow, toLocalIso, windowEndingAt, type RecencyWindow } from "../util/recency.ts";
@@ -87,12 +89,6 @@ ${geekNewsInstruction(geekNews)}
 "notes":string|null}`;
 }
 
-function extractJson(text: string): unknown {
-  const s = text.indexOf("{");
-  const e = text.lastIndexOf("}");
-  if (s === -1 || e <= s) throw new Error("JSON 미발견");
-  return JSON.parse(text.slice(s, e + 1));
-}
 
 function normDate(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -186,6 +182,8 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
     const feed = await fetchGeekNews(window.start, now);
     geekNews = feed.ok ? feed.entries : null;
   }
+  const model = opts.model ?? getAgentModel(); // 대시보드에서 고른 수집·큐레이션 공통 모델
+  const label = opts.model ? `뉴스 큐레이션(${opts.model})` : "뉴스 큐레이션";
   try {
     const finalText = await runAgentQueryText(
       buildPrompt(defs, window, nowLabel(), geekNews, userRules),
@@ -195,7 +193,7 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
         allowedTools: ["WebSearch", "WebFetch"],
         permissionMode: "bypassPermissions",
         settingSources: [],
-        model: opts.model ?? getAgentModel(), // 대시보드에서 고른 수집·큐레이션 공통 모델
+        model,
         maxTurns: 80,
         systemPrompt:
           "너는 꼼꼼한 한국어 뉴스 큐레이터다. 최근 24시간 기사만 채택하고(오래되거나 날짜 불명확하면 버림), " +
@@ -209,7 +207,7 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
       // 60분이 실제로 태운 값이다: 2026-08-02 00:36Z 에 3600초를 소진하고 실패했고,
       // 그 한 시간이 세마포어를 물고 있어 뒤따르던 유튜브·팝업/전시 슬롯까지 연쇄로 밀렸다.
       tabTimeoutMs("newsMin"),
-      opts.model ? `뉴스 큐레이션(${opts.model})` : "뉴스 큐레이션",
+      label,
       { strictModel: opts.strict }
     );
     if (!finalText) {
@@ -217,7 +215,15 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
       return emptySnapshot(today, "뉴스 큐레이션 결과가 비어 있습니다.");
     }
 
-    const p = extractJson(finalText) as any;
+    // 세 모델 공통 관대 파서(src/util/llm-json.ts) — 흔한 문법 오류는 복구하고, 그래도 안 되면 같은 모델에 JSON 재출력 1회.
+    // 실패하면 LlmJsonError(원문 보관)로 던져 보고서가 지금처럼 '오류로 건너뜀 + 사유'를 남긴다.
+    const parsed = await parseLlmJsonOrReask(finalText, {
+      label,
+      reask: modelJsonReasker(model, label, opts.strict),
+      shapeHint: '{"categories":{"<카테고리 key>":[기사…]},"notes":string|null}',
+    });
+    const p = parsed.value as any;
+    hoistStrayFields(p, "categories", ["notes"]); // 2026-11-25 Gemini: `}` 하나가 빠져 notes 가 categories 안에 들어감
     const catsIn = p?.categories ?? {};
 
     const categories: NewsCategory[] = defs.map((meta) => {

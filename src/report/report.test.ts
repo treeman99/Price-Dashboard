@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import type { NewsSnapshot, YoutubeSnapshot } from "../../shared/types.ts";
 import { UsageLimitError } from "../util/codex-query.ts";
+import { LlmJsonError } from "../util/llm-json.ts";
 import {
   AGY_TOOL_BUDGET_MAX,
   AntigravityError,
@@ -419,6 +420,40 @@ test("한도 외 오류: 재시도 없이 '오류로 건너뜀(조치 필요)'�
   assert.match(md, /오류로 건너뜀\(조치 필요\)/);
   assert.match(md, /\*\*조치 필요\*\*: Gemini 4 Neon — .*no longer supported/);
   assert.equal(r.ok, true);
+});
+
+test("응답 JSON 파싱 실패(복구·재요청 후에도): 오류로 건너뜀 + 사유 유지, 모델 원문을 실행 폴더에 남긴다", async () => {
+  const out = path.join(tmpRoot, "gemini-json");
+  const rawText = '{"categories":{"ai":[{"title": tru e}]}}';
+  const { deps, calls } = fakeDeps({
+    fail: {
+      // 메시지에 'rate limit' 이 섞여도(재요청 실패 사유 등) JSON 실패는 한도가 아니다 → 한도 재실행 금지
+      gemini: () => new LlmJsonError("응답 JSON 파싱 실패 — Unexpected token (JSON 재요청 실패: rate limit)", rawText, "재요청 응답 {"),
+    },
+  });
+  const r = await run(out, deps);
+  assert.equal(calls["gemini:news"], 1, "한도 재시도를 하지 않는다");
+  const g = r.models.find((m) => m.spec.key === "gemini")!;
+  assert.equal(g.outcome, "skipped-error");
+  assert.match(g.reason, /^뉴스: 응답 JSON 파싱 실패 — /);
+  const dir = path.join(out, "runs", `t${runSeq}`, "models", "gemini");
+  assert.equal(fs.readFileSync(path.join(dir, "news-response.txt"), "utf8"), rawText);
+  assert.equal(fs.readFileSync(path.join(dir, "news-reask-response.txt"), "utf8"), "재요청 응답 {");
+  // 다른 모델에는 원문 파일이 생기지 않는다.
+  assert.equal(fs.existsSync(path.join(out, "runs", `t${runSeq}`, "models", "claude", "news-response.txt")), false);
+  assert.match(fs.readFileSync(r.reportPath, "utf8"), /\*\*조치 필요\*\*: Gemini 4 Neon — 뉴스: 응답 JSON 파싱 실패/);
+});
+
+test("편집기 응답도 같은 관대 파서: 빠진 닫는 괄호를 보충해 읽는다", async () => {
+  const out = path.join(tmpRoot, "editor-lenient");
+  const { deps } = fakeDeps();
+  const base = deps.runEditor;
+  // 기본 편집 응답에서 끝의 `}` 하나를 뺀다(2026-11-25 Gemini 와 같은 모양).
+  deps.runEditor = async (spec, prompt) => (await base(spec, prompt)).replace(/\}$/, "");
+  const r = await run(out, deps);
+  assert.equal(r.editor.spec?.key, "claude", "첫 편집 모델이 그대로 성공");
+  assert.equal(r.counts.afterMerge, 3, "기본 편집 결과(앤트로픽 사건 1 + 양자 1 + 영상 1) 그대로");
+  assert.deepEqual(r.editor.highlights, ["앤트로픽이 새 모델을 공개했다.", "양자 오류정정 신기록이 나왔다."]);
 });
 
 test("세 모델 모두 건너뜀: 실패 보고서만 내고 체크포인트·seen 을 진행하지 않는다", async () => {

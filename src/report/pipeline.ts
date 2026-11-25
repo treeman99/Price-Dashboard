@@ -21,6 +21,7 @@ import {
 import { modelOutcome, runWithLimitRetry, type ModelOutcome, type ModelSpec } from "./models.ts";
 import { renderReport } from "./render.ts";
 import { checkRecency, windowEndingAt, type RecencyWindow } from "../util/recency.ts";
+import { parseLlmJson } from "../util/llm-json.ts";
 import { buildReportJson } from "./output.ts";
 
 /**
@@ -319,10 +320,9 @@ ${JSON.stringify(rows)}`;
 }
 
 export function parseEditorJson(text: string): { groups: EditorGroup[]; highlights: string[] } {
-  const s = text.indexOf("{");
-  const e = text.lastIndexOf("}");
-  if (s < 0 || e <= s) throw new Error("편집기 응답에 JSON 없음");
-  const v = JSON.parse(text.slice(s, e + 1)) as { groups?: unknown; highlights?: unknown };
+  if (text.indexOf("{") < 0) throw new Error("편집기 응답에 JSON 없음");
+  // 세 모델 공통 관대 파서(src/util/llm-json.ts). 편집기는 실패하면 다음 모델로 넘어가므로 재요청은 하지 않는다.
+  const v = parseLlmJson(text).value as { groups?: unknown; highlights?: unknown };
   const groups = Array.isArray(v.groups) ? (v.groups as EditorGroup[]) : [];
   const highlights = Array.isArray(v.highlights)
     ? v.highlights.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 300)).slice(0, 6)
@@ -391,6 +391,13 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
       // 중간 결과는 성공·실패와 무관하게 전부 보관한다(부분 성공분도 검증할 수 있게).
       if (news.ok) writeJson(path.join(dir, "news.json"), news.value);
       if (youtube.ok) writeJson(path.join(dir, "youtube.json"), youtube.value);
+      // 응답을 JSON 으로 읽지 못한 실패는 모델 원문을 남긴다 — 2026-11-25 에는 원문이 실행 폴더에 없어
+      // agy 대화 기록에서 찾아야 했다. (재요청 응답이 있으면 그것도.)
+      for (const [part, r] of [["news", news], ["youtube", youtube]] as const) {
+        if (r.ok || !r.rawResponse) continue;
+        writeJson(path.join(dir, `${part}-response.txt`), r.rawResponse); // 문자열은 그대로 쓴다
+        if (r.reaskResponse) writeJson(path.join(dir, `${part}-reask-response.txt`), r.reaskResponse);
+      }
       writeJson(path.join(dir, "trace.json"), traces);
       writeJson(path.join(dir, "status.json"), record);
       deps.log(`${spec.label}: ${outcome}${reason ? ` — ${reason.slice(0, 200)}` : ""}`);

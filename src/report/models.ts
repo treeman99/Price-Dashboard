@@ -1,5 +1,6 @@
 import { isUsageLimitError, isCodexUsageLimitText } from "../util/codex-query.ts";
 import { AntigravityError } from "../util/antigravity-query.ts";
+import { LlmJsonError } from "../util/llm-json.ts";
 
 /**
  * 일일 보고서 취합 모델(three-model-update.md, 2026-11-22 사용자 확정).
@@ -48,6 +49,8 @@ const CLAUDE_LIMIT_RE =
  * - Claude: 위 CLAUDE_LIMIT_RE
  */
 export function classifyFailure(spec: ModelSpec, e: unknown): "limit" | "error" {
+  // 응답은 받았는데 JSON 으로 읽지 못한 것은 한도가 아니다(메시지에 재요청 실패 사유가 섞여도 한도 재실행 금지).
+  if (e instanceof LlmJsonError) return "error";
   if (spec.key === "gpt") {
     if (isUsageLimitError(e)) return "limit";
     return isCodexUsageLimitText(String((e as Error)?.message ?? e)) ? "limit" : "error";
@@ -60,24 +63,42 @@ export function classifyFailure(spec: ModelSpec, e: unknown): "limit" | "error" 
 }
 
 /** 한 모델의 한 작업(뉴스 또는 유튜브)을 실행하고, 한도면 짧게 쉬었다가 딱 한 번 더 해 본다. */
+export type TaskFailure = {
+  ok: false;
+  kind: "limit" | "error";
+  error: string;
+  attempts: number;
+  /** JSON 으로 읽지 못한 모델 원문(LlmJsonError) — 실행 폴더에 남긴다. */
+  rawResponse?: string;
+  reaskResponse?: string;
+};
+
+function failureOf(spec: ModelSpec, e: unknown, attempts: number): TaskFailure {
+  const f: TaskFailure = { ok: false, kind: classifyFailure(spec, e), error: String((e as Error)?.message ?? e), attempts };
+  if (e instanceof LlmJsonError) {
+    f.rawResponse = e.rawResponse;
+    if (e.reaskResponse) f.reaskResponse = e.reaskResponse;
+  }
+  return f;
+}
+
 export async function runWithLimitRetry<T>(
   spec: ModelSpec,
   task: () => Promise<T>,
   retryDelayMs: number,
   onRetry?: (reason: string) => void
-): Promise<{ ok: true; value: T; attempts: number } | { ok: false; kind: "limit" | "error"; error: string; attempts: number }> {
+): Promise<{ ok: true; value: T; attempts: number } | TaskFailure> {
   try {
     return { ok: true, value: await task(), attempts: 1 };
   } catch (e) {
-    const kind = classifyFailure(spec, e);
-    const msg = String((e as Error)?.message ?? e);
-    if (kind !== "limit") return { ok: false, kind, error: msg, attempts: 1 };
-    onRetry?.(msg);
+    const first = failureOf(spec, e, 1);
+    if (first.kind !== "limit") return first;
+    onRetry?.(first.error);
     if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
     try {
       return { ok: true, value: await task(), attempts: 2 };
     } catch (e2) {
-      return { ok: false, kind: classifyFailure(spec, e2), error: String((e2 as Error)?.message ?? e2), attempts: 2 };
+      return failureOf(spec, e2, 2);
     }
   }
 }
