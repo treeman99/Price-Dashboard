@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowRight } from "lucide-react";
 import type { StockMarket, StockSnapshot } from "@shared/types";
 import { changeTone } from "@shared/stock";
 import { safeHref } from "@shared/url";
+import { entryVideoId } from "@shared/youtube-thumb";
 import { api } from "@/lib/api";
 import { formatWhen } from "@/lib/tabConfig";
 import { cn } from "@/lib/utils";
@@ -17,6 +18,7 @@ import {
 } from "@/lib/feed";
 import { ensureBaseline, unseenIds, type SeenTabId } from "@/lib/seen";
 import { LoadingState, Meta, MetaDot, PageToolbar, SectionHeader } from "@/components/ui/page";
+import { VideoThumb } from "@/components/VideoThumb";
 
 /**
  * 1면 — 지난번 본 뒤 각 지면에 새로 들어온 것을 한 장에 추린다(1면 브리프).
@@ -44,6 +46,8 @@ interface Headline {
   title: string;
   href: string | null;
   meta: string[];
+  /** 유튜브 머리기사면 영상 섬네일을 함께 싣는다(영상 ID 를 모르면 자리표시). 뉴스·팝업은 undefined. */
+  video?: { id: string | null };
 }
 
 interface Desk {
@@ -93,6 +97,7 @@ function buildDesks(feeds: Feeds, tabs: Map<string, FrontTab>): Desk[] {
         title: e.title,
         href: safeHref(e.url),
         meta: [e.kind === "youtube" ? "영상" : "뉴스", e.source, e.categoryLabel].filter(Boolean),
+        ...(e.kind === "youtube" ? { video: { id: entryVideoId(e) } } : {}),
       })),
     });
   } else {
@@ -281,20 +286,32 @@ function HeadlineRow({ h }: { h: Headline }) {
       )}
     </h3>
   );
+  const meta = h.meta.length > 0 && (
+    <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[12.5px] text-muted-foreground">
+      {/* 가운뎃점은 앞 조각 끝에 붙인다 — 줄이 바뀌어도 새 줄이 점으로 시작하지 않게. */}
+      {h.meta.map((m, i) => (
+        <span key={i} className="inline-flex items-center gap-1.5">
+          {m}
+          {i < h.meta.length - 1 && <MetaDot />}
+        </span>
+      ))}
+    </p>
+  );
+  if (h.video) {
+    return (
+      <li className="flex gap-3 py-2.5">
+        <VideoThumb videoId={h.video.id} href={h.href} className="w-24" />
+        <div className="min-w-0">
+          {title}
+          {meta}
+        </div>
+      </li>
+    );
+  }
   return (
     <li className="py-2.5">
       {title}
-      {h.meta.length > 0 && (
-        <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[12.5px] text-muted-foreground">
-          {/* 가운뎃점은 앞 조각 끝에 붙인다 — 줄이 바뀌어도 새 줄이 점으로 시작하지 않게. */}
-          {h.meta.map((m, i) => (
-            <span key={i} className="inline-flex items-center gap-1.5">
-              {m}
-              {i < h.meta.length - 1 && <MetaDot />}
-            </span>
-          ))}
-        </p>
-      )}
+      {meta}
     </li>
   );
 }

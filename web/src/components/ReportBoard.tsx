@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Mail, MessageSquare, Play, RefreshCw, SlidersHorizontal } from "lucide-react";
 import type { CategoryDef, YoutubeCategoryDef } from "@shared/types";
 import { safeHref } from "@shared/url";
+import { youtubeId } from "@shared/youtube-thumb";
 import {
   DAILY_REPORT_OUTCOME_LABEL,
   type DailyReportListResponse,
@@ -15,6 +16,7 @@ import { isHiddenEntry, reportItemId, reportVisibleItems } from "@/lib/feed";
 import { useNewMarks } from "@/lib/seen";
 import { ScheduleControl } from "@/components/ScheduleControl";
 import { ReportSections, type EntryActionsContext } from "@/components/ReportEntries";
+import { VideoThumb } from "@/components/VideoThumb";
 import { CategoriesDialog } from "@/components/CategoriesDialog";
 import { ExcludedDomainsDialog } from "@/components/ExcludedDomainsDialog";
 import { BlockedChannelsDialog } from "@/components/BlockedChannelsDialog";
@@ -330,17 +332,20 @@ function ReportDetail({
                 {r.seedsOnly.slice(0, 30).map((v) => {
                   const h = safeHref(v.url);
                   return (
-                    <li key={v.url} className="py-2 text-[14px]">
-                      {h ? (
-                        <a href={h} target="_blank" rel="noreferrer" className="font-medium hover:underline">
-                          {v.title}
-                        </a>
-                      ) : (
-                        v.title
-                      )}
-                      <span className="num ml-2 text-[12.5px] text-muted-foreground">
-                        {v.channel} · {v.date} · {v.categoryLabel}
-                      </span>
+                    <li key={v.url} className="flex gap-3 py-2.5 text-[14px]">
+                      <VideoThumb videoId={youtubeId(v.url)} href={h} className="w-24" />
+                      <div className="min-w-0">
+                        {h ? (
+                          <a href={h} target="_blank" rel="noreferrer" className="font-medium hover:underline">
+                            {v.title}
+                          </a>
+                        ) : (
+                          v.title
+                        )}
+                        <span className="num ml-2 text-[12.5px] text-muted-foreground">
+                          {v.channel} · {v.date} · {v.categoryLabel}
+                        </span>
+                      </div>
                     </li>
                   );
                 })}

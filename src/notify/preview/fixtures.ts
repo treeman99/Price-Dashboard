@@ -26,6 +26,7 @@ import type {
   YoutubeVideo,
 } from "../../../shared/types.ts";
 import type { SkillRankEntry, SkillRepo, SkillsSnapshot } from "../../../shared/skills.ts";
+import type { DailyReportEntry, DailyReportJson } from "../../../shared/report.ts";
 
 // ── 날짜 ───────────────────────────────────────────────────────────────────────
 
@@ -819,4 +820,83 @@ export const stockKrClosedFixture: StockSnapshot = {
   watchlist: [],
   disclaimer: DISCLAIMER,
   notes: "휴장(임시 휴장(예시)) — 브리핑을 생성하지 않았습니다.",
+};
+
+// ── 통합 보고서 ─────────────────────────────────────────────────────────────────
+
+function reportVideo(o: Partial<DailyReportEntry> & { title: string }): DailyReportEntry {
+  return {
+    kind: "youtube",
+    categoryKey: "tools",
+    categoryLabel: "🛠️ AI 활용 · 도구",
+    summary: "제목·설명 기준 예시 요약입니다(영상 미시청).",
+    source: "예시 테크 채널",
+    url: null,
+    date: TODAY,
+    foundBy: ["Opus 5.5"],
+    secondary: [],
+    conflict: "",
+    update: false,
+    ...o,
+  };
+}
+
+/**
+ * 통합 보고서 메일 — 뉴스 1건(보조 출처·근거 차이), 영상 3건(videoId 있음 / 예전 실행처럼 키만 / 영상 ID 모름 →
+ * 섬네일 없는 행), 추천 채널 신규 업로드 1건(섬네일). 영상 ID 는 형식만 맞춘 가상 값이다.
+ */
+export const reportFixture: DailyReportJson = {
+  version: 1,
+  runId: "20261123T000000Z-prev",
+  trigger: "price:schedule",
+  preview: false,
+  startedAt: `${TODAY}T09:00:00+09:00`,
+  finishedAt: `${TODAY}T09:20:00+09:00`,
+  ok: true,
+  successCount: 2,
+  modelCount: 3,
+  models: [
+    { key: "claude", label: "Claude Opus 5.5", model: "claude-opus-5-5", actualModels: ["claude-opus-5-5"], outcome: "success", reason: "", newsCount: 1, youtubeCount: 3, toolCalls: 40 },
+    { key: "gpt", label: "GPT-6.1 Sol", model: "gpt-6.1-sol", actualModels: [], outcome: "skipped-limit", reason: "예시 한도 문구", newsCount: 0, youtubeCount: 0, toolCalls: 0 },
+    { key: "gemini", label: "Gemini 4 Neon", model: "gemini-4-neon-xhigh", actualModels: ["gemini-4-neon-xhigh"], outcome: "success", reason: "", newsCount: 1, youtubeCount: 2, toolCalls: 80 },
+  ],
+  editor: { label: "Claude Opus 5.5", model: "claude-opus-5-5", ok: true, note: "" },
+  highlights: ["(예시) 가상 회사가 새 모델을 공개했다."],
+  counts: { before: 8, afterMerge: 5, alreadyReported: 0, reported: 4, seedsOnly: 1 },
+  coverage: { lastSuccessAt: null, freshHours: 24, gap: null, geekNews: { ok: true, count: 3, since: "", until: "", error: null } },
+  news: [
+    {
+      key: "ai",
+      label: "🤖 AI",
+      items: [
+        {
+          kind: "news",
+          categoryKey: "ai",
+          categoryLabel: "🤖 AI",
+          title: "(예시) 가상 회사 새 모델 공개",
+          summary: "예시 기사 요약입니다.",
+          source: "Example News",
+          url: "https://example.com/news/1",
+          date: TODAY,
+          foundBy: ["Opus 5.5", "Gemini 4 Neon"],
+          secondary: [{ label: "Example Wire", link: "https://example.com/wire/1" }],
+          conflict: "발표 날짜 표기 차이",
+          update: false,
+        },
+      ],
+    },
+  ],
+  youtube: [
+    {
+      key: "tools",
+      label: "🛠️ AI 활용 · 도구",
+      items: [
+        reportVideo({ title: "(예시) 작은 모델로 문서 검색 만들기", key: "yt:PREVIEW0001", videoId: "PREVIEW0001", url: "https://www.youtube.com/watch?v=PREVIEW0001" }),
+        reportVideo({ title: "(예시) 예전 실행 — videoId 없이 키만 있는 영상", key: "yt:PREVIEW0002", url: "https://www.youtube.com/watch?v=PREVIEW0002" }),
+        reportVideo({ title: "(예시) 영상 ID 를 모르는 항목 — 섬네일 없이 글자만", url: "https://example.com/video" }),
+      ],
+    },
+  ],
+  seedsOnly: [{ title: "(예시) 추천 채널 새 업로드", channel: "가상 강의실", date: TODAY, url: "https://www.youtube.com/watch?v=PREVIEW0004", categoryLabel: "🛠️ AI 활용 · 도구" }],
+  sourceFailures: [],
 };

@@ -27,8 +27,10 @@ import {
   strong,
   subHeader,
   textLink,
+  thumbArticleRow,
   type TagTone,
 } from "../notify/email-kit.ts";
+import { entryVideoId, youtubeId, youtubeThumbUrl } from "../../shared/youtube-thumb.ts";
 import {
   DAILY_REPORT_OUTCOME_LABEL,
   type DailyReportChannelState,
@@ -124,6 +126,18 @@ function coverageLine(r: DailyReportJson): string | null {
   return `수집 범위: 뉴스 ${formatWindowKst({ start: w.news.from, end: w.news.to })} · 유튜브 ${formatWindowKst({ start: w.youtube.from, end: w.youtube.to })}(실행 시점 기준, 발행·업로드 시각 단위)`;
 }
 
+/**
+ * 메일 영상 섬네일 — 영상 ID 로 만든 hqdefault(480×360, 4:3). 화면과 달리 대체 크기로 넘어갈 수 없으므로 모든 영상에
+ * 있는 크기 하나만 쓴다. 영상 ID 를 모르면 null(기사형 행으로 그린다).
+ * 크기: 본문 항목은 예전 유튜브 메일과 같은 144×108, 추천 업로드(제목·메타 두 줄)는 96×72.
+ */
+const THUMB = { entry: { width: 144, height: 108 }, seed: { width: 96, height: 72 } } as const;
+
+function videoThumb(videoId: string | null, size: keyof typeof THUMB): { src: string; width: number; height: number } | null {
+  const src = youtubeThumbUrl(videoId, "hqdefault");
+  return src ? { src, ...THUMB[size] } : null;
+}
+
 function entryRow(e: DailyReportEntry): string {
   const href = safeHref(e.url);
   const isVideo = e.kind === "youtube";
@@ -146,14 +160,17 @@ function entryRow(e: DailyReportEntry): string {
       : "",
     e.conflict ? `⚠️ 근거 차이: ${breakLongRuns(escapeHtml(e.conflict))}` : "",
   ].filter(Boolean);
-  return articleRow({
+  const row = {
     title: e.title,
     href,
     lead: lead || undefined,
     meta,
     summary: breakLongRuns(escapeHtml(e.summary)),
     after: extra.length ? extra.join("&nbsp;&nbsp;· ") : undefined,
-  });
+  };
+  // 영상 ID 는 videoId → 항목 키(yt:<ID>) → 영상 URL 순 — 예전 실행(videoId 없는 report.json)도 섬네일이 붙는다.
+  const thumb = isVideo ? videoThumb(entryVideoId(e), "entry") : null;
+  return thumb ? thumbArticleRow({ ...row, thumb }) : articleRow(row);
 }
 
 /** 보고서 메일 HTML. 순수 함수 — 발송하지 않는다. */
@@ -219,13 +236,15 @@ export function buildReportEmailHtml(r: DailyReportJson): string {
       parts.push(
         r.seedsOnly
           .slice(0, 20)
-          .map((v) =>
-            articleRow({
+          .map((v) => {
+            const row = {
               title: v.title,
               href: safeHref(v.url),
               meta: metaLine([breakLongRuns(escapeHtml(v.channel)), escapeHtml(v.date), breakLongRuns(escapeHtml(v.categoryLabel))]),
-            })
-          )
+            };
+            const thumb = videoThumb(youtubeId(v.url), "seed");
+            return thumb ? thumbArticleRow({ ...row, thumb }) : articleRow(row);
+          })
           .join("")
       );
     }

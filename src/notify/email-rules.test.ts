@@ -16,16 +16,19 @@ import { escapeHtml } from "./html.ts";
 import { buildEventsEmailHtml } from "./events-email.ts";
 import { buildSkillsEmailHtml } from "./skills-email.ts";
 import { buildStockEmailParts } from "./stock-email.ts";
+import { buildReportEmailHtml } from "../report/deliver.ts";
 import {
   SKILLS_CYCLE_LABEL_FIXTURE,
   STOCK_KR_PINNED,
   eventsFixture,
+  reportFixture,
   skillsFixture,
   stockKrClosedFixture,
   stockKrFixture,
 } from "./preview/fixtures.ts";
 import type { EventsSnapshot, StockSnapshot } from "../../shared/types.ts";
 import type { SkillsSnapshot } from "../../shared/skills.ts";
+import type { DailyReportJson } from "../../shared/report.ts";
 
 // ── 나쁜 데이터 ────────────────────────────────────────────────────────────────
 
@@ -71,6 +74,29 @@ function badStock(s: StockSnapshot): StockSnapshot {
   };
 }
 
+function badReport(r: DailyReportJson): DailyReportJson {
+  const sections = (secs: DailyReportJson["news"]) =>
+    secs.map((sec) => ({
+      ...sec,
+      label: BAD,
+      items: sec.items.map((e) => ({
+        ...e,
+        title: BAD,
+        summary: BAD,
+        source: BAD,
+        conflict: e.conflict ? BAD : "",
+        secondary: e.secondary.map((x) => ({ ...x, label: BAD })),
+      })),
+    }));
+  return {
+    ...r,
+    highlights: [BAD],
+    news: sections(r.news),
+    youtube: sections(r.youtube),
+    seedsOnly: r.seedsOnly.map((v) => ({ ...v, title: BAD, channel: BAD, categoryLabel: BAD })),
+  };
+}
+
 // ── 렌더 ────────────────────────────────────────────────────────────────────
 
 type Mail = { name: string; html: string };
@@ -83,6 +109,8 @@ function render(bad: boolean): Mail[] {
     // 증시는 차트(cid img)가 붙는 경로로 — 고정 종목이 있어야 img 규칙이 실제로 검사된다.
     { name: "stock", html: buildStockEmailParts(pick(stockKrFixture, badStock), STOCK_KR_PINNED).html },
     { name: "stock-closed", html: buildStockEmailParts(pick(stockKrClosedFixture, badStock), STOCK_KR_PINNED).html },
+    // 통합 보고서 — 유튜브 항목·추천 업로드 섬네일(img)이 붙는 경로.
+    { name: "report", html: buildReportEmailHtml(pick(reportFixture, badReport)) },
   ].map((m) => ({ ...m, name: bad ? `${m.name}(나쁜 데이터)` : m.name }));
 }
 

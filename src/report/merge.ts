@@ -7,6 +7,7 @@
  * - 한 모델만 찾은 항목은 **반드시 보존**한다(편집기가 빠뜨리면 편집 결과를 버린다).
  * - 근거가 충돌하면 차이를 표시하고 사실을 임의로 섞지 않는다.
  */
+import { youtubeId } from "../../shared/youtube-thumb.ts";
 
 export type ReportKind = "news" | "youtube";
 
@@ -55,15 +56,8 @@ export interface ReportGroup {
 
 const TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|mc_|ref$|ref_src$|igshid$|spm$|cmpid$|ocid$)/i;
 
-/** YouTube URL → 11자 영상 ID. */
-export function youtubeId(url: string | null | undefined): string | null {
-  if (!url) return null;
-  const m =
-    /[?&]v=([A-Za-z0-9_-]{11})/.exec(url) ||
-    /youtu\.be\/([A-Za-z0-9_-]{11})/.exec(url) ||
-    /\/(?:shorts|embed|live)\/([A-Za-z0-9_-]{11})/.exec(url);
-  return m ? m[1] : null;
-}
+/** YouTube URL → 11자 영상 ID. 규칙은 화면·메일 섬네일과 같이 쓰려고 shared 로 옮겼다. */
+export { youtubeId };
 
 /**
  * URL 정규화: 스킴 https 통일, www. 제거, 추적 파라미터·조각 제거, 끝 슬래시 제거, 쿼리 정렬.

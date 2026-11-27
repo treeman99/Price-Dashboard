@@ -3,9 +3,11 @@ import { Ban, Check, Eye, EyeOff, Globe, Link as LinkIcon, Loader2, Star, X } fr
 import type { CategoryDef } from "@shared/types";
 import type { DailyReportEntryView, DailyReportSectionView } from "@shared/report";
 import { safeHref } from "@shared/url";
+import { entryVideoId } from "@shared/youtube-thumb";
 import { api } from "@/lib/api";
 import { isHiddenEntry } from "@/lib/feed";
 import { NewTag } from "@/components/NewTag";
+import { VideoThumb } from "@/components/VideoThumb";
 import { EmptyLine, IconAction, SectionHeader, StatusTag, SubHeader, TextLink } from "@/components/ui/page";
 import { cn } from "@/lib/utils";
 
@@ -46,10 +48,6 @@ function entryWhen(e: DailyReportEntryView): string {
   return e.timeApprox ? `${md}(시각 미확인)` : md;
 }
 
-function thumb(videoId: string | null | undefined): string | null {
-  return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null;
-}
-
 function EntryRow({ e, ctx }: { e: DailyReportEntryView; ctx: EntryActionsContext }) {
   const [busy, setBusy] = useState<string | null>(null);
   const href = safeHref(e.url);
@@ -82,202 +80,216 @@ function EntryRow({ e, ctx }: { e: DailyReportEntryView; ctx: EntryActionsContex
     }
   }
 
-  const videoId = e.videoId ?? null;
+  // 영상 ID 는 videoId → 항목 키(yt:<ID>) → 영상 URL 순(예전 실행 기록에도 섬네일·동작이 서게).
+  const videoId = isVideo ? entryVideoId(e) : null;
   const markWatched = () => (videoId ? api.markYoutubeWatched({ videoId, title: e.title, channel: e.source }) : Promise.resolve());
-  const thumbSrc = isVideo ? thumb(videoId) : null;
 
-  return (
-    <li className={cn("flex gap-3 py-3", (hidden || e.state.watched) && "opacity-60")}>
-      {thumbSrc && (
-        <a
-          href={href ?? undefined}
-          target="_blank"
-          rel="noreferrer"
-          onClick={() => void markWatched().then(ctx.reload, () => {})}
-          className="hidden w-32 shrink-0 self-start overflow-hidden rounded-[3px] bg-muted sm:block"
-          tabIndex={-1}
-          aria-hidden
-        >
-          <img src={thumbSrc} alt="" loading="lazy" className="aspect-[4/3] w-full object-cover" />
-        </a>
-      )}
-      <div className="min-w-0 flex-1">
-        <p className="text-[15px] font-semibold leading-snug">
-          {ctx.isNew(e.key) && !e.state.watched && <NewTag />}
-          {e.update && (
-            <StatusTag tone="info" className="mr-1.5">
-              새 출처
-            </StatusTag>
-          )}
-          {e.state.watched && (
-            <StatusTag tone="neutral" className="mr-1.5">
-              본영상
-            </StatusTag>
-          )}
-          {e.state.dismissed && (
-            <StatusTag tone="warn" className="mr-1.5">
-              제외한 영상
-            </StatusTag>
-          )}
-          {e.state.blocked && (
-            <StatusTag tone="warn" className="mr-1.5">
-              차단한 채널
-            </StatusTag>
-          )}
-          {e.state.excluded && (
-            <StatusTag tone="warn" className="mr-1.5">
-              제외한 사이트
-            </StatusTag>
-          )}
-          {href ? (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="hover:underline"
-              onClick={isVideo ? () => void markWatched().then(ctx.reload, () => {}) : undefined}
-            >
-              {e.title}
-            </a>
-          ) : (
-            e.title
-          )}
-        </p>
-        <p className="num mt-1 text-[12.5px] text-muted-foreground">
-          {e.source} · {isVideo ? "업로드 " : "발행 "}
-          {entryWhen(e)} · 찾은 모델 {e.foundBy.join(", ")}
-          {e.movedFrom && <> · 옮김({defs.find((d) => d.key === e.movedFrom)?.label ?? e.movedFrom} → 여기)</>}
-        </p>
-        <p className="mt-1.5 text-[14px] leading-relaxed text-foreground/85">{e.summary}</p>
-        {e.secondary.length > 0 && (
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
-            보조 출처:
-            {e.secondary.slice(0, 6).map((s) => {
-              const h = safeHref(s.link);
-              return h ? (
-                <TextLink key={s.link} href={h} target="_blank" rel="noreferrer">
-                  {s.label}
-                </TextLink>
-              ) : (
-                <span key={s.link}>{s.label}</span>
-              );
-            })}
-          </p>
+  // 영상: [섬네일 | 제목·메타] 아래에 요약·동작. 모바일은 요약·동작이 섬네일 밑까지 넓게 쓰고(좁은 글 칸 방지),
+  // sm 이상은 섬네일이 왼쪽 칸을 위아래로 차지한다. 뉴스는 섬네일 없이 한 칸.
+  const head = (
+    <div className="min-w-0">
+      <p className="text-[15px] font-semibold leading-snug">
+        {ctx.isNew(e.key) && !e.state.watched && <NewTag />}
+        {e.update && (
+          <StatusTag tone="info" className="mr-1.5">
+            새 출처
+          </StatusTag>
         )}
-        {e.conflict && <p className="mt-1.5 text-[12.5px] text-tone-warn">⚠️ 근거 차이: {e.conflict}</p>}
+        {e.state.watched && (
+          <StatusTag tone="neutral" className="mr-1.5">
+            본영상
+          </StatusTag>
+        )}
+        {e.state.dismissed && (
+          <StatusTag tone="warn" className="mr-1.5">
+            제외한 영상
+          </StatusTag>
+        )}
+        {e.state.blocked && (
+          <StatusTag tone="warn" className="mr-1.5">
+            차단한 채널
+          </StatusTag>
+        )}
+        {e.state.excluded && (
+          <StatusTag tone="warn" className="mr-1.5">
+            제외한 사이트
+          </StatusTag>
+        )}
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="hover:underline"
+            onClick={isVideo ? () => void markWatched().then(ctx.reload, () => {}) : undefined}
+          >
+            {e.title}
+          </a>
+        ) : (
+          e.title
+        )}
+      </p>
+      <p className="num mt-1 text-[12.5px] text-muted-foreground">
+        {e.source} · {isVideo ? "업로드 " : "발행 "}
+        {entryWhen(e)} · 찾은 모델 {e.foundBy.join(", ")}
+        {e.movedFrom && <> · 옮김({defs.find((d) => d.key === e.movedFrom)?.label ?? e.movedFrom} → 여기)</>}
+      </p>
+    </div>
+  );
 
-        {/* 동작 줄 */}
-        <div className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1">
-          {href && !isVideo && (
-            <TextLink href={href} target="_blank" rel="noreferrer" icon={<LinkIcon />}>
-              원문 보기
-            </TextLink>
-          )}
-          <label className="ml-1 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground">
-            <span className="sr-only">카테고리 이동</span>
-            <select
-              className="h-7 rounded-md border border-foreground/15 bg-background px-1.5 text-[12.5px] text-foreground"
-              value={e.categoryKey}
-              disabled={busy === "move"}
-              title="다른 카테고리로 옮기면 다음 실행부터 세 모델이 비슷한 항목을 그 카테고리로 분류합니다"
-              onChange={(ev) => void move(ev.target.value)}
-            >
-              {defs.map((d) => (
-                <option key={d.key} value={d.key}>
-                  {d.key === e.categoryKey ? `카테고리: ${d.emoji} ${d.label}` : `→ ${d.emoji} ${d.label}`}
-                </option>
-              ))}
-            </select>
-            {busy === "move" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          </label>
+  const body = (
+    <div className={cn("min-w-0", isVideo && "col-span-2 sm:col-span-1 sm:col-start-2")}>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-foreground/85">{e.summary}</p>
+      {e.secondary.length > 0 && (
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
+          보조 출처:
+          {e.secondary.slice(0, 6).map((s) => {
+            const h = safeHref(s.link);
+            return h ? (
+              <TextLink key={s.link} href={h} target="_blank" rel="noreferrer">
+                {s.label}
+              </TextLink>
+            ) : (
+              <span key={s.link}>{s.label}</span>
+            );
+          })}
+        </p>
+      )}
+      {e.conflict && <p className="mt-1.5 text-[12.5px] text-tone-warn">⚠️ 근거 차이: {e.conflict}</p>}
 
-          {!isVideo && href && !e.state.excluded && (
+      {/* 동작 줄 */}
+      <div className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1">
+        {href && !isVideo && (
+          <TextLink href={href} target="_blank" rel="noreferrer" icon={<LinkIcon />}>
+            원문 보기
+          </TextLink>
+        )}
+        <label className="ml-1 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground">
+          <span className="sr-only">카테고리 이동</span>
+          <select
+            className="h-7 rounded-md border border-foreground/15 bg-background px-1.5 text-[12.5px] text-foreground"
+            value={e.categoryKey}
+            disabled={busy === "move"}
+            title="다른 카테고리로 옮기면 다음 실행부터 세 모델이 비슷한 항목을 그 카테고리로 분류합니다"
+            onChange={(ev) => void move(ev.target.value)}
+          >
+            {defs.map((d) => (
+              <option key={d.key} value={d.key}>
+                {d.key === e.categoryKey ? `카테고리: ${d.emoji} ${d.label}` : `→ ${d.emoji} ${d.label}`}
+              </option>
+            ))}
+          </select>
+          {busy === "move" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        </label>
+
+        {!isVideo && href && !e.state.excluded && (
+          <IconAction
+            label="이 사이트는 앞으로 취합에서 제외"
+            danger
+            disabled={!!busy}
+            onClick={() => {
+              if (!confirm(`'${e.source}' 사이트(${new URL(href).hostname})의 기사를 앞으로 취합에서 제외할까요?\n(보고서 탭 '수집 설정 → 제외 사이트'에서 해제할 수 있습니다)`)) return;
+              void act("exclude", () => api.excludeNewsDomain({ url: href, label: e.source }));
+            }}
+          >
+            <Globe />
+          </IconAction>
+        )}
+
+        {isVideo && videoId && (
+          <>
             <IconAction
-              label="이 사이트는 앞으로 취합에서 제외"
-              danger
+              label={e.state.watched ? "본영상 해제" : "본영상으로 체크(일정 기간 수집에서 제외)"}
+              active={e.state.watched}
               disabled={!!busy}
-              onClick={() => {
-                if (!confirm(`'${e.source}' 사이트(${new URL(href).hostname})의 기사를 앞으로 취합에서 제외할까요?\n(보고서 탭 '수집 설정 → 제외 사이트'에서 해제할 수 있습니다)`)) return;
-                void act("exclude", () => api.excludeNewsDomain({ url: href, label: e.source }));
-              }}
+              onClick={() =>
+                void act("watched", () => (e.state.watched ? api.unmarkYoutubeWatched(videoId) : markWatched()))
+              }
             >
-              <Globe />
+              {e.state.watched ? <EyeOff /> : <Eye />}
             </IconAction>
-          )}
-
-          {isVideo && videoId && (
-            <>
+            {!e.state.dismissed && (
               <IconAction
-                label={e.state.watched ? "본영상 해제" : "본영상으로 체크(일정 기간 수집에서 제외)"}
-                active={e.state.watched}
+                label="이 영상 제외(앞으로 수집하지 않음)"
+                danger
                 disabled={!!busy}
                 onClick={() =>
-                  void act("watched", () => (e.state.watched ? api.unmarkYoutubeWatched(videoId) : markWatched()))
-                }
-              >
-                {e.state.watched ? <EyeOff /> : <Eye />}
-              </IconAction>
-              {!e.state.dismissed && (
-                <IconAction
-                  label="이 영상 제외(앞으로 수집하지 않음)"
-                  danger
-                  disabled={!!busy}
-                  onClick={() =>
-                    void act("dismiss", () =>
-                      api.dismissYoutubeVideo({ videoId, title: e.title, channel: e.source, url: e.url, categoryKey: e.categoryKey })
-                    )
-                  }
-                >
-                  <X />
-                </IconAction>
-              )}
-              <IconAction
-                label={e.state.recommended ? "이 카테고리 추천 채널에서 해제" : "이 카테고리의 추천 채널로 추가(먼저 확인)"}
-                active={e.state.recommended}
-                disabled={!!busy}
-                onClick={() =>
-                  void act("recommend", () =>
-                    e.state.recommended
-                      ? api.removeYoutubeRecommendedChannel(e.categoryKey, { channel: e.source, handle: e.channelHandle ?? null })
-                      : api.addYoutubeRecommendedChannel(e.categoryKey, { channel: e.source, handle: e.channelHandle ?? null })
+                  void act("dismiss", () =>
+                    api.dismissYoutubeVideo({ videoId, title: e.title, channel: e.source, url: e.url, categoryKey: e.categoryKey })
                   )
                 }
               >
-                {e.state.recommended ? <Check /> : <Star />}
+                <X />
               </IconAction>
-              {!e.state.blocked && (
-                <label className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground">
-                  <Ban className="h-3.5 w-3.5" aria-hidden />
-                  <span className="sr-only">채널 차단</span>
-                  <select
-                    className="h-7 rounded-md border border-foreground/15 bg-background px-1.5 text-[12.5px] text-foreground"
-                    value=""
-                    disabled={!!busy}
-                    onChange={(ev) => {
-                      const scope = ev.target.value;
-                      if (!scope) return;
-                      const where = scope === "all" ? "모든 카테고리" : `'${defs.find((d) => d.key === e.categoryKey)?.label ?? e.categoryKey}' 카테고리`;
-                      if (!confirm(`'${e.source}' 채널을 ${where}에서 차단할까요?\n(수집 설정 → 차단 채널에서 해제할 수 있습니다)`)) return;
-                      void act("block", () =>
-                        api.blockYoutubeChannel({
-                          channel: e.source,
-                          handle: e.channelHandle ?? null,
-                          categoryKey: scope === "all" ? null : e.categoryKey,
-                        })
-                      );
-                    }}
-                  >
-                    <option value="">채널 차단…</option>
-                    <option value="cat">이 카테고리에서</option>
-                    <option value="all">모든 카테고리에서</option>
-                  </select>
-                </label>
-              )}
-            </>
-          )}
-          {busy && busy !== "move" && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-        </div>
+            )}
+            <IconAction
+              label={e.state.recommended ? "이 카테고리 추천 채널에서 해제" : "이 카테고리의 추천 채널로 추가(먼저 확인)"}
+              active={e.state.recommended}
+              disabled={!!busy}
+              onClick={() =>
+                void act("recommend", () =>
+                  e.state.recommended
+                    ? api.removeYoutubeRecommendedChannel(e.categoryKey, { channel: e.source, handle: e.channelHandle ?? null })
+                    : api.addYoutubeRecommendedChannel(e.categoryKey, { channel: e.source, handle: e.channelHandle ?? null })
+                )
+              }
+            >
+              {e.state.recommended ? <Check /> : <Star />}
+            </IconAction>
+            {!e.state.blocked && (
+              <label className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground">
+                <Ban className="h-3.5 w-3.5" aria-hidden />
+                <span className="sr-only">채널 차단</span>
+                <select
+                  className="h-7 rounded-md border border-foreground/15 bg-background px-1.5 text-[12.5px] text-foreground"
+                  value=""
+                  disabled={!!busy}
+                  onChange={(ev) => {
+                    const scope = ev.target.value;
+                    if (!scope) return;
+                    const where = scope === "all" ? "모든 카테고리" : `'${defs.find((d) => d.key === e.categoryKey)?.label ?? e.categoryKey}' 카테고리`;
+                    if (!confirm(`'${e.source}' 채널을 ${where}에서 차단할까요?\n(수집 설정 → 차단 채널에서 해제할 수 있습니다)`)) return;
+                    void act("block", () =>
+                      api.blockYoutubeChannel({
+                        channel: e.source,
+                        handle: e.channelHandle ?? null,
+                        categoryKey: scope === "all" ? null : e.categoryKey,
+                      })
+                    );
+                  }}
+                >
+                  <option value="">채널 차단…</option>
+                  <option value="cat">이 카테고리에서</option>
+                  <option value="all">모든 카테고리에서</option>
+                </select>
+              </label>
+            )}
+          </>
+        )}
+        {busy && busy !== "move" && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
       </div>
+    </div>
+  );
+
+  const dim = (hidden || e.state.watched) && "opacity-60";
+  if (!isVideo) {
+    return (
+      <li className={cn("py-3", dim)}>
+        {head}
+        {body}
+      </li>
+    );
+  }
+  return (
+    <li className={cn("grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 py-3 sm:grid-cols-[10rem_minmax(0,1fr)]", dim)}>
+      <VideoThumb
+        videoId={videoId}
+        href={href}
+        onOpen={() => void markWatched().then(ctx.reload, () => {})}
+        className="w-full sm:row-span-2"
+      />
+      {head}
+      {body}
     </li>
   );
 }
