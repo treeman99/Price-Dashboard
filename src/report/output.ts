@@ -49,11 +49,12 @@ function entryOf(g: ReportGroup): DailyReportEntry {
     summary: g.rep.summary,
     source: g.rep.source,
     url: g.rep.url,
+    ...(g.rep.sourceDomain ? { sourceDomain: g.rep.sourceDomain } : {}),
     date: g.rep.date,
     publishedAt: g.rep.publishedAt ?? null,
     ...(g.rep.timeApprox ? { timeApprox: true } : {}),
     foundBy: foundBy(g),
-    secondary: g.secondary.map((s) => ({ label: s.label, link: s.link })),
+    secondary: g.secondary.map((s) => ({ label: s.label, link: s.link, ...(s.domain ? { domain: s.domain } : {}) })),
     conflict: g.conflict,
     update: !!g.update,
   };

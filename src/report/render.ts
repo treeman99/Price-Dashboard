@@ -1,6 +1,7 @@
 import type { ReportGroup } from "./merge.ts";
 import { MODEL_SHORT, OUTCOME_LABEL } from "./models.ts";
 import { formatWindowKst, kstShort } from "../util/recency.ts";
+import { linkSite, UNRESOLVED_LINK_LABEL } from "../../shared/redirect-url.ts";
 import type { CategoryInfo, EditorRecord, ModelRunRecord, RawData, SharedSeedVideo } from "./pipeline.ts";
 
 export interface RenderInput {
@@ -48,6 +49,13 @@ function md(s: string | null | undefined): string {
     .replace(/\|/g, "／")
     .replace(/([*_`[\]<>])/g, "\\$1")
     .trim();
+}
+
+/** 링크 뒤 사이트 표기: " (도메인)" 또는 검색 경유 주소를 못 풀었으면 " (도메인 · 원래 주소 확인 불가)". */
+function siteNote(url: string | null | undefined, hintDomain?: string | null): string {
+  const x = linkSite(url, hintDomain);
+  if (x.unresolved) return ` (${x.domain ? `${md(x.domain)} · ` : ""}${UNRESOLVED_LINK_LABEL})`;
+  return x.domain ? ` (${md(x.domain)})` : "";
 }
 
 function link(label: string, url: string | null | undefined): string {
@@ -195,13 +203,16 @@ export function renderReport(r: RenderInput): string {
         if (kind === "news") {
           L.push(`- **${md(it.title)}**${upd}`);
           L.push(`  - ${md(it.summary)}`);
-          L.push(`  - 출처: ${link(it.source || "원문", it.url)} · 발행 ${whenOf(it)} · 찾은 모델: ${foundBy(g)}`);
+          L.push(`  - 출처: ${link(it.source || "원문", it.url)}${siteNote(it.url, it.sourceDomain)} · 발행 ${whenOf(it)} · 찾은 모델: ${foundBy(g)}`);
         } else {
           L.push(`- **${md(it.title)}**${upd} — ${md(it.source)}, 업로드 ${whenOf(it)}`);
           L.push(`  - ${md(it.summary)} _(제목·설명·검색 결과 기준 요약, 영상 본문은 시청하지 않음)_`);
           L.push(`  - ${link("영상 보기", it.url)} · 찾은 모델: ${foundBy(g)}`);
         }
-        if (g.secondary.length) L.push(`  - 보조 출처: ${g.secondary.map((s) => link(s.label, s.link)).join(" · ")}`);
+        if (g.secondary.length) {
+          const unresolvedOnly = (u: string, d?: string | null) => (linkSite(u, d).unresolved ? siteNote(u, d) : "");
+          L.push(`  - 보조 출처: ${g.secondary.map((s) => link(s.label, s.link) + unresolvedOnly(s.link, s.domain)).join(" · ")}`);
+        }
         if (g.conflict) L.push(`  - ⚠️ 근거 차이: ${md(g.conflict)}`);
       }
       L.push("");

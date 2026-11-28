@@ -16,7 +16,8 @@
     "build": "npm run web:build",
     "test": "tsx --test \"{src,shared,web/src}/**/*.test.ts\"",
     "daily:report": "tsx src/report/cli.ts",
-    "daily:report:bundle": "node tools/daily-report/bundle.mjs"
+    "daily:report:bundle": "node tools/daily-report/bundle.mjs",
+    "daily:report:resolve-links": "tsx src/report/resolve-links-cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.280",

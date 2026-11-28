@@ -8,6 +8,7 @@
  * - 근거가 충돌하면 차이를 표시하고 사실을 임의로 섞지 않는다.
  */
 import { youtubeId } from "../../shared/youtube-thumb.ts";
+import { isRedirectUrl } from "../../shared/redirect-url.ts";
 
 export type ReportKind = "news" | "youtube";
 
@@ -34,7 +35,10 @@ export interface ReportItem {
   /** 유튜브 채널 핸들(있으면) — 채널 차단 판정용. */
   channelHandle?: string | null;
   originalTitle?: string | null;
-  related?: { label: string; link: string }[];
+  /** url 이 원래 주소로 풀지 못한 검색 경유 주소일 때, 검색 결과에 적혀 있던 원래 사이트 도메인(NewsItem.sourceDomain). */
+  sourceDomain?: string | null;
+  /** domain: 경유 주소를 풀지 못한 관련 출처의 원래 사이트 도메인(NewsRelated.domain). */
+  related?: { label: string; link: string; domain?: string | null }[];
 }
 
 export interface ReportGroup {
@@ -43,8 +47,8 @@ export interface ReportGroup {
   members: ReportItem[];
   /** 그 사건을 찾은 모델 key(정렬). */
   models: string[];
-  /** 대표가 아닌 출처(중복 링크 제외). */
-  secondary: { label: string; link: string }[];
+  /** 대표가 아닌 출처(중복 링크 제외). domain: 경유 주소를 풀지 못한 링크의 원래 사이트 도메인(힌트). */
+  secondary: { label: string; link: string; domain?: string | null }[];
   conflict: string;
   /** 통합 근거(정확 키 일치 / 편집기 의미 통합 / 단독). */
   reason: string;
@@ -87,21 +91,32 @@ export function canonicalUrl(raw: string | null | undefined): string | null {
   return `https://${host}${path === "/" && !q ? "" : path}${q}`;
 }
 
-/** 항목의 고유 키: 정규화 URL · 영상 ID · GeekNews 토픽 ID(대표 링크와 보조 링크 모두). */
+/**
+ * 항목의 고유 키: 정규화 URL · 영상 ID · GeekNews 토픽 ID(대표 링크와 보조 링크 모두).
+ * 원래 주소로 풀지 못한 검색 경유 주소(shared/redirect-url.ts)는 키로 쓰지 않는다 — 토큰이 검색마다 새로 생겨
+ * 같은 기사도 매번 다른 키가 되고(중복 통합 불가), 이미 보고한 기사가 '새 출처' 업데이트로 다시 올라온다.
+ */
 export function itemKeys(item: ReportItem): string[] {
   const keys = new Set<string>();
   const links = [item.url, ...(item.related ?? []).map((r) => r.link)];
   for (const l of links) {
-    const c = canonicalUrl(l);
-    if (!c) continue;
-    keys.add(`url:${c}`);
-    const vid = youtubeId(c);
-    if (vid) keys.add(`yt:${vid}`);
-    const gn = /news\.hada\.io\/topic\?id=(\d+)/.exec(c)?.[1];
-    if (gn) keys.add(`gn:${gn}`);
+    if (isRedirectUrl(l)) continue;
+    for (const k of linkKeys(l)) keys.add(k);
   }
   if (item.videoId) keys.add(`yt:${item.videoId}`);
   return [...keys];
+}
+
+/** 링크 하나의 고유 키(정규화 URL · 영상 ID · GeekNews 토픽 ID). 잘못된 링크면 빈 배열. */
+export function linkKeys(link: string | null | undefined): string[] {
+  const c = canonicalUrl(link);
+  if (!c) return [];
+  const keys = [`url:${c}`];
+  const vid = youtubeId(c);
+  if (vid) keys.push(`yt:${vid}`);
+  const gn = /news\.hada\.io\/topic\?id=(\d+)/.exec(c)?.[1];
+  if (gn) keys.push(`gn:${gn}`);
+  return keys;
 }
 
 /** 대표 링크의 키만(보조 링크 제외). 강한 동일성 판단(편집기 검증)에 쓴다. */
@@ -160,6 +175,8 @@ function sourceScore(it: ReportItem): number {
     }
   })();
   if (!it.url) return 0;
+  // 원래 주소를 모르는 경유 주소는 같은 기사의 원래 주소(다른 모델이 찾은 것)보다 뒤로.
+  if (isRedirectUrl(it.url)) return 0.5;
   if (/news\.hada\.io|news\.naver\.com|news\.google\.|reddit\.com|x\.com|twitter\.com|news\.ycombinator\.com/.test(host)) return 1;
   return 2;
 }
@@ -189,18 +206,18 @@ export function buildGroup(members: ReportItem[], reason: string, repId?: string
   const rep = (repId && members.find((m) => m.id === repId)) || pickRepresentative(members);
   const repUrl = canonicalUrl(rep.url);
   const seen = new Set<string>(repUrl ? [repUrl] : []);
-  const secondary: { label: string; link: string }[] = [];
-  const push = (label: string, link: string | null | undefined) => {
+  const secondary: ReportGroup["secondary"] = [];
+  const push = (label: string, link: string | null | undefined, domain?: string | null) => {
     const c = canonicalUrl(link);
     if (!c || seen.has(c)) return;
     seen.add(c);
-    secondary.push({ label: label || c, link: String(link) });
+    secondary.push({ label: label || c, link: String(link), ...(domain && isRedirectUrl(link) ? { domain } : {}) });
   };
-  for (const r of rep.related ?? []) push(r.label, r.link);
+  for (const r of rep.related ?? []) push(r.label, r.link, r.domain);
   for (const m of members) {
     if (m === rep) continue;
-    push(m.source || m.title, m.url);
-    for (const r of m.related ?? []) push(r.label, r.link);
+    push(m.source || m.title, m.url, m.sourceDomain);
+    for (const r of m.related ?? []) push(r.label, r.link, r.domain);
   }
   const keys = new Set<string>();
   for (const m of members) for (const k of itemKeys(m)) keys.add(k);

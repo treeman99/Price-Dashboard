@@ -22,6 +22,7 @@ import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { deliverReport, reportChannels, type DeliveryResult, type ReportChannel } from "./deliver.ts";
 import { reportEntryKey } from "./output.ts";
+import { applyLinkResolutions, readLinkResolutions } from "./link-resolutions.ts";
 import { loadCategories as loadNewsCategories } from "../news/categories.ts";
 import { loadCategories as loadYoutubeCategories } from "../youtube/categories.ts";
 import { buildDomainMatcher } from "../news/excluded.ts";
@@ -93,6 +94,16 @@ function writeJsonAtomic(file: string, value: unknown): void {
 
 function runsDir(): string {
   return path.join(config.dailyReport.dir, "runs");
+}
+
+/**
+ * 실행의 구조화 보고서 — report.json 위에 경유 주소 풀이 기록(link-resolutions.json, 지난 실행용)을 덧씌운 것.
+ * 원본 report.json 은 고치지 않는다.
+ */
+function readRunReport(runId: string): DailyReportJson | null {
+  const dir = path.join(runsDir(), runId);
+  const report = readJson<DailyReportJson>(path.join(dir, "report.json"));
+  return report ? applyLinkResolutions(report, readLinkResolutions(dir)) : null;
 }
 
 export function isValidRunId(id: unknown): id is string {
@@ -319,8 +330,7 @@ async function finishRun(
   adopted: boolean,
   deps: ReportServiceDeps
 ): Promise<DailyReportAttempt> {
-  const runDir = path.join(runsDir(), runId);
-  const report = readJson<DailyReportJson>(path.join(runDir, "report.json"));
+  const report = readRunReport(runId);
   const finishedAt = () => deps.now().toISOString();
   if (!report) {
     const error = "보고서 결과(report.json)를 찾지 못했습니다 — 수집기 배포 버전을 확인하세요.";
@@ -578,7 +588,7 @@ export function buildRunView(report: DailyReportJson, moves: MovesLedger[string]
                 blocked: isBlocked(e.source, e.channelHandle ?? null, catKey),
                 recommended: isRecommendedChannel(recommendedOf.get(catKey) ?? [], e.source, e.channelHandle ?? null),
               }
-            : { excluded: isExcluded(e.url) };
+            : { excluded: isExcluded(e.url, e.sourceDomain) };
         ensure(catKey, catKey).items.push({
           ...e,
           key,
@@ -605,7 +615,7 @@ export function getReportRun(
   if (!isValidRunId(runId)) return null;
   const dir = path.join(runsDir(), runId);
   if (!fs.existsSync(dir)) return null;
-  const report = readJson<DailyReportJson>(path.join(dir, "report.json"));
+  const report = readRunReport(runId);
   let markdown: string | null = null;
   if (!report) {
     try {
@@ -626,7 +636,7 @@ export function getReportRun(
  */
 export function moveReportEntry(runId: string, key: string, toKey: string, now = new Date()): DailyReportRunView {
   if (!isValidRunId(runId)) throw new Error("실행 ID 형식이 올바르지 않습니다.");
-  const report = readJson<DailyReportJson>(path.join(runsDir(), runId, "report.json"));
+  const report = readRunReport(runId);
   if (!report) throw new Error("이 실행에는 구조화 보고서(report.json)가 없습니다.");
   const ledger = readMoves();
   const current = buildRunView(report, ledger[runId]);
@@ -667,7 +677,7 @@ export async function sendReportRun(
   deliver: (r: DailyReportJson, only: ReportChannel[]) => Promise<DeliveryResult> = (r, only) => deliverReport(r, { only })
 ): Promise<DeliveryResult | null> {
   if (!isValidRunId(runId)) return null;
-  const report = readJson<DailyReportJson>(path.join(runsDir(), runId, "report.json"));
+  const report = readRunReport(runId);
   if (!report) return null;
   const d = await deliver(report, channels);
   noteDelivered(runId, d.sent);

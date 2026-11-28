@@ -5,6 +5,7 @@ import path from "node:path";
 import { log } from "./log.ts";
 import { createDeadline, formatDeadlineBudget, suggestTickMs } from "./deadline.ts";
 import { briefToolInput, emitQueryTrace } from "./agent-trace.ts";
+import { rememberRedirectHints } from "./redirect-resolve.ts";
 
 /**
  * Gemini 실행기 — Google Antigravity CLI(`agy`)의 헤드리스(print) 모드.
@@ -86,6 +87,8 @@ export function buildAgyArgs(model: string, prompt: string, settingsPath: string
 
 export interface ParsedAgyStream {
   initModel: string | null;
+  /** agy 대화 ID — 대화 기록(~/.gemini/antigravity-cli/brain/<ID>/…)을 찾는 데 쓴다. */
+  conversationId: string | null;
   status: string | null;
   response: string;
   error: string | null;
@@ -94,7 +97,7 @@ export interface ParsedAgyStream {
 
 /** stream-json(NDJSON) 해석: init.model · 도구 단계 · 최종 result. */
 export function parseAgyStream(text: string): ParsedAgyStream {
-  const out: ParsedAgyStream = { initModel: null, status: null, response: "", error: null, tools: [] };
+  const out: ParsedAgyStream = { initModel: null, conversationId: null, status: null, response: "", error: null, tools: [] };
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let ev: any;
@@ -104,6 +107,7 @@ export function parseAgyStream(text: string): ParsedAgyStream {
       continue;
     }
     if (ev?.event === "init" && typeof ev.init?.model === "string") out.initModel = ev.init.model;
+    if (!out.conversationId && typeof ev?.conversation_id === "string") out.conversationId = ev.conversation_id;
     const step = ev?.step_update;
     if (step?.step_type === "tool" && (step.state === "DONE" || step.state === "ERROR") && step.tool_name) {
       let input: unknown = step.tool_info;
@@ -182,6 +186,32 @@ export function buildAgyPrompt(
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** agy 대화 기록 루트. 운영에서 다른 위치를 쓰면 AGY_BRAIN_DIR 로 바꾼다. */
+export function agyBrainDir(): string {
+  return process.env.AGY_BRAIN_DIR?.trim() || path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
+}
+
+const TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Gemini 검색 근거의 원래 사이트 도메인 힌트를 대화 기록에서 읽어 둔다(읽기만 — agy 파일은 고치지 않는다).
+ *
+ * search_web 결과 본문(근거가 `[prnewswire.com](https://vertexaisearch…)` 로 적힘)은 stream-json 에 실리지 않고
+ * 대화 기록 transcript_full.jsonl 에만 남는다(2026-11-28 확인). 경유 주소를 원래 주소로 풀지 못했을 때
+ * 이 도메인으로 출처 사이트·제외 사이트 판정을 대신한다(src/util/redirect-resolve.ts). 없거나 못 읽으면 조용히 넘어간다.
+ */
+export function loadAgyRedirectHints(conversationId: string | null, brainDir = agyBrainDir()): number {
+  if (!conversationId || !/^[A-Za-z0-9-]{8,80}$/.test(conversationId)) return 0;
+  const file = path.join(brainDir, conversationId, ".system_generated", "logs", "transcript_full.jsonl");
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > TRANSCRIPT_MAX_BYTES) return 0;
+    return rememberRedirectHints(fs.readFileSync(file, "utf8"));
+  } catch {
+    return 0;
+  }
 }
 
 /** agy 헤드리스 1회 실행. 실패는 AntigravityError(limit 여부 포함)로 던진다. */
@@ -274,10 +304,11 @@ export async function runAntigravityQueryText(
     throw new AntigravityError(`Antigravity 한도 통보 — ${text}`, true);
   }
   trace(true);
+  const hinted = allowWeb ? loadAgyRedirectHints(parsed.conversationId) : 0;
   log.info(
     `${label}: Antigravity 완료 — ${Math.round((Date.now() - started) / 1000)}초, ` +
       `실제 모델 ${parsed.initModel ?? "미표시"}, 도구 ${parsed.tools.length}회, 결과 ${text.length}자 ` +
-      `(${formatDeadlineBudget(timeoutMs, deadline)})`
+      `(${formatDeadlineBudget(timeoutMs, deadline)})${hinted ? `, 검색 근거 도메인 힌트 ${hinted}건` : ""}`
   );
   return text;
 }

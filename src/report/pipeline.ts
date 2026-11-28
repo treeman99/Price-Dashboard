@@ -23,6 +23,7 @@ import { renderReport } from "./render.ts";
 import { checkRecency, windowEndingAt, type RecencyWindow } from "../util/recency.ts";
 import { parseLlmJson } from "../util/llm-json.ts";
 import { buildReportJson } from "./output.ts";
+import { expandSeenWithResolutions, readLinkResolutionMaps } from "./link-resolutions.ts";
 
 /**
  * 일일 뉴스·유튜브 통합 보고서 — 한 번의 실행.
@@ -99,8 +100,8 @@ export interface PipelineDeps {
 }
 
 export interface UserExclusions {
-  /** 뉴스 링크가 취합 제외 사이트인가. */
-  newsUrl(url: string | null | undefined): boolean;
+  /** 뉴스 링크가 취합 제외 사이트인가. 링크가 풀지 못한 경유 주소면 hintDomain(원래 사이트 도메인)으로 판정한다. */
+  newsUrl(url: string | null | undefined, hintDomain?: string | null): boolean;
   /** 유튜브 채널이 차단됐는가(전역 또는 그 카테고리). */
   youtubeChannel(channel: string, handle: string | null, categoryKey: string): boolean;
   /** 사용자가 [제외]한 영상인가. */
@@ -221,6 +222,7 @@ function newsItems(spec: ModelSpec, snap: NewsSnapshot, labels: Map<string, stri
         date: it.date,
         publishedAt: it.publishedAt ?? null,
         timeApprox: !!it.timeApprox,
+        ...(it.sourceDomain ? { sourceDomain: it.sourceDomain } : {}),
         related: it.related ?? [],
       });
     }
@@ -425,14 +427,14 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
     const drop = !ex
       ? false
       : it.kind === "news"
-        ? ex.newsUrl(it.url)
+        ? ex.newsUrl(it.url, it.sourceDomain)
         : ex.youtubeChannel(it.source, it.channelHandle ?? null, it.categoryKey) || ex.youtubeVideo(it.videoId);
     if (drop) {
       excludedByUser++;
       continue;
     }
     // 제외 사이트의 관련 출처 링크도 보조 출처로 올리지 않는다.
-    items.push(ex && it.related?.length ? { ...it, related: it.related.filter((r) => !ex.newsUrl(r.link)) } : it);
+    items.push(ex && it.related?.length ? { ...it, related: it.related.filter((r) => !ex.newsUrl(r.link, r.domain)) } : it);
   }
   if (outOfWindow) deps.log(`조사 구간 밖(시각 단위 재판정) ${outOfWindow}건 제외`);
   if (excludedByUser) deps.log(`사용자 취합 제외 규칙으로 ${excludedByUser}건 제외`);
@@ -478,7 +480,10 @@ export async function runDailyReport(deps: PipelineDeps, opts: RunOptions): Prom
   writeJson(path.join(opts.runDir, "editor", "status.json"), editor);
 
   // ── 4. 증분: 이미 보고한 키 제외 ──
-  const { fresh, alreadyReported } = splitIncremental(groups, checkpoint.seen);
+  // 예전 실행이 경유 주소로 보고한 기사는 그 실행의 주소 풀이 기록(link-resolutions.json)으로 원래 주소 키도 본 것으로 친다
+  // (체크포인트 파일은 고치지 않는다 — 판정에만 쓴다).
+  const seenForSplit = expandSeenWithResolutions(checkpoint.seen, readLinkResolutionMaps(opts.outputDir, now));
+  const { fresh, alreadyReported } = splitIncremental(groups, seenForSplit);
   const reportedKeys = new Set(fresh.flatMap((g) => g.keys));
   const seedsOnly: SharedSeedVideo[] = [];
   for (const [, list] of raw.seeds) {

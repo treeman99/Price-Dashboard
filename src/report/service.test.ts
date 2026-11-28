@@ -358,3 +358,58 @@ process.stdout.write(JSON.stringify({ ok: true, runId: ${JSON.stringify(id)} }) 
     delete process.env.NAVER_CLIENT_SECRET;
   }
 });
+
+test("지난 실행의 경유 주소: link-resolutions.json 을 덧씌워 원래 주소로 보여 주고(원본·키 불변), 못 푼 링크의 제외 상태는 도메인 힌트로", async () => {
+  const V = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/";
+  const id = runId();
+  const r = report(id, {
+    news: [
+      {
+        key: "ai",
+        label: "🤖 AI",
+        items: [
+          { key: `${V}PUDU`, kind: "news", categoryKey: "ai", categoryLabel: "🤖 AI", title: "푸두", summary: "s", source: "PR Newswire", url: `${V}PUDU`, date: "2026-11-27", foundBy: ["Gemini 4 Neon"], secondary: [{ label: "CNN", link: `${V}CNN` }], conflict: "", update: false },
+          { key: `${V}GONE`, kind: "news", categoryKey: "ai", categoryLabel: "🤖 AI", title: "못 푼 기사", summary: "s", source: "스팸뉴스", url: `${V}GONE`, date: "2026-11-27", foundBy: ["Gemini 4 Neon"], secondary: [], conflict: "", update: false },
+        ],
+      },
+    ],
+    youtube: [],
+  });
+  writeRun(id, r);
+  const dir = path.join(OUT, "runs", id);
+  const original = fs.readFileSync(path.join(dir, "report.json"), "utf8");
+  fs.writeFileSync(
+    path.join(dir, "link-resolutions.json"),
+    JSON.stringify({
+      version: 1,
+      runId: id,
+      updatedAt: "",
+      resolved: { [`${V}PUDU`]: "https://www.prnewswire.com/apac/pudu.html", [`${V}CNN`]: "https://www.cnn.com/x" },
+      unresolved: { [`${V}GONE`]: { error: "404", domain: "spam.example", at: "" } },
+    })
+  );
+  excluded.addExcludedDomain({ domain: "spam.example" });
+  try {
+    const v = svc.getReportRun(id)!.report!;
+    const [pudu, gone] = v.news[0].items;
+    assert.equal(pudu.url, "https://www.prnewswire.com/apac/pudu.html");
+    assert.equal(pudu.key, `https://vertexaisearch.cloud.google.com/grounding-api-redirect/PUDU`, "키는 그대로");
+    assert.deepEqual(pudu.secondary, [{ label: "CNN", link: "https://www.cnn.com/x" }]);
+    assert.equal(pudu.state.excluded, false);
+    assert.equal(gone.url, `${V}GONE`, "못 푼 주소는 그대로");
+    assert.equal(gone.sourceDomain, "spam.example");
+    assert.equal(gone.state.excluded, true, "힌트 도메인으로 제외 상태 판정");
+    // 보내기·카테고리 이동도 같은 덧씌운 보고서를 쓴다
+    let sent: DailyReportJson | null = null;
+    await svc.sendReportRun(id, ["email"], async (rep) => {
+      sent = rep;
+      return { sent: {}, skipped: {}, errors: [] };
+    });
+    assert.equal(sent!.news[0].items[0].url, "https://www.prnewswire.com/apac/pudu.html");
+    const moved = svc.moveReportEntry(id, pudu.key, "sci");
+    assert.equal(moved.news.find((s) => s.key === "sci")?.items[0].url, "https://www.prnewswire.com/apac/pudu.html");
+    assert.equal(fs.readFileSync(path.join(dir, "report.json"), "utf8"), original, "report.json 원본 불변");
+  } finally {
+    excluded.removeExcludedDomain("spam.example");
+  }
+});

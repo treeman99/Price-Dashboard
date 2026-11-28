@@ -3,6 +3,7 @@ import { Ban, Check, Eye, EyeOff, Globe, Link as LinkIcon, Loader2, Star, X } fr
 import type { CategoryDef } from "@shared/types";
 import type { DailyReportEntryView, DailyReportSectionView } from "@shared/report";
 import { safeHref } from "@shared/url";
+import { linkSite, UNRESOLVED_LINK_LABEL } from "@shared/redirect-url";
 import { entryVideoId } from "@shared/youtube-thumb";
 import { api } from "@/lib/api";
 import { isHiddenEntry } from "@/lib/feed";
@@ -52,6 +53,8 @@ function EntryRow({ e, ctx }: { e: DailyReportEntryView; ctx: EntryActionsContex
   const [busy, setBusy] = useState<string | null>(null);
   const href = safeHref(e.url);
   const isVideo = e.kind === "youtube";
+  // 기사: 원래 사이트 도메인. 검색 경유 주소를 풀지 못했으면 '원래 주소 확인 불가'(아는 도메인이 있으면 함께).
+  const site = isVideo ? null : linkSite(e.url, e.sourceDomain);
   const defs = isVideo ? ctx.youtubeDefs : ctx.newsDefs;
   const hidden = isHiddenEntry(e);
 
@@ -130,7 +133,19 @@ function EntryRow({ e, ctx }: { e: DailyReportEntryView; ctx: EntryActionsContex
         )}
       </p>
       <p className="num mt-1 text-[12.5px] text-muted-foreground">
-        {e.source} · {isVideo ? "업로드 " : "발행 "}
+        {e.source}
+        {site?.domain && !site.unresolved && <> · {site.domain}</>}
+        {site?.unresolved && (
+          <>
+            {" · "}
+            <span className="text-tone-warn" title="검색 결과의 경유 주소(Google)라 원래 기사 주소를 확인하지 못했습니다">
+              {site.domain ? `${site.domain} · ` : ""}
+              {UNRESOLVED_LINK_LABEL}
+            </span>
+          </>
+        )}
+        {" · "}
+        {isVideo ? "업로드 " : "발행 "}
         {entryWhen(e)} · 찾은 모델 {e.foundBy.join(", ")}
         {e.movedFrom && <> · 옮김({defs.find((d) => d.key === e.movedFrom)?.label ?? e.movedFrom} → 여기)</>}
       </p>
@@ -145,12 +160,24 @@ function EntryRow({ e, ctx }: { e: DailyReportEntryView; ctx: EntryActionsContex
           보조 출처:
           {e.secondary.slice(0, 6).map((s) => {
             const h = safeHref(s.link);
+            const x = linkSite(s.link, s.domain);
+            const note = x.unresolved ? (
+              <span className="text-tone-warn">
+                ({x.domain ? `${x.domain} · ` : ""}
+                {UNRESOLVED_LINK_LABEL})
+              </span>
+            ) : null;
             return h ? (
-              <TextLink key={s.link} href={h} target="_blank" rel="noreferrer">
-                {s.label}
-              </TextLink>
+              <span key={s.link} className="inline-flex items-center gap-1">
+                <TextLink href={h} target="_blank" rel="noreferrer" title={x.domain ?? undefined}>
+                  {s.label}
+                </TextLink>
+                {note}
+              </span>
             ) : (
-              <span key={s.link}>{s.label}</span>
+              <span key={s.link}>
+                {s.label} {note}
+              </span>
             );
           })}
         </p>
@@ -182,14 +209,18 @@ function EntryRow({ e, ctx }: { e: DailyReportEntryView; ctx: EntryActionsContex
           {busy === "move" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
         </label>
 
-        {!isVideo && href && !e.state.excluded && (
+        {/* 제외는 원래 사이트를 알 때만 — 검색 경유 주소의 호스트(Google)를 제외하면 그 경유로 온 모든 기사가 빠진다. */}
+        {!isVideo && href && site?.domain && !e.state.excluded && (
           <IconAction
             label="이 사이트는 앞으로 취합에서 제외"
             danger
             disabled={!!busy}
             onClick={() => {
-              if (!confirm(`'${e.source}' 사이트(${new URL(href).hostname})의 기사를 앞으로 취합에서 제외할까요?\n(보고서 탭 '수집 설정 → 제외 사이트'에서 해제할 수 있습니다)`)) return;
-              void act("exclude", () => api.excludeNewsDomain({ url: href, label: e.source }));
+              const domain = site.domain!;
+              if (!confirm(`'${e.source}' 사이트(${domain})의 기사를 앞으로 취합에서 제외할까요?\n(보고서 탭 '수집 설정 → 제외 사이트'에서 해제할 수 있습니다)`)) return;
+              void act("exclude", () =>
+                api.excludeNewsDomain(site.unresolved ? { domain, label: e.source } : { url: href, label: e.source })
+              );
             }}
           >
             <Globe />

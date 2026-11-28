@@ -184,6 +184,9 @@ cp .env.example .env   # 키 입력 (이미 .env 가 있다면 생략)
 > 지역)·뉴스 제외 사이트·차단 채널·제외 영상을 관리하며, 항목마다 카테고리 이동(다음 실행 분류 학습)·사이트 제외·영상 제외·
 > 본영상·채널 차단·추천 채널을 할 수 있다. 켜 두면 메일·문자로도 받는다(문자는 보고서만 — 증시·팝업/전시·스킬 랭킹은 메일만 보낸다). 수집기 코드는 `src/report/`, 직접 실행은
 > `npm run daily:report`, 운영 배포는 `npm run daily:report:bundle`, 운영 가이드는 봇 홈의 `daily-news-runbook.md`.
+> 모델이 검색 경유 주소(Gemini `vertexaisearch.cloud.google.com/grounding-api-redirect/…`, `google.com/url?q=…` 등)를
+> 주면 수집 직후 원래 기사 주소로 풀어 저장하고(못 풀면 화면·메일에 '원래 주소 확인 불가'), 지난 실행은
+> `npm run daily:report:resolve-links` 가 실행 폴더에 `link-resolutions.json` 을 써서 price 가 덧씌워 보여 준다(report.json 불변).
 >
 > **대시보드 값 우선**: 위 표에서 '대시보드 설정에서도 변경 가능' 항목은 탭별 '자동 수집·설정' 버튼
 > 또는 헤더 '설정'에서 바꿀 수 있고, 저장한 값(`data/tab-settings.json`, 스케줄은 `data/schedule.json`)이

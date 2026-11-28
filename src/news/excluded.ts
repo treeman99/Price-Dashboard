@@ -3,6 +3,7 @@ import path from "node:path";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import type { NewsExcludedDomain } from "../../shared/types.ts";
+import { isRedirectUrl } from "../../shared/redirect-url.ts";
 
 /**
  * 뉴스 '취합 제외 사이트' 저장소(data/news-excluded-domains.json — 2026-11-23 새로 둔 파일).
@@ -67,8 +68,15 @@ export function loadExcludedDomains(): NewsExcludedDomain[] {
 
 /** 도메인(또는 기사 URL) 하나를 제외 목록에 넣는다. 이미 있으면 그대로 둔다. 잘못된 값이면 throw. */
 export function addExcludedDomain(input: { domain?: string; url?: string; label?: string | null }, now = new Date()): NewsExcludedDomain {
+  // 검색 경유 주소(vertexaisearch.cloud.google.com 등)의 호스트를 제외하면 그 경유 주소로 온 모든 사이트의 기사가 빠진다.
+  if (!input.domain && isRedirectUrl(input.url)) {
+    throw new Error("이 링크는 검색 경유 주소라 원래 사이트를 알 수 없어 제외할 수 없습니다.");
+  }
   const domain = normalizeDomain(input.domain ?? input.url ?? "");
   if (!domain) throw new Error("제외할 사이트 주소(도메인)가 올바르지 않습니다.");
+  if (domain === "vertexaisearch.cloud.google.com") {
+    throw new Error("검색 경유 주소의 도메인은 제외할 수 없습니다.");
+  }
   const list = read();
   const found = list.find((d) => d.domain === domain);
   if (found) return found;
@@ -93,11 +101,17 @@ export function removeExcludedDomain(domain: string): boolean {
   return true;
 }
 
-/** 링크가 제외 도메인(또는 그 하위 도메인)인가. */
-export function buildDomainMatcher(list: NewsExcludedDomain[] = read()): (url: string | null | undefined) => boolean {
+/**
+ * 링크가 제외 도메인(또는 그 하위 도메인)인가.
+ * 링크가 검색 경유 주소(원래 주소를 풀지 못함)면 경유 주소의 호스트가 아니라 hintDomain(검색 결과에 적힌 원래 도메인)으로
+ * 판정한다 — 힌트가 없으면 제외하지 않는다(google.com 을 제외했다고 경유 주소 전부가 빠지지 않게).
+ */
+export function buildDomainMatcher(
+  list: NewsExcludedDomain[] = read()
+): (url: string | null | undefined, hintDomain?: string | null) => boolean {
   const domains = list.map((d) => d.domain);
-  return (url) => {
-    const host = domainOf(url);
+  return (url, hintDomain) => {
+    const host = isRedirectUrl(url) ? normalizeDomain(hintDomain ?? null) : domainOf(url);
     if (!host) return false;
     return domains.some((d) => host === d || host.endsWith(`.${d}`));
   };

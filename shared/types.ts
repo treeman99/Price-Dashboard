@@ -361,6 +361,11 @@ export interface NewsRelated {
   /** 관련 출처 라벨 (예: "Reuters", "Bloomberg") */
   label: string;
   link: string;
+  /**
+   * link 가 검색 경유 주소(shared/redirect-url.ts)인데 원래 주소를 풀지 못했을 때, 검색 결과에 적혀 있던 원래 사이트 도메인.
+   * 원래 주소로 풀었으면 없다(link 자체가 원래 주소).
+   */
+  domain?: string | null;
 }
 
 export interface NewsItem {
@@ -377,6 +382,11 @@ export interface NewsItem {
   /** 한국어 요약 (5줄 이내) */
   summary: string;
   link: string | null;
+  /**
+   * link 가 검색 경유 주소인데 원래 주소를 풀지 못했을 때, 검색 결과에 적혀 있던 원래 사이트 도메인(힌트).
+   * 화면·메일은 경유 주소를 '원래 주소 확인 불가'로 표시하고, 제외 사이트 판정은 이 도메인으로 한다.
+   */
+  sourceDomain?: string | null;
   /** 중복 통합 시 관련 출처 (단일 모델 최대 2개, 세 모델 통합 시 보조 출처 포함 최대 4개) */
   related: NewsRelated[];
   /** 세 모델 통합 보고서에서 이 기사를 찾은 모델 표시명(예: ["Opus 5.5","Gemini 4 Neon"]). 단일 모델 수집이면 없음. */

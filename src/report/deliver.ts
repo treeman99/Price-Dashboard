@@ -14,6 +14,7 @@ import { getGoogleAuthStatus } from "../notify/google-auth.ts";
 import { sendMail } from "../notify/mailer.ts";
 import { sendIMessage } from "../notify/imessage.ts";
 import { escapeHtml, safeHref } from "../notify/html.ts";
+import { linkSite, UNRESOLVED_LINK_LABEL } from "../../shared/redirect-url.ts";
 import {
   articleRow,
   breakLongRuns,
@@ -132,8 +133,16 @@ function entryRow(e: DailyReportEntry): string {
   const href = safeHref(e.url);
   const isVideo = e.kind === "youtube";
   const lead = e.update ? statusTag("새 출처", "info") : "";
+  // 기사: 원래 사이트 도메인(검색 경유 주소를 못 풀었으면 '원래 주소 확인 불가' + 아는 도메인).
+  const site = isVideo ? null : linkSite(e.url, e.sourceDomain);
+  const siteText = !site
+    ? null
+    : site.unresolved
+      ? `${site.domain ? `${site.domain} · ` : ""}${UNRESOLVED_LINK_LABEL}`
+      : site.domain;
   const meta = metaLine([
     breakLongRuns(escapeHtml(e.source)),
+    siteText ? breakLongRuns(escapeHtml(siteText)) : null,
     breakLongRuns(escapeHtml(`${isVideo ? "업로드" : "발행"} ${entryWhen(e)}`)),
     `찾은 모델 ${escapeHtml(e.foundBy.join(", "))}`,
   ]);
@@ -144,7 +153,9 @@ function entryRow(e: DailyReportEntry): string {
           .slice(0, 4)
           .map((s) => {
             const h = safeHref(s.link);
-            return h ? textLink(h, s.label) : breakLongRuns(escapeHtml(s.label));
+            const x = linkSite(s.link, s.domain);
+            const note = x.unresolved ? ` (${escapeHtml(x.domain ? `${x.domain} · ` : "")}${UNRESOLVED_LINK_LABEL})` : "";
+            return (h ? textLink(h, s.label) : breakLongRuns(escapeHtml(s.label))) + note;
           })
           .join(" · ")}`
       : "",

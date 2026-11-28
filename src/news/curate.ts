@@ -10,6 +10,7 @@ import { loadCategories } from "./categories.ts";
 import { fetchGeekNews, type GeekNewsEntry } from "./geeknews.ts";
 import { buildDomainMatcher, excludedDomainsSection, loadExcludedDomains } from "./excluded.ts";
 import { buildNewsReclassSection } from "./reclass.ts";
+import { resolveNewsLinks } from "./resolve-links.ts";
 import type {
   NewsSnapshot,
   NewsItem,
@@ -122,9 +123,13 @@ function normItem(r: any): NewsItem | null {
  * 취합 제외 사이트 하드 필터: 대표 링크가 제외 도메인이면 그 기사를 버리고, 관련 출처에서도 뺀다.
  * (프롬프트로 알려도 모델이 가져올 수 있다 — 서버가 다시 거른다.)
  */
-export function dropExcluded(item: NewsItem, isExcluded: (url: string | null | undefined) => boolean): NewsItem | null {
-  if (isExcluded(item.link)) return null;
-  const related = item.related.filter((r) => !isExcluded(r.link));
+export function dropExcluded(
+  item: NewsItem,
+  isExcluded: (url: string | null | undefined, hintDomain?: string | null) => boolean
+): NewsItem | null {
+  // 원래 주소를 풀지 못한 경유 주소는 검색 결과의 원래 도메인(힌트)으로 판정한다(buildDomainMatcher).
+  if (isExcluded(item.link, item.sourceDomain)) return null;
+  const related = item.related.filter((r) => !isExcluded(r.link, r.domain));
   return related.length === item.related.length ? item : { ...item, related };
 }
 
@@ -226,11 +231,22 @@ export async function curateNews(date: string, opts: CurateNewsOptions = {}): Pr
     hoistStrayFields(p, "categories", ["notes"]); // 2026-11-25 Gemini: `}` 하나가 빠져 notes 가 categories 안에 들어감
     const catsIn = p?.categories ?? {};
 
-    const categories: NewsCategory[] = defs.map((meta) => {
+    // 검색 경유 주소(Gemini vertexaisearch·google.com/url 등) → 원래 기사 주소. 경유 주소는 만료될 수 있어 응답을 읽은
+    // 직후 바로 풀고, 조사 구간·제외 사이트 판정과 이후 URL 중복 통합은 원래 주소로 한다(src/news/resolve-links.ts).
+    const normalized = defs.map((meta) => {
       const raw = Array.isArray(catsIn?.[meta.key]) ? catsIn[meta.key] : [];
-      const items = raw
-        .map(normItem)
-        .filter((x: NewsItem | null): x is NewsItem => !!x)
+      return raw.map(normItem).filter((x: NewsItem | null): x is NewsItem => !!x) as NewsItem[];
+    });
+    // 주소 풀기 실패가 그 모델의 뉴스 전체를 실패로 만들지 않게 한다(풀지 못한 링크는 그대로 — 화면에 '확인 불가').
+    const resolved = await resolveNewsLinks(normalized.flat(), label).catch((e: Error) => {
+      log.warn(`${label}: 경유 주소 풀기 중 예기치 않은 오류 — 원래 링크 그대로 진행: ${e.message}`);
+      return { items: normalized.flat() };
+    });
+    let cursor = 0;
+    const categories: NewsCategory[] = defs.map((meta, ci) => {
+      const mine = resolved.items.slice(cursor, cursor + normalized[ci].length);
+      cursor += normalized[ci].length;
+      const items = mine
         .map((x: NewsItem) => {
           // 조사 기간(시각 단위): 시각을 알면 시각으로, 날짜만이면 보수적으로(그 날 전체가 구간 안일 때만) — src/util/recency.ts
           const c = checkRecency(x, window);

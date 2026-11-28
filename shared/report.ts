@@ -42,7 +42,13 @@ export interface DailyReportEntry {
   summary: string;
   /** 뉴스 출처명 또는 유튜브 채널명. */
   source: string;
+  /**
+   * 원래 기사 주소. 2026-11-28 이전 실행·주소를 풀지 못한 항목은 검색 경유 주소(shared/redirect-url.ts)일 수 있다 —
+   * 화면·메일은 그때 '원래 주소 확인 불가'로 표시한다(price 는 link-resolutions.json 으로 푼 주소를 덧씌운다).
+   */
   url: string | null;
+  /** url 이 풀지 못한 경유 주소일 때 검색 결과에 적혀 있던 원래 사이트 도메인(있으면). */
+  sourceDomain?: string | null;
   /** 발행일·업로드일 YYYY-MM-DD. */
   date: string;
   /** 발행·업로드 시각(로컬 오프셋 ISO). 예전 실행·시각 미확인이면 없음/null. */
@@ -51,8 +57,8 @@ export interface DailyReportEntry {
   timeApprox?: boolean;
   /** 이 항목을 찾은 모델 표시명. */
   foundBy: string[];
-  /** 대표가 아닌 출처. */
-  secondary: { label: string; link: string }[];
+  /** 대표가 아닌 출처. domain: link 가 풀지 못한 경유 주소일 때 원래 사이트 도메인(있으면). */
+  secondary: { label: string; link: string; domain?: string | null }[];
   /** 모델 간 근거 차이(없으면 빈 문자열). */
   conflict: string;
   /** 이전 보고서에 일부가 실렸고 새 출처가 붙은 업데이트. */
