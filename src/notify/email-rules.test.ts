@@ -109,7 +109,7 @@ function render(bad: boolean): Mail[] {
     // 증시는 차트(cid img)가 붙는 경로로 — 고정 종목이 있어야 img 규칙이 실제로 검사된다.
     { name: "stock", html: buildStockEmailParts(pick(stockKrFixture, badStock), STOCK_KR_PINNED).html },
     { name: "stock-closed", html: buildStockEmailParts(pick(stockKrClosedFixture, badStock), STOCK_KR_PINNED).html },
-    // 통합 보고서 — 유튜브 항목·추천 업로드 섬네일(img)이 붙는 경로.
+    // 통합 보고서 — 메일에는 섬네일(img)이 없다(화면 전용). 글자 규칙(넘침·끊기)만 검사된다.
     { name: "report", html: buildReportEmailHtml(pick(reportFixture, badReport)) },
   ].map((m) => ({ ...m, name: bad ? `${m.name}(나쁜 데이터)` : m.name }));
 }

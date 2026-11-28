@@ -842,8 +842,8 @@ function reportVideo(o: Partial<DailyReportEntry> & { title: string }): DailyRep
 }
 
 /**
- * 통합 보고서 메일 — 뉴스 1건(보조 출처·근거 차이), 영상 3건(videoId 있음 / 예전 실행처럼 키만 / 영상 ID 모름 →
- * 섬네일 없는 행), 추천 채널 신규 업로드 1건(섬네일). 영상 ID 는 형식만 맞춘 가상 값이다.
+ * 통합 보고서 메일 — 뉴스 1건(보조 출처·근거 차이), 영상 3건(videoId 있음 / 예전 실행처럼 키만 / 영상 ID 모름),
+ * 추천 채널 신규 업로드 1건. 메일에는 섬네일이 없으므로 영상도 모두 기사형 행이다. 영상 ID 는 형식만 맞춘 가상 값이다.
  */
 export const reportFixture: DailyReportJson = {
   version: 1,
@@ -893,7 +893,7 @@ export const reportFixture: DailyReportJson = {
       items: [
         reportVideo({ title: "(예시) 작은 모델로 문서 검색 만들기", key: "yt:PREVIEW0001", videoId: "PREVIEW0001", url: "https://www.youtube.com/watch?v=PREVIEW0001" }),
         reportVideo({ title: "(예시) 예전 실행 — videoId 없이 키만 있는 영상", key: "yt:PREVIEW0002", url: "https://www.youtube.com/watch?v=PREVIEW0002" }),
-        reportVideo({ title: "(예시) 영상 ID 를 모르는 항목 — 섬네일 없이 글자만", url: "https://example.com/video" }),
+        reportVideo({ title: "(예시) 영상 ID 를 모르는 항목", url: "https://example.com/video" }),
       ],
     },
   ],

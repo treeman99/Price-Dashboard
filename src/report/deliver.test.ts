@@ -208,7 +208,8 @@ function videoEntry(over: Partial<DailyReportJson["youtube"][number]["items"][nu
   };
 }
 
-test("메일 본문: 유튜브 항목은 모두 영상 ID 로 만든 섬네일(hqdefault 144×108)을 싣는다 — 예전 실행(videoId 없음)·추천 업로드 포함", () => {
+test("메일 본문: 섬네일은 싣지 않는다 — 유튜브 항목·추천 업로드도 뉴스와 같은 기사형 행(제목·메타·요약·링크)", () => {
+  // 섬네일은 화면(보고서 탭·1면)에서만 보여 준다. 메일은 Gmail 잘림 기준(약 102KB)을 넘기 쉬워 뺐다(2026-11-28).
   const html = deliver.buildReportEmailHtml(
     sampleReport({
       youtube: [
@@ -217,33 +218,23 @@ test("메일 본문: 유튜브 항목은 모두 영상 ID 로 만든 섬네일(h
           label: "🛠️ 도구",
           items: [
             videoEntry({ key: "yt:NSYrO2UG780", videoId: "NSYrO2UG780" }),
-            // 2026-11-22 실행처럼 videoId 가 없는 항목 — 키에서.
+            // 2026-11-22 실행처럼 videoId 가 없는 항목.
             videoEntry({ title: "키만 있는 영상", key: "yt:ldVMaeLgJSE", url: "https://www.youtube.com/watch?v=ldVMaeLgJSE" }),
-            // 키도 없으면 URL 에서.
-            videoEntry({ title: "URL 만 있는 영상", url: "https://youtu.be/IoRV8nEj-2A" }),
-            // 형식이 틀린 videoId 는 주소에 넣지 않는다.
-            videoEntry({ title: "ID 없는 영상", videoId: 'x"><script>', url: "https://example.com/not-youtube" }),
           ],
         },
       ],
     })
   );
-  for (const id of ["NSYrO2UG780", "ldVMaeLgJSE", "IoRV8nEj-2A"]) {
-    assert.ok(
-      html.includes(`<img src="https://i.ytimg.com/vi/${id}/hqdefault.jpg" alt="" width="144" height="108"`),
-      `${id} 섬네일이 없다`
-    );
-  }
-  // 고정 높이 래퍼(깨짐 상태도 같은 높이 — email-rules 규칙 T-a)와 섬네일 링크.
-  assert.ok(html.includes('<div style="height:108px;overflow:hidden"><a href="https://www.youtube.com/watch?v=NSYrO2UG780"'));
-  // 추천 채널 신규 업로드(seedsOnly)도 작은 섬네일.
-  assert.ok(html.includes('<img src="https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg" alt="" width="96" height="72"'));
-  // 영상 ID 를 모르면 섬네일 없이 기사형 행(제목은 그대로).
-  assert.match(html, /ID 없는 영상/);
-  assert.equal((html.match(/<img /g) ?? []).length, 4, "영상 3 + 추천 업로드 1");
-  assert.doesNotMatch(html, /<script>/);
-  // 뉴스 항목에는 섬네일이 붙지 않는다.
-  assert.doesNotMatch(html.slice(html.indexOf("앤트로픽 새 모델") - 600, html.indexOf("앤트로픽 새 모델")), /<img /);
+  assert.doesNotMatch(html, /<img /, "보고서 메일에 img 가 있다");
+  assert.doesNotMatch(html, /i\.ytimg\.com|hqdefault/, "섬네일 주소가 남아 있다");
+  // 영상 항목은 제목 링크·메타(채널·업로드·찾은 모델)·요약·'영상 보기' 링크가 그대로 있다.
+  assert.match(html, /<a href="https:\/\/www\.youtube\.com\/watch\?v=NSYrO2UG780"[^>]*>영상 제목<\/a>/);
+  assert.match(html, /키만 있는 영상/);
+  assert.match(html, /업로드 /);
+  assert.match(html, /영상 요약/);
+  assert.equal((html.match(/>영상 보기</g) ?? []).length, 2);
+  // 추천 채널 신규 업로드도 제목 링크와 채널·날짜 메타만.
+  assert.match(html, /<a href="https:\/\/www\.youtube\.com\/watch\?v=abcdefghijk"[^>]*>추천 업로드<\/a>/);
 });
 
 test("문자 본문: 핵심 요약 + 모델별 상태 + 대시보드 링크, 짧게", () => {

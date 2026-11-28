@@ -27,10 +27,8 @@ import {
   strong,
   subHeader,
   textLink,
-  thumbArticleRow,
   type TagTone,
 } from "../notify/email-kit.ts";
-import { entryVideoId, youtubeId, youtubeThumbUrl } from "../../shared/youtube-thumb.ts";
 import {
   DAILY_REPORT_OUTCOME_LABEL,
   type DailyReportChannelState,
@@ -127,17 +125,9 @@ function coverageLine(r: DailyReportJson): string | null {
 }
 
 /**
- * 메일 영상 섬네일 — 영상 ID 로 만든 hqdefault(480×360, 4:3). 화면과 달리 대체 크기로 넘어갈 수 없으므로 모든 영상에
- * 있는 크기 하나만 쓴다. 영상 ID 를 모르면 null(기사형 행으로 그린다).
- * 크기: 본문 항목은 예전 유튜브 메일과 같은 144×108, 추천 업로드(제목·메타 두 줄)는 96×72.
+ * 항목 한 줄 — 뉴스·영상 모두 같은 기사형 행(제목·메타·요약·링크)이다. 영상 섬네일은 화면(보고서 탭·1면)에서만
+ * 보여 주고 메일에는 싣지 않는다 — 보고서 메일이 Gmail 잘림 기준(약 102KB)을 넘기 쉬워서다(2026-11-28 사용자 결정).
  */
-const THUMB = { entry: { width: 144, height: 108 }, seed: { width: 96, height: 72 } } as const;
-
-function videoThumb(videoId: string | null, size: keyof typeof THUMB): { src: string; width: number; height: number } | null {
-  const src = youtubeThumbUrl(videoId, "hqdefault");
-  return src ? { src, ...THUMB[size] } : null;
-}
-
 function entryRow(e: DailyReportEntry): string {
   const href = safeHref(e.url);
   const isVideo = e.kind === "youtube";
@@ -160,17 +150,14 @@ function entryRow(e: DailyReportEntry): string {
       : "",
     e.conflict ? `⚠️ 근거 차이: ${breakLongRuns(escapeHtml(e.conflict))}` : "",
   ].filter(Boolean);
-  const row = {
+  return articleRow({
     title: e.title,
     href,
     lead: lead || undefined,
     meta,
     summary: breakLongRuns(escapeHtml(e.summary)),
     after: extra.length ? extra.join("&nbsp;&nbsp;· ") : undefined,
-  };
-  // 영상 ID 는 videoId → 항목 키(yt:<ID>) → 영상 URL 순 — 예전 실행(videoId 없는 report.json)도 섬네일이 붙는다.
-  const thumb = isVideo ? videoThumb(entryVideoId(e), "entry") : null;
-  return thumb ? thumbArticleRow({ ...row, thumb }) : articleRow(row);
+  });
 }
 
 /** 보고서 메일 HTML. 순수 함수 — 발송하지 않는다. */
@@ -233,18 +220,17 @@ export function buildReportEmailHtml(r: DailyReportJson): string {
     parts.push(sectionsHtml("유튜브 동향", r.youtube));
     if (r.seedsOnly.length) {
       parts.push(sectionHeader({ title: "추천 채널 신규 업로드", count: r.seedsOnly.length, note: "모델 미선정 · RSS 기준" }));
+      // 섬네일 없이 제목·채널·날짜만(본문 항목과 같은 이유 — entryRow 참고).
       parts.push(
         r.seedsOnly
           .slice(0, 20)
-          .map((v) => {
-            const row = {
+          .map((v) =>
+            articleRow({
               title: v.title,
               href: safeHref(v.url),
               meta: metaLine([breakLongRuns(escapeHtml(v.channel)), escapeHtml(v.date), breakLongRuns(escapeHtml(v.categoryLabel))]),
-            };
-            const thumb = videoThumb(youtubeId(v.url), "seed");
-            return thumb ? thumbArticleRow({ ...row, thumb }) : articleRow(row);
-          })
+            })
+          )
           .join("")
       );
     }

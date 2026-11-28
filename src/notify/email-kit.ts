@@ -224,44 +224,6 @@ ${o.after ? `<p style="margin:8px 0 0;font-size:12.5px;color:${MUTED}">${o.after
 }
 
 /**
- * 섬네일이 붙는 기사형 행(보고서 메일의 유튜브 항목) — [섬네일 | 제목·메타·요약] 두 칸, 아래 헤어라인.
- * 2026-11-22 없앤 유튜브 메일의 videoRow 배치를 그대로 쓴다(Gmail iPad 첫 로드 높이 변화 0 실측 —
- * data/gmail-jump-investigation/round3/report-A-coldload.md §5).
- *
- * - img 의 width·height 속성은 로드 전 자리 잡기, 높이 고정 div(height:Npx;overflow:hidden)는 깨짐 상태까지 같은 높이로
- *   가둔다(email-rules.test.ts 규칙 T-a). 폭은 고정하지 않는다 — width:Npx 래퍼는 ≤414px 에서 칸이 줄지 못해 넘친다.
- * - thumb.src 는 서버가 영상 ID 로 만든 https 주소(shared/youtube-thumb.ts)만 넣는다. 메일에는 대체 크기로 넘어갈
- *   스크립트가 없으므로 모든 영상에 있는 hqdefault(480×360, 4:3)를 쓰고 비율에 맞춰 width×height 를 준다.
- *
- * @param o articleRow 와 같은 뜻. thumb.href 는 섬네일을 눌렀을 때 열 주소(safeHref 통과값).
- */
-export function thumbArticleRow(o: {
-  title: string;
-  href?: string | null;
-  lead?: string;
-  meta?: string;
-  summary?: string;
-  after?: string;
-  thumb: { src: string; width: number; height: number };
-}): string {
-  const { src, width: w, height: h } = o.thumb;
-  const img = `<img src="${escapeAttr(src)}" alt="" width="${w}" height="${h}" style="display:block;width:${w}px;max-width:100%;height:auto;border:0;border-radius:3px;background:${SUNKEN}" />`;
-  const link = o.href ? `<a href="${escapeAttr(o.href)}" style="display:block;text-decoration:none">${img}</a>` : img;
-  const thumb = `<div style="height:${h}px;overflow:hidden">${link}</div>`;
-  // 제목은 표 칸 안이라 긴 덩어리(URL 등)가 그대로 남으면 칸 최소 폭이 돼 표 전체를 민다 — breakLongRuns 로 끊는다.
-  const text = breakLongRuns(escapeHtml(o.title));
-  const title = o.href ? `<a href="${escapeAttr(o.href)}" style="color:${INK};text-decoration:none">${text}</a>` : text;
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid ${HAIRLINE}"><tr>
-<td valign="top" width="${w}" style="width:${w}px;padding:14px 14px 14px 0;vertical-align:top">${thumb}</td>
-<td valign="top" style="padding:14px 0;vertical-align:top">
-<p style="margin:0;font-size:15px;font-weight:600;line-height:1.45;color:${INK}">${o.lead ? `${o.lead} ` : ""}${title}</p>
-${o.meta ? `<p style="margin:4px 0 0;font-size:12.5px;color:${MUTED};${TNUM}">${o.meta}</p>` : ""}
-${o.summary ? `<p style="margin:8px 0 0;font-size:14px;line-height:1.65;color:${INK_80}">${o.summary}</p>` : ""}
-${o.after ? `<p style="margin:8px 0 0;font-size:12.5px;color:${MUTED}">${o.after}</p>` : ""}
-</td></tr></table>`;
-}
-
-/**
  * 공백 없는 20자 이상 덩어리(긴 URL, 띄어쓰기 없는 한국어 낱말)만 아무 데서나 끊게 감싼다. 짧은 어절은 keep-all 그대로.
  * 이게 없으면 덩어리 하나가 표 칸을 밀어 메일 전체 폭이 680px 을 넘는다(유튜브 실데이터 763px, 제목 URL 600px 에서 +354px).
  * 한국어도 body 의 keep-all 때문에 한 덩어리가 되므로 ASCII 만 보지 않는다. 끊기는 word-break 로만 한다 —
