@@ -22,7 +22,7 @@ import {
 /** 계약(shared/types.ts TabSettings) 모양 그대로의 고정 값. */
 function settingsFixture() {
   return {
-    report: { notifyEmail: false, notifyImessage: false },
+    report: { notifyEmail: false, notifyImessage: false, retentionDays: 7 },
     youtube: { freshHours: 24, watchedExcludeDays: 7 },
     events: { newGapDays: 7, newShowDays: 3, verifyDates: true, notifyEmail: true },
     stockPulse: {
@@ -68,7 +68,7 @@ test("탭 ↔ 잡 매핑: 증시는 시장별 브리핑 2개, 로또는 운영 �
   // 뉴스·유튜브 탭은 없다(2026-11-23) — 그 운영 설정은 보고서 탭에서 관리한다.
   assert.equal("news" in TAB_CONFIG || "youtube" in TAB_CONFIG, false);
   const reportPaths = TAB_CONFIG.report.fields.map((f) => f.path);
-  for (const p of ["youtube.freshHours", "youtube.watchedExcludeDays", "timeouts.newsMin", "timeouts.youtubeMin"]) {
+  for (const p of ["youtube.freshHours", "youtube.watchedExcludeDays", "timeouts.newsMin", "timeouts.youtubeMin", "report.retentionDays"]) {
     assert.ok(reportPaths.includes(p), `보고서 탭에서 ${p} 를 편집할 수 있다`);
   }
   // 7개 잡이 빠짐없이 어느 탭에 속한다.

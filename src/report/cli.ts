@@ -4,9 +4,11 @@
  *   node daily-report.mjs [--source-data <price/data>] [--output <daily-news>] [--preview]
  *                         [--models claude,gpt,gemini] [--gemini-model <id>] [--retry-delay <초>]
  *                         [--trigger <price:schedule|price:catchup|price:manual|cli>]
+ *   node daily-report.mjs --retention-plan [--retention-days <일>]   # 보관 기간 정리 대상 미리 보기(지우지 않음)
  *
  * 하는 일(한 번에 끝난다): 잠금 → 실행별 고유 디렉터리 → price 상태 파일 사본(원본은 읽기만) →
- * 공용 원자료 수집 → 세 모델 독립 취합(동시) → 통합 → 보고서·중간 결과·체크포인트 저장.
+ * 공용 원자료 수집 → 세 모델 독립 취합(동시) → 통합 → 보고서·중간 결과·체크포인트 저장 →
+ * 보관 기간(기본 7일, 대시보드 report.retentionDays)이 지난 실행 기록 정리(retention.ts — 잠금을 쥔 채).
  * stdout 에는 결과 JSON 한 줄만 쓴다(로그는 stderr 와 실행 디렉터리의 run.log).
  *
  * 종료 코드: 0 = 성공 모델 1개 이상(보고서 생성) · 2 = 세 모델 모두 건너뜀(실패 보고서만) ·
@@ -16,6 +18,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeRetentionDays,
+  planAreaRetention,
+  pruneReportHistory,
+  type RetentionResult,
+} from "./retention.ts";
 
 /** price 상태 중 보고서가 읽는 파일(스킵·설정의 원본). 원본은 절대 쓰지 않고 실행별로 복사한다. */
 export const STATE_FILES = [
@@ -44,6 +52,10 @@ interface CliArgs {
   geminiModel: string | null;
   retryDelaySec: number;
   trigger: string;
+  /** 정리 대상만 계산해 출력하고 끝낸다(수집·삭제 없음). */
+  retentionPlan: boolean;
+  /** 보관 기간 직접 지정(진단용). 없으면 price 설정(report.retentionDays, 기본 7일). */
+  retentionDays: number | null;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -55,6 +67,8 @@ export function parseArgs(argv: string[]): CliArgs {
     geminiModel: process.env.DAILY_REPORT_GEMINI_MODEL?.trim() || null,
     retryDelaySec: 45,
     trigger: "cli",
+    retentionPlan: false,
+    retentionDays: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -70,9 +84,16 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (k === "--gemini-model") a.geminiModel = v();
     else if (k === "--retry-delay") a.retryDelaySec = Math.max(0, Number(v()) || 0);
     else if (k === "--trigger") a.trigger = v().replace(/[^A-Za-z0-9:._-]/g, "").slice(0, 40) || "cli";
+    else if (k === "--retention-plan") a.retentionPlan = true;
+    else if (k === "--retention-days") {
+      const n = Number(v());
+      if (!Number.isInteger(n) || n < 1) throw new Error("--retention-days 는 1 이상의 정수여야 합니다");
+      a.retentionDays = n;
+    }
     else if (k === "--help" || k === "-h") {
       process.stdout.write(
-        "사용법: daily-report [--source-data DIR] [--output DIR] [--preview] [--models claude,gpt,gemini] [--gemini-model ID] [--retry-delay 초] [--trigger 이름]\n"
+        "사용법: daily-report [--source-data DIR] [--output DIR] [--preview] [--models claude,gpt,gemini] [--gemini-model ID] [--retry-delay 초] [--trigger 이름]\n" +
+          "        daily-report --retention-plan [--retention-days 일]   # 보관 기간 정리 대상 미리 보기(지우지 않음)\n"
       );
       process.exit(0);
     } else throw new Error(`알 수 없는 옵션: ${k}`);
@@ -149,8 +170,27 @@ export function newRunId(now = new Date()): string {
   return `${ts}-${crypto.randomBytes(2).toString("hex")}`;
 }
 
+/** price 설정(tab-settings.json)의 보관 기간. 호출 전에 DB_PATH 가 읽을 data 폴더를 가리켜야 한다. */
+async function settingsRetentionDays(): Promise<number> {
+  const { getTabSettings } = await import("../settings/tab-settings.ts");
+  return normalizeRetentionDays(getTabSettings().report.retentionDays);
+}
+
+/** --retention-plan: 지금 정리하면 지워질/남을 실행을 계산만 한다(읽기 전용 — 잠금·삭제·수집 없음). */
+async function printRetentionPlan(args: CliArgs): Promise<number> {
+  // 설정은 price 원본 data 폴더에서 읽기만 한다. dotenv 가 엉뚱한 .env 를 읽지 않게 비밀값 없는 폴더에서 모듈을 불러온다.
+  process.env.DB_PATH = path.join(args.sourceData, "price.db");
+  process.chdir("/");
+  const days = args.retentionDays ?? (await settingsRetentionDays());
+  const now = new Date();
+  const plans = (["runs", "previews"] as const).map((area) => planAreaRetention(args.output, area, { now, days, measure: true }));
+  process.stdout.write(`${JSON.stringify({ ok: true, output: args.output, days, now: now.toISOString(), plans }, null, 2)}\n`);
+  return 0;
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.retentionPlan) return printRetentionPlan(args);
   if (!fs.existsSync(path.join(args.sourceData, "news-categories.json")) && !fs.existsSync(path.join(args.sourceData, "youtube-categories.json"))) {
     throw new Error(`price 데이터 폴더를 찾지 못했습니다: ${args.sourceData}`);
   }
@@ -206,6 +246,22 @@ async function main(): Promise<number> {
     const after = hashState(args.sourceData);
     const unchanged = JSON.stringify(before) === JSON.stringify(after);
     if (!unchanged) console.error("⚠️ 실행 중 price 원본 상태 파일이 바뀌었습니다(사용자 조작 가능). summary.json 의 sourceHashes 확인.");
+
+    // 보관 기간이 지난 실행 기록 정리 — 아직 잠금을 쥐고 있어 다른 수집기 실행이 진행 중일 수 없다. 보관 기간은 이 실행의
+    // 상태 사본(tab-settings.json)에서 읽는다. 정리가 실패해도 이번 실행 결과(종료 코드·보고서)는 그대로다.
+    let retention: RetentionResult[] = [];
+    try {
+      const days = args.retentionDays ?? (await settingsRetentionDays());
+      retention = pruneReportHistory(args.output, {
+        now: new Date(),
+        days,
+        currentRunId: runId,
+        preview: args.preview,
+        log: (m) => console.error(m),
+      });
+    } catch (e) {
+      console.error(`⚠️ 보고서 기록 정리 실패(이번 실행 결과에는 영향 없음): ${(e as Error).message}`);
+    }
     process.stdout.write(
       `${JSON.stringify({
         ok: result.ok,
@@ -220,6 +276,7 @@ async function main(): Promise<number> {
         counts: result.counts,
         checkpointAdvanced: result.checkpointAdvanced,
         sourceStateUnchanged: unchanged,
+        retention: retention.map((r) => ({ area: r.area, days: r.days, removed: r.removed, failed: r.failed.length, skipped: r.skipped })),
       })}\n`
     );
     await new Promise<void>((r) => logStream.end(r));

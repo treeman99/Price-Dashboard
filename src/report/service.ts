@@ -41,6 +41,7 @@ import type {
   DailyReportRunView,
   DailyReportSection,
 } from "../../shared/report.ts";
+import { getTabSettings } from "../settings/tab-settings.ts";
 
 export type ReportTrigger = "schedule" | "catchup" | "manual";
 
@@ -228,6 +229,53 @@ function noteDelivered(runId: string, sent: Partial<Record<ReportChannel, string
   }
 }
 
+/**
+ * 보관 기간이 지나 봇 홈에서 정리된 실행(runs/<runId>/ 가 없어진 실행)의 발송 기록·카테고리 이동 오버레이를 지운다
+ * (2026-11-28, 기본 7일). 실행 폴더 자체는 수집기가 정리한다(retention.ts) — 여기서는 price 쪽 기록만 맞춘다.
+ *
+ * 남기는 것: 실행 폴더가 아직 있는 실행(최신·직전 성공 실행 포함), latest.json·마지막 시도가 가리키는 실행, 보관 기간
+ * 안에 시작한 실행, 실행 ID 모양이 아닌 키. 발송 중복 방지는 '이번에 끝난(또는 이어받은) 실행'의 기록만 보므로
+ * (finishRun) 폴더가 없어진 옛 실행의 기록을 지워도 같은 보고서가 다시 나가지 않는다 — 그 실행은 report.json 이 없어
+ * 발송 자체가 불가능하다. runs/ 를 읽지 못하면(봇 홈 경로 문제 등) 아무것도 지우지 않는다.
+ */
+export function pruneReportLedgers(now = new Date()): { delivery: string[]; moves: string[] } {
+  const out = { delivery: [] as string[], moves: [] as string[] };
+  let existing: Set<string>;
+  try {
+    existing = new Set(fs.readdirSync(runsDir()).filter(isValidRunId));
+  } catch {
+    return out;
+  }
+  const days = getTabSettings().report.retentionDays;
+  const cutoff = now.getTime() - days * 86_400_000;
+  const latest = readJson<{ runId?: string; lastSuccessRunId?: string }>(path.join(config.dailyReport.dir, "latest.json"));
+  const protect = new Set([latest?.runId, latest?.lastSuccessRunId, getReportLastAttempt()?.runId].filter(isValidRunId));
+  const stale = (id: string) => {
+    if (!isValidRunId(id) || existing.has(id) || protect.has(id)) return false;
+    const t = Date.parse(runIdTime(id));
+    return Number.isFinite(t) && t < cutoff;
+  };
+  const prune = <T,>(file: string, ledger: Record<string, T>, removed: string[]) => {
+    const drop = Object.keys(ledger).filter(stale);
+    if (!drop.length) return;
+    for (const id of drop) delete ledger[id];
+    try {
+      writeJsonAtomic(file, ledger);
+      removed.push(...drop);
+    } catch (e) {
+      log.warn(`보고서 기록 정리 실패(${path.basename(file)}): ${(e as Error).message}`);
+    }
+  };
+  prune(DELIVERY_PATH, readDelivery(), out.delivery);
+  prune(MOVES_PATH, readMoves(), out.moves);
+  if (out.delivery.length || out.moves.length) {
+    log.info(
+      `보고서 기록 정리(${days}일 보관, 실행 폴더가 정리된 실행): 발송 기록 ${out.delivery.length}건 · 카테고리 이동 ${out.moves.length}건`
+    );
+  }
+  return out;
+}
+
 // ── 실행 ────────────────────────────────────────────────────────────────────
 
 let running: { trigger: ReportTrigger; startedAt: string } | null = null;
@@ -366,6 +414,12 @@ export async function runDailyReportJob(
     running = null;
   }
   recordAttempt(attempt);
+  // 수집기가 방금 보관 기간이 지난 실행 폴더를 정리했을 수 있다 — price 쪽 기록도 맞춘다(실패해도 실행 결과와 무관).
+  try {
+    pruneReportLedgers(deps.now());
+  } catch (e) {
+    log.warn(`보고서 기록 정리 실패: ${(e as Error).message}`);
+  }
   if (attempt.ok) log.info(`통합 보고서 완료 [${trigger}] ${attempt.runId}${attempt.adopted ? " (이어받음)" : ""}`);
   else log.warn(`통합 보고서 실패 [${trigger}]: ${attempt.error}`);
   return attempt;
@@ -468,6 +522,7 @@ export function getReportOverview(limit = 40): DailyReportListResponse {
       commit: build?.commit ?? null,
       builtAt: build?.builtAt ?? null,
     },
+    retentionDays: getTabSettings().report.retentionDays,
   };
 }
 
@@ -559,6 +614,8 @@ export function getReportRun(
       markdown = null;
     }
   }
+  // 둘 다 없으면 보여 줄 것이 없는 실행이다(보관 기간 정리 도중이거나 깨진 폴더) — 없는 실행과 같이 다룬다(404).
+  if (!report && markdown === null) return null;
   return { report: report ? buildRunView(report, readMoves()[runId]) : null, markdown, delivered: readDelivery()[runId] ?? {} };
 }
 

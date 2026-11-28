@@ -3,6 +3,7 @@ import path from "node:path";
 import { config } from "../config.ts";
 import { log } from "../util/log.ts";
 import { severityRank } from "../../shared/pulse.ts";
+import { DEFAULT_RETENTION_DAYS } from "../report/retention.ts";
 import type {
   DeepPartial,
   NumberRule,
@@ -34,6 +35,9 @@ const STORE_PATH = path.join(path.dirname(config.dbPath), "tab-settings.json");
  * 다시 검증한다. 모두 **정수**만 받는다. 범위 근거(각 값의 쓰임새·사고 기록):
  */
 export const NUMBER_RULES: Record<string, NumberRule> = {
+  // 하한 1일: 최신·직전 성공 실행은 기간과 무관하게 남으므로(retention.ts) 1일이어도 증분 기준은 깨지지 않는다.
+  // 상한 90일: 실행 1회 ≈ 0.7MB × 하루 2회 → 석 달이면 약 130MB. 사용자는 1주일 넘은 뉴스를 보지 않는다(2026-11-28).
+  "report.retentionDays": { min: 1, max: 90, unit: "일" },
   // 하한 1시간. 상한 720시간(30일): 시드인 채널 RSS 가 최신 15개만 줘서(src/youtube/channels.ts) 한 달을 넘는 창은 시드가 못 채운다.
   // 기본 24시간(사용자 결정 2026-11-23 "실행 시점 기준 24시간 이내로만").
   "youtube.freshHours": { min: 1, max: 720, unit: "시간" },
@@ -77,6 +81,7 @@ const FIELD_LABEL: Record<string, string> = {
   "events.notifyEmail": "팝업·전시 메일 받기",
   "skills.notifyEmail": "스킬 랭킹 메일 받기",
   "report.notifyImessage": "보고서 문자 받기",
+  "report.retentionDays": "보고서 기록 보관 기간",
   "youtube.freshHours": "유튜브 최근 영상 기준(시간)",
   "youtube.watchedExcludeDays": "유튜브 본영상 제외 기간",
   "events.newGapDays": "팝업·전시 신규 판정 공백",
@@ -117,7 +122,8 @@ function defaults(clamped?: string[]): TabSettings {
   const min = (ms: number) => ms / 60_000;
   const out: TabSettings = {
     // 보고서 발송은 사용자가 시험 발송을 확인한 뒤 화면에서 켠다 — .env 전역 스위치가 켜져 있어도 기본은 꺼짐.
-    report: { notifyEmail: false, notifyImessage: false },
+    // 보관 기간은 .env 값이 없다 — 수집기는 .env 를 읽지 않으므로(cli.ts) 기본값을 코드 상수 하나로 둬야 price·수집기가 같은 값을 쓴다.
+    report: { notifyEmail: false, notifyImessage: false, retentionDays: DEFAULT_RETENTION_DAYS },
     youtube: {
       freshHours: config.youtubeFreshHours,
       watchedExcludeDays: config.youtubeWatchedExcludeDays,

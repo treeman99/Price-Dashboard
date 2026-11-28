@@ -127,6 +127,11 @@ export interface TabSettings {
     notifyEmail: boolean;
     /** 보고서 요약을 문자(iMessage)로 받는다. 기본 꺼짐 — .env NOTIFY_IMESSAGE·IMESSAGE_TO 도 필요. */
     notifyImessage: boolean;
+    /**
+     * 보고서 실행 기록 보관 기간(일, 기본 7 — 2026-11-28 사용자 결정). 완료 시각 기준 이보다 오래된 봇 홈
+     * runs/·previews/ 실행을 수집기가 실행이 끝날 때마다 지운다(최신·직전 성공·진행 중 실행은 남김, src/report/retention.ts).
+     */
+    retentionDays: number;
   };
   youtube: {
     /**

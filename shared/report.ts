@@ -178,6 +178,11 @@ export interface DailyReportListResponse {
   channels: { email: DailyReportChannelState; imessage: DailyReportChannelState };
   /** 수집기 위치·빌드 정보(진단용). */
   collector: { available: boolean; commit: string | null; builtAt: string | null };
+  /**
+   * 실행 기록 보관 기간(일, 대시보드 report.retentionDays — 기본 7). 이보다 오래된 실행은 수집기가 다음 실행 끝에 지운다
+   * (최신·직전 성공 실행은 남김). 예전 서버 응답에는 없을 수 있다.
+   */
+  retentionDays?: number;
 }
 
 /** price 가 마지막으로 수집기를 돌린 결과. */

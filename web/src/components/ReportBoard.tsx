@@ -380,6 +380,12 @@ function ReportDetail({
   );
 }
 
+/** 보던 실행이 보관 기간 정리로 사라졌을 때 안내 문구. */
+function prunedMessage(days: number | undefined): string {
+  const span = days ? `보관 기간(${days}일)` : "보관 기간";
+  return `보던 실행 기록은 ${span}이 지나 정리되어 최신 실행을 보여 줍니다.`;
+}
+
 export function ReportBoard() {
   const [overview, setOverview] = useState<DailyReportListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -388,6 +394,8 @@ export function ReportBoard() {
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<DailyReportRunDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
+  /** 보던 실행이 보관 기간 정리로 목록에서 빠져 최신 실행으로 옮겼을 때의 안내. */
+  const [prunedNotice, setPrunedNotice] = useState<string | null>(null);
   const [newsDefs, setNewsDefs] = useState<CategoryDef[]>([]);
   const [youtubeDefs, setYoutubeDefs] = useState<YoutubeCategoryDef[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -413,7 +421,12 @@ export function ReportBoard() {
       const o = await api.report();
       setOverview(o);
       setErr(null);
-      setSelected((cur) => (cur && o.runs.some((r) => r.runId === cur) ? cur : (o.runs[0]?.runId ?? null)));
+      setSelected((cur) => {
+        if (cur && o.runs.some((r) => r.runId === cur)) return cur;
+        // 보던 실행이 목록에서 빠졌다 = 보관 기간이 지나 수집기가 정리했다(실행 기록은 지워지기만 한다). 최신 실행으로 옮긴다.
+        if (cur) setPrunedNotice(prunedMessage(o.retentionDays));
+        return o.runs[0]?.runId ?? null;
+      });
       return o;
     } catch (e) {
       setErr((e as Error).message);
@@ -449,11 +462,18 @@ export function ReportBoard() {
     api
       .reportRun(selected)
       .then((d) => alive && setDetail(d))
-      .catch((e: Error) => alive && setDetailErr(e.message));
+      .catch(async (e: Error) => {
+        if (!alive) return;
+        // 목록을 받은 뒤 그 실행이 정리됐을 수 있다(404) — 목록을 다시 받아 남아 있는지 확인한다.
+        // 빠졌으면 load 가 최신 실행으로 옮기고 안내를 띄우고, 남아 있으면(다른 오류) 오류를 보여 준다.
+        const o = await load();
+        if (!alive) return;
+        if (!o || o.runs.some((r) => r.runId === selected)) setDetailErr(e.message);
+      });
     return () => {
       alive = false;
     };
-  }, [selected]);
+  }, [selected, load]);
 
   async function run() {
     setErr(null);
@@ -510,6 +530,7 @@ export function ReportBoard() {
 
       {err && <Notice tone="error">{err}</Notice>}
       {busyMsg && <Notice tone="warn">{busyMsg}</Notice>}
+      {prunedNotice && <Notice tone="info">{prunedNotice}</Notice>}
       {overview && !overview.collector.available && (
         <Notice tone="error">
           봇 홈에 수집기가 없습니다. 저장소에서 <code>npm run daily:report:bundle</code> 로 배포하세요.
@@ -541,10 +562,20 @@ export function ReportBoard() {
       ) : (
         <div className="grid grid-cols-1 gap-x-10 gap-y-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
           <aside>
-            <SubHeader count={overview.runs.length}>실행 기록</SubHeader>
+            <SubHeader count={overview.runs.length} note={overview.retentionDays ? `최근 ${overview.retentionDays}일 보관` : undefined}>
+              실행 기록
+            </SubHeader>
             <ul className="divide-y lg:max-h-[80vh] lg:overflow-y-auto">
               {overview.runs.map((r) => (
-                <RunRow key={r.runId} run={r} selected={r.runId === selected} onSelect={() => setSelected(r.runId)} />
+                <RunRow
+                  key={r.runId}
+                  run={r}
+                  selected={r.runId === selected}
+                  onSelect={() => {
+                    setPrunedNotice(null);
+                    setSelected(r.runId);
+                  }}
+                />
               ))}
             </ul>
           </aside>
@@ -573,8 +604,8 @@ export function ReportBoard() {
           <DialogHeader className="pr-6">
             <DialogTitle>수집 설정</DialogTitle>
             <DialogDescription className="text-sm text-muted-foreground">
-              세 모델이 다음 실행부터 이 설정으로 조사합니다. 일정·최근 영상 기준·본영상 제외 기간·조사 시간·메일/문자는 툴바의
-              &lsquo;통합 보고서&rsquo; 버튼에서 바꿉니다.
+              세 모델이 다음 실행부터 이 설정으로 조사합니다. 일정·최근 영상 기준·본영상 제외 기간·조사 시간·메일/문자·보고서 기록
+              보관 기간은 툴바의 &lsquo;통합 보고서&rsquo; 버튼에서 바꿉니다.
             </DialogDescription>
           </DialogHeader>
           <ul className="divide-y border-y">

@@ -73,6 +73,12 @@ export const TAB_CONFIG: Record<ConfigTabId, TabConfigDef> = {
       },
       { kind: "number", path: "timeouts.newsMin", label: "뉴스 조사 최대 대기", hint: MODEL_TIMEOUT_HINT },
       { kind: "number", path: "timeouts.youtubeMin", label: "유튜브 조사 최대 대기", hint: MODEL_TIMEOUT_HINT },
+      {
+        kind: "number",
+        path: "report.retentionDays",
+        label: "보고서 기록 보관",
+        hint: "완료 시각 기준 이 기간이 지난 실행 기록(시험 실행 포함)을 실행이 끝날 때마다 지웁니다(기본 7일). 최신·직전 성공 실행은 기간과 무관하게 남깁니다.",
+      },
     ],
   },
   skills: {

@@ -635,7 +635,7 @@ api.get("/report/runs/:runId", (req, res) => {
   const runId = String(req.params.runId ?? "");
   if (!isValidRunId(runId)) return res.status(400).json({ error: "실행 ID 형식이 올바르지 않습니다." });
   const r = getReportRun(runId);
-  if (!r) return res.status(404).json({ error: "그런 보고서 실행이 없습니다." });
+  if (!r) return res.status(404).json({ error: "그런 보고서 실행이 없습니다(보관 기간이 지나 정리됐을 수 있습니다)." });
   res.json({ runId, ...r });
 });
 
@@ -651,7 +651,7 @@ api.post("/report/runs/:runId/send", async (req, res) => {
   if (!channels.length) return res.status(400).json({ error: "보낼 채널(email·imessage)을 1개 이상 고르세요." });
   try {
     const r = await sendReportRun(runId, [...new Set(channels)]);
-    if (!r) return res.status(404).json({ error: "이 실행에는 보낼 보고서(report.json)가 없습니다." });
+    if (!r) return res.status(404).json({ error: "이 실행에는 보낼 보고서(report.json)가 없습니다(보관 기간이 지나 정리됐을 수 있습니다)." });
     res.json(r);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });

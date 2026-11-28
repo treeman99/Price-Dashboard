@@ -127,7 +127,7 @@ test("정기 작업: 펄스 묶음 발송 cron 은 없고, 뉴스·유튜브는 
 test("설정: 보고서 스위치(기본 꺼짐) + 세 탭 '메일로 받기'(기본 켜짐), 탭별 문자 스위치는 없다", () => {
   assert.doesNotMatch(read("shared/types.ts"), /NotifyChannel|NotifyTabId/);
   const ts = read("src/settings/tab-settings.ts");
-  assert.match(ts, /report: \{ notifyEmail: false, notifyImessage: false \}/);
+  assert.match(ts, /report: \{ notifyEmail: false, notifyImessage: false, retentionDays: DEFAULT_RETENTION_DAYS \}/);
   assert.match(ts, /stock: \{ historyRetentionDays: config\.historyRetentionDays, notifyEmail: true \}/);
   assert.match(ts, /skills: \{ notifyEmail: true \}/);
   const web = read("web/src/lib/tabConfig.ts");
